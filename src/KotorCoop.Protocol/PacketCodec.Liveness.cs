@@ -13,6 +13,9 @@ public static partial class PacketCodec
         w.WriteString(packet.Module, ProtocolConstants.MaxModuleLength);
         w.WriteUInt64(packet.Digest);
         w.WriteUInt32(packet.Generation);
+        w.WriteUInt32(packet.HostSessionId);
+        w.WriteUInt32(packet.HostLoadSerial);
+        w.WriteUInt32(packet.HostNativeEpoch);
         w.WriteUInt8(packet.PageIndex);
         w.WriteUInt8(packet.PageCount);
 
@@ -42,11 +45,14 @@ public static partial class PacketCodec
         string module = r.ReadString();
         ulong digest = r.ReadUInt64();
         uint generation = r.ReadUInt32();
+        uint hostSession = r.ReadUInt32();
+        uint hostLoad = r.ReadUInt32();
+        uint hostEpoch = r.ReadUInt32();
         byte pageIndex = r.ReadUInt8();
         byte pageCount = r.ReadUInt8();
 
         int count = r.ReadUInt8();
-        if (r.Failed || count > CreatureLivenessPacket.MaxEntriesPerPacket)
+        if (r.Failed || count > CreatureLivenessPacket.MaxEntriesPerPacket || pageCount == 0 || pageIndex >= pageCount)
         {
             // A count this side never writes: treat the datagram as malformed rather than
             // allocating on a number a peer chose.
@@ -70,6 +76,7 @@ public static partial class PacketCodec
         }
 
         return r.Failed ? null : new CreatureLivenessPacket(
-            serverTimeMs, module, digest, generation, pageIndex, pageCount, entries);
+            serverTimeMs, module, digest, generation, pageIndex, pageCount, entries)
+            { HostSessionId = hostSession, HostLoadSerial = hostLoad, HostNativeEpoch = hostEpoch };
     }
 }

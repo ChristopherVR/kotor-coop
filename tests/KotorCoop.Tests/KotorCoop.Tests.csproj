@@ -104,6 +104,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\CompanionLocalFightRule.cs" Link="Plugin\CompanionLocalFightRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\LocalFightEngageFallbackRule.cs" Link="Plugin\LocalFightEngageFallbackRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\LocalFightActivityRule.cs" Link="Plugin\LocalFightActivityRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\LocalFightBodyRule.cs" Link="Plugin\LocalFightBodyRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\EquipApplyDecision.cs" Link="Plugin\EquipApplyDecision.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\EquipSlotMap.cs" Link="Plugin\EquipSlotMap.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\StartingGearSlotRule.cs" Link="Plugin\StartingGearSlotRule.cs" />
@@ -118,6 +119,10 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\LocalCombatDeferralRule.cs" Link="Plugin\LocalCombatDeferralRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\LocalCombatDeferredNoticeRule.cs" Link="Plugin\LocalCombatDeferredNoticeRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\LivenessRule.cs" Link="Plugin\LivenessRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\LivenessBankRule.cs" Link="Plugin\LivenessBankRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.LivenessBinding.cs" Link="Plugin\SharedBlock.LivenessBinding.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlockView.LivenessBinding.cs" Link="Plugin\SharedBlockView.LivenessBinding.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\MaterialisedOwnerRejections.cs" Link="Plugin\MaterialisedOwnerRejections.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\JournalApplyRule.cs" Link="Plugin\JournalApplyRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.cs" Link="Plugin\SharedBlock.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.BehaviourOverrides.cs" Link="Plugin\SharedBlock.BehaviourOverrides.cs" />

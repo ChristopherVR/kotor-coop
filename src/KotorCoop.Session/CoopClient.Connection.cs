@@ -113,6 +113,15 @@ public sealed partial class CoopClient
             RestoreItemContinuation(welcome.SessionId, welcome.AssignedPeerId);
             _localPeerId = welcome.AssignedPeerId;
             _sessionPeerId = welcome.AssignedPeerId;
+            if (_hostSessionId != welcome.SessionId)
+            {
+                lock (_gate)
+                {
+                    _hostWorld = WorldDigest.Empty;
+                    _livenessById.Clear();
+                    _livenessHasGeneration = false;
+                }
+            }
             _hostSessionId = welcome.SessionId;
             _reconnecting = false;
 

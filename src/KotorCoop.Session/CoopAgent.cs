@@ -1064,7 +1064,8 @@ public sealed partial class CoopAgent
             local.Module,
             digestModuleGit,
             loadSerial,
-            difficultyLevel);
+            difficultyLevel,
+            NativeWorldEpoch: _bridge.TryReadLivenessEpoch(out uint nativeEpoch) ? nativeEpoch : 0);
         _session.PublishWorldDigest(ForCurrentReadAvailability(digest, moduleReady));
 
         if (!_session.IsEnemyAuthority && _session is ICapabilitySession capabilitySession)

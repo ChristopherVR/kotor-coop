@@ -32,6 +32,12 @@ public interface IEnemySession
     /// docs/research/creature-liveness.md.
     /// </summary>
     void PublishCreatureLiveness(string module, IReadOnlyList<CreatureLivenessEntry> entries) { }
+    void PublishCreatureLiveness(string module, IReadOnlyList<CreatureLivenessEntry> entries, uint worldLoadSerial) =>
+        PublishCreatureLiveness(module, entries);
+    void InvalidateCreatureLivenessForLocalLoad() { }
+    void InvalidateCreatureLivenessForWorldTransition() { }
+    void PublishCreatureLiveness(string module, IReadOnlyList<CreatureLivenessEntry> entries, uint worldLoadSerial, uint nativeEpoch) =>
+        PublishCreatureLiveness(module, entries, worldLoadSerial);
 
     /// <summary>
     /// Client only: the host's latest liveness view for <paramref name="module"/>, accumulated

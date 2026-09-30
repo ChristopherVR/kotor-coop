@@ -51,6 +51,7 @@ internal static unsafe class MaterialisedEnemies
 
     private static readonly uint[] OwnerIds = new uint[SharedBlock.EnemyCapacity];
     private static readonly uint[] LocalIds = new uint[SharedBlock.EnemyCapacity];
+    private static readonly MaterialisedOwnerRejections RejectedOwners = new();
     private static readonly RetainedEnemyBodyMap RetainedBodies = new(SharedBlock.EnemyCapacity);
     private static SharedBlockView? _sharedBlock;
     private static readonly nint[] Bodies = new nint[SharedBlock.EnemyCapacity];
@@ -121,11 +122,12 @@ internal static unsafe class MaterialisedEnemies
         {
             if (OwnerIds[i] == ownerId)
             {
-                return LocalIds[i];
+                TryGetCurrentBody(i, out _);
+                return RejectedOwners.Resolve(ownerId, LocalIds[i]); // null lookup retains birth-grace mapping
             }
         }
 
-        return 0;
+        return RejectedOwners.Resolve(ownerId, 0);
     }
 
     /// <summary>The owner id a local body stands in for, or 0 when the local id is not a
@@ -144,6 +146,7 @@ internal static unsafe class MaterialisedEnemies
         {
             if (LocalIds[i] == localId)
             {
+                TryGetCurrentBody(i, out _);
                 return OwnerIds[i];
             }
         }
@@ -548,6 +551,7 @@ internal static unsafe class MaterialisedEnemies
         OwnerIds[slot] = enemy.ObjectId;
         LocalIds[slot] = localId;
         Bodies[slot] = creature;
+        RejectedOwners.AdmitFreshBody(enemy.ObjectId);
         LastSeen[slot] = now;
         SpawnedAt[slot] = now;
         Appearances[slot] = enemy.Appearance;
@@ -664,8 +668,7 @@ internal static unsafe class MaterialisedEnemies
         // cached pointer to a body the engine has since freed is the shape of crash this
         // project's per-frame-write rule exists for. The engine's own object array is the only
         // thing that can say the body is still there.
-        nint creature = Odyssey.ResolveServerObject(LocalIds[slot]);
-        if (creature == 0)
+        if (!TryGetCurrentBody(slot, out nint creature))
         {
             return;
         }
@@ -799,6 +802,7 @@ internal static unsafe class MaterialisedEnemies
     /// a new module may succeed where the last one failed.</summary>
     public static void Invalidate()
     {
+        RejectedOwners.Clear();
         RetainedBodies.Clear();
         for (int i = 0; i < OwnerIds.Length; i++)
         {
@@ -853,11 +857,9 @@ internal static unsafe class MaterialisedEnemies
     /// <returns>True once the slot is finished with (destroyed, or written off).</returns>
     private static bool Destroy(int slot, string reason)
     {
+        if (!TryGetCurrentBody(slot, out nint current) && OwnerIds[slot] == 0) return true;
         uint localId = LocalIds[slot];
-        if (Bodies[slot] != 0)
-        {
-            Odyssey.ForgetGait(Bodies[slot]);
-        }
+        if (current != 0) Odyssey.ForgetGait(current);
 
         if (Odyssey.DestroyObjectById(localId, out int failure))
         {
@@ -882,6 +884,20 @@ internal static unsafe class MaterialisedEnemies
 
         Clear(slot);
         return true;
+    }
+
+    private static bool TryGetCurrentBody(int slot, out nint current)
+    {
+        current = Odyssey.ResolveServerObject(LocalIds[slot]);
+        if (current == 0) return false; // a fresh spawn can temporarily fail the cheap resolver
+        if (!LivenessRule.IsMaterialisedReplacement(Bodies[slot], current,
+            (uint)*(nint*)current, *(uint*)(current + 4), LocalIds[slot])) return true;
+        // The old world freed this body. Its reused id does not transfer ownership
+        // of the new object to this registry, even if the new object is a creature.
+        RejectedOwners.Reject(OwnerIds[slot]);
+        Clear(slot);
+        current = 0;
+        return false;
     }
 
     private static void Clear(int slot)

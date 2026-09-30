@@ -50,6 +50,11 @@ internal sealed class LivenessPump(IGameBridge bridge, ICoopSession session, Act
     /// <summary>Rotates the "alive" tail <see cref="LivenessBlockPage"/> hands the plugin
     /// across pumps when the accumulated set does not fit the block's capacity in one pass.</summary>
     private int _livenessBlockCursor;
+    private bool _hasWorldLoadSerial;
+    private uint _worldLoadSerial;
+    private uint _nativeLivenessEpoch;
+    private bool _mirrorLocalLoadQuarantined;
+    private string _observedLocalModule = string.Empty;
 
     /// <summary>
     /// Moves creature-liveness state in whichever direction this peer is responsible for —
@@ -62,8 +67,37 @@ internal sealed class LivenessPump(IGameBridge bridge, ICoopSession session, Act
     /// </summary>
     public void PumpCreatureLiveness(in PlayerState local, SessionCapabilities caps)
     {
-        if (!bridge.SupportsEnemySync || (caps & SessionCapabilities.Enemies) == 0)
+        if (!bridge.TryReadWorldLoadSerial(out uint worldSerial) || !bridge.TryReadLivenessEpoch(out uint nativeEpoch))
         {
+            bridge.TryWriteCreatureLiveness([]);
+            return;
+        }
+        if (!bridge.TryReadCurrentModule(out string currentModule) || ModuleNameGuard.IsFallbackModuleName(currentModule))
+        {
+            bridge.TryWriteCreatureLiveness([]);
+            return;
+        }
+        if (_hasWorldLoadSerial && (_worldLoadSerial != worldSerial || _nativeLivenessEpoch != nativeEpoch))
+        {
+            _livenessKnown.Clear();
+            _livenessGoneSince.Clear();
+            _lastLivenessScanMs = 0;
+            _livenessBlockCursor = 0;
+            bridge.TryWriteCreatureLiveness([]);
+            if (session.IsEnemyAuthority) session.PublishCreatureLiveness(local.Module, [], worldSerial, nativeEpoch);
+            else
+            {
+                InvalidateMirror(_worldLoadSerial != worldSerial
+                    || string.Equals(_observedLocalModule, currentModule, StringComparison.OrdinalIgnoreCase));
+            }
+        }
+        _worldLoadSerial = worldSerial;
+        _nativeLivenessEpoch = nativeEpoch;
+        _observedLocalModule = currentModule;
+        _hasWorldLoadSerial = true;
+        if (!bridge.SupportsEnemySync || (caps & SessionCapabilities.Enemies) == 0 || _mirrorLocalLoadQuarantined)
+        {
+            bridge.TryWriteCreatureLiveness([]);
             return;
         }
 
@@ -77,6 +111,7 @@ internal sealed class LivenessPump(IGameBridge bridge, ICoopSession session, Act
 
         if (!moduleClean)
         {
+            bridge.TryWriteCreatureLiveness([]);
             return;
         }
 
@@ -98,15 +133,50 @@ internal sealed class LivenessPump(IGameBridge bridge, ICoopSession session, Act
         // the entries that actually need acting on (dead/gone) ahead of the ones that merely
         // confirm agreement (alive) — see LivenessBlockPage's own doc.
         IReadOnlyList<CreatureLivenessEntry> received = session.GetCreatureLiveness(censusModule);
+        bool beforeSerialReadable = bridge.TryReadWorldLoadSerial(out uint beforeWriteSerial);
+        bool beforeEpochReadable = bridge.TryReadLivenessEpoch(out uint beforeWriteEpoch);
+        bool beforeModuleReadable = bridge.TryReadCurrentModule(out string beforeWriteModule);
+        if (!beforeEpochReadable || beforeWriteEpoch != nativeEpoch || !beforeSerialReadable || beforeWriteSerial != worldSerial
+            || !beforeModuleReadable || !string.Equals(beforeWriteModule, censusModule, StringComparison.OrdinalIgnoreCase))
+        {
+            bridge.TryWriteCreatureLiveness([]);
+            InvalidateMirror((beforeSerialReadable && beforeWriteSerial != worldSerial)
+                || (beforeEpochReadable && beforeWriteEpoch != nativeEpoch && beforeModuleReadable
+                    && string.Equals(beforeWriteModule, censusModule, StringComparison.OrdinalIgnoreCase)));
+            return;
+        }
         if (received.Count > 0)
         {
             (List<CreatureLivenessEntry> page, int nextCursor) =
                 LivenessBlockPage.Select(received, SharedBlockLivenessCapacity, _livenessBlockCursor);
             _livenessBlockCursor = nextCursor;
-            bridge.TryWriteCreatureLiveness(page);
+            bridge.TryWriteCreatureLiveness(page, censusModule, worldSerial, nativeEpoch);
+            bool afterSerialReadable = bridge.TryReadWorldLoadSerial(out uint afterWriteSerial);
+            bool afterModuleReadable = bridge.TryReadCurrentModule(out string afterWriteModule);
+            bool afterEpochReadable = bridge.TryReadLivenessEpoch(out uint afterWriteEpoch);
+            if (!afterSerialReadable || afterWriteSerial != worldSerial || !afterModuleReadable
+                || !string.Equals(afterWriteModule, censusModule, StringComparison.OrdinalIgnoreCase)
+                || !afterEpochReadable || afterWriteEpoch != nativeEpoch)
+            {
+                bridge.TryWriteCreatureLiveness([]);
+                InvalidateMirror((afterSerialReadable && afterWriteSerial != worldSerial)
+                    || (afterEpochReadable && afterWriteEpoch != nativeEpoch && afterModuleReadable
+                        && string.Equals(afterWriteModule, censusModule, StringComparison.OrdinalIgnoreCase)));
+            }
         }
+        else bridge.TryWriteCreatureLiveness([]);
 
         session.ReportLivenessAnomalyCount(bridge.ReadLivenessAnomalyCount());
+    }
+
+    private void InvalidateMirror(bool localLoad)
+    {
+        if (localLoad)
+        {
+            _mirrorLocalLoadQuarantined = true;
+            session.InvalidateCreatureLivenessForLocalLoad();
+        }
+        else session.InvalidateCreatureLivenessForWorldTransition();
     }
 
     /// <summary>
@@ -125,6 +195,14 @@ internal sealed class LivenessPump(IGameBridge bridge, ICoopSession session, Act
         }
 
         List<CreatureLivenessEntry> scan = bridge.ReadCreatureLiveness();
+        if (!bridge.TryReadWorldLoadSerial(out uint afterSerial) || afterSerial != _worldLoadSerial
+            || !bridge.TryReadLivenessEpoch(out uint afterEpoch) || afterEpoch != _nativeLivenessEpoch
+            || !bridge.TryReadCurrentModule(out string afterModule)
+            || !string.Equals(afterModule, censusModule, StringComparison.OrdinalIgnoreCase))
+        {
+            session.PublishCreatureLiveness(censusModule, [], _worldLoadSerial, _nativeLivenessEpoch);
+            return;
+        }
 
         HashSet<uint> seenThisPass = new(scan.Count);
         foreach (CreatureLivenessEntry entry in scan)
@@ -190,6 +268,6 @@ internal sealed class LivenessPump(IGameBridge bridge, ICoopSession session, Act
             full.Add(new CreatureLivenessEntry(id, CreatureLivenessState.Gone));
         }
 
-        session.PublishCreatureLiveness(censusModule, full);
+        session.PublishCreatureLiveness(censusModule, full, _worldLoadSerial, _nativeLivenessEpoch);
     }
 }

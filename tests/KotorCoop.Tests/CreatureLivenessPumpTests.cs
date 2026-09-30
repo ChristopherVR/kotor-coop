@@ -1,6 +1,7 @@
 using KotorCoop.Memory;
 using KotorCoop.Protocol;
 using KotorCoop.Session;
+using KotorCoop.Session.Pumps;
 using Xunit;
 
 namespace KotorCoop.Tests;
@@ -28,6 +29,11 @@ public class CreatureLivenessPumpTests
         public List<CreatureLivenessEntry>? LastWritten { get; private set; }
 
         public uint AnomalyCount { get; set; }
+        public uint WorldLoadSerial { get; set; }
+        public uint LivenessEpoch { get; set; }
+        public bool TryReadLivenessEpoch(out uint epoch) { epoch = LivenessEpoch; return true; }
+        public bool TryReadWorldLoadSerial(out uint serial) { serial = WorldLoadSerial; return true; }
+        public Action? OnWrite { get; set; }
 
         public List<(bool Active, bool IsHost)> SessionRoles { get; } = [];
 
@@ -63,6 +69,9 @@ public class CreatureLivenessPumpTests
         public bool TryWriteCreatureLiveness(IReadOnlyList<CreatureLivenessEntry> entries)
         {
             LastWritten = [.. entries];
+            var action = OnWrite;
+            OnWrite = null;
+            action?.Invoke();
             return true;
         }
 
@@ -265,6 +274,51 @@ public class CreatureLivenessPumpTests
     }
 
     [Fact]
+    public void SameModuleReloadDoesNotInventGoneForPreviousWorldCreatures()
+    {
+        var (agent, bridge, session) = Build(authority: true);
+        LivenessPump pump = new(bridge, session, _ => { });
+        void Pump() { bridge.TryReadLocalState(out var local); pump.PumpCreatureLiveness(local, SessionCapabilities.All); }
+        bridge.Scan = [new(300, CreatureLivenessState.Alive)];
+        Pump();
+        bridge.WorldLoadSerial++;
+        bridge.Scan = [new(4, CreatureLivenessState.Alive)];
+        Pump(); // serial edge must bypass the ordinary two-second throttle
+        Assert.DoesNotContain(session.Published[^1].Entries, e => e.ObjectId == 300);
+        Assert.Contains(session.Published[^1].Entries, e => e.ObjectId == 4);
+    }
+
+    [Fact]
+    public void LocalMirrorReloadClearsNativeBankAndCannotReplayCachedGone()
+    {
+        var (agent, bridge, session) = Build(authority: false);
+        LivenessPump pump = new(bridge, session, _ => { });
+        void Pump() { bridge.TryReadLocalState(out var local); pump.PumpCreatureLiveness(local, SessionCapabilities.All); }
+        session.ToDeliver = [new(300, CreatureLivenessState.Gone)];
+        Pump();
+        Assert.Single(bridge.LastWritten!);
+        bridge.WorldLoadSerial++;
+        Pump();
+        Assert.Empty(bridge.LastWritten!);
+        Pump();
+        Assert.Empty(bridge.LastWritten!);
+    }
+
+    [Fact]
+    public void EmptyIncomingSnapshotWithdrawsPreviouslyActionableNativeBank()
+    {
+        var (agent, bridge, session) = Build(authority: false);
+        LivenessPump pump = new(bridge, session, _ => { });
+        void Pump() { bridge.TryReadLocalState(out var local); pump.PumpCreatureLiveness(local, SessionCapabilities.All); }
+        session.ToDeliver = [new(300, CreatureLivenessState.Gone)];
+        Pump();
+        Assert.Single(bridge.LastWritten!);
+        session.ToDeliver = [];
+        Pump();
+        Assert.Empty(bridge.LastWritten!);
+    }
+
+    [Fact]
     public void TheMirrorHandsWhateverItReceivedToThePluginOrderedActionableFirst()
     {
         (CoopAgent agent, LivenessBridge bridge, LivenessSession session) = Build(authority: false);
@@ -310,7 +364,7 @@ public class CreatureLivenessPumpTests
 
         agent.PumpOnce();
 
-        Assert.Null(bridge.LastWritten);
+        Assert.Empty(bridge.LastWritten!);
     }
 
     [Fact]
@@ -331,6 +385,51 @@ public class CreatureLivenessPumpTests
 
         mirrorAgent.PumpOnce();
 
-        Assert.Null(mirrorBridge.LastWritten);
+        Assert.Empty(mirrorBridge.LastWritten!);
+    }
+
+    [Fact]
+    public void ReloadDuringNativeWriteClearsBankAndQuarantinesSubsequentCachedData()
+    {
+        var (_, bridge, session) = Build(authority: false);
+        LivenessPump pump = new(bridge, session, _ => { });
+        session.ToDeliver = [new(300, CreatureLivenessState.Gone)];
+        bridge.TryReadLocalState(out var local);
+        bridge.OnWrite = () => bridge.LivenessEpoch++; // acknowledged same-module load need not bump serial
+        pump.PumpCreatureLiveness(local, SessionCapabilities.All);
+        Assert.Empty(bridge.LastWritten!);
+        pump.PumpCreatureLiveness(local, SessionCapabilities.All);
+        Assert.Empty(bridge.LastWritten!);
+    }
+
+    [Fact]
+    public void NativeEpochResetAlsoClearsHostGoneHistoryWhenLoadSerialDoesNotChange()
+    {
+        var (_, bridge, session) = Build(authority: true);
+        LivenessPump pump = new(bridge, session, _ => { });
+        bridge.TryReadLocalState(out var local);
+        bridge.Scan = [new(300, CreatureLivenessState.Alive)];
+        pump.PumpCreatureLiveness(local, SessionCapabilities.All);
+        bridge.LivenessEpoch++;
+        bridge.Scan = [];
+        pump.PumpCreatureLiveness(local, SessionCapabilities.All);
+        Assert.Empty(session.Published[^1].Entries);
+    }
+
+    [Fact]
+    public void OrdinaryModuleTravelClearsOldBankButResumesFreshDataOnSamePump()
+    {
+        var (_, bridge, session) = Build(authority: false);
+        LivenessPump pump = new(bridge, session, _ => { });
+        session.ToDeliver = [new(300, CreatureLivenessState.Gone)];
+        bridge.TryReadLocalState(out var before);
+        pump.PumpCreatureLiveness(before, SessionCapabilities.All);
+        bridge.LocalModule = "end_m01ab";
+        bridge.LivenessEpoch++;
+        session.DeliverModule = bridge.LocalModule;
+        session.ToDeliver = [new(4, CreatureLivenessState.Dead)];
+        bridge.TryReadLocalState(out var after);
+        pump.PumpCreatureLiveness(after, SessionCapabilities.All);
+        Assert.Equal(4u, Assert.Single(bridge.LastWritten!).ObjectId);
     }
 }

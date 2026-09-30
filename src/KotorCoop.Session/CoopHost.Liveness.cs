@@ -15,11 +15,19 @@ public sealed partial class CoopHost
     /// stores the latest view; <see cref="BroadcastCreatureLiveness"/> is what actually
     /// paginates and sends it, on its own throttle.</summary>
     public void PublishCreatureLiveness(string module, IReadOnlyList<CreatureLivenessEntry> entries)
+        => PublishCreatureLiveness(module, entries, _localWorld.LoadSerial);
+
+    public void PublishCreatureLiveness(string module, IReadOnlyList<CreatureLivenessEntry> entries, uint worldLoadSerial)
+        => PublishCreatureLiveness(module, entries, worldLoadSerial, _localWorld.NativeWorldEpoch);
+
+    public void PublishCreatureLiveness(string module, IReadOnlyList<CreatureLivenessEntry> entries, uint worldLoadSerial, uint nativeEpoch)
     {
         lock (_gate)
         {
             _livenessModule = module;
             _livenessEntries = entries;
+            _livenessLoadSerial = worldLoadSerial;
+            _livenessNativeEpoch = nativeEpoch;
         }
     }
 
@@ -29,6 +37,8 @@ public sealed partial class CoopHost
     private IReadOnlyList<CreatureLivenessEntry> _livenessEntries = [];
 
     private string _livenessModule = string.Empty;
+    private uint _livenessLoadSerial;
+    private uint _livenessNativeEpoch;
 
     /// <summary>Bumped once per actual broadcast CYCLE (not per <see cref="PublishCreatureLiveness"/>
     /// call, which happens far more often than the broadcast throttle allows) — a receiver
@@ -74,10 +84,16 @@ public sealed partial class CoopHost
     {
         IReadOnlyList<CreatureLivenessEntry> entries;
         string module;
+        uint loadSerial;
+        uint nativeEpoch;
         lock (_gate)
         {
             entries = _livenessEntries;
             module = _livenessModule;
+            loadSerial = _livenessLoadSerial;
+            nativeEpoch = _livenessNativeEpoch;
+            if (!_hasPublishedLocalWorldDigest || loadSerial != _localWorld.LoadSerial || nativeEpoch != _localWorld.NativeWorldEpoch
+                || !string.Equals(module, _localWorld.Module, StringComparison.OrdinalIgnoreCase)) return;
         }
 
         if (recipients.Count == 0 || module.Length == 0)
@@ -95,7 +111,7 @@ public sealed partial class CoopHost
         _livenessGeneration++;
 
         foreach (CreatureLivenessPacket page in
-            CreatureLivenessPaging.Paginate(now, module, _livenessGeneration, entries))
+            CreatureLivenessPaging.Paginate(now, module, _livenessGeneration, entries, _sessionId, loadSerial, nativeEpoch))
         {
             int length = PacketCodec.Write(_sendBuffer, page);
             if (length == 0)

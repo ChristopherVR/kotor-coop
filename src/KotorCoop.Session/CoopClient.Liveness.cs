@@ -27,6 +27,9 @@ public sealed partial class CoopClient
     {
         lock (_gate)
         {
+            if (_livenessLocalLoadQuarantined || _hostWorld.IsEmpty || _livenessLoadSerial != _hostWorld.LoadSerial
+                || _livenessNativeEpoch != _hostWorld.NativeWorldEpoch
+                || !string.Equals(_livenessModule, _hostWorld.Module, StringComparison.OrdinalIgnoreCase)) return [];
             return _livenessModule.Length == 0
                 || module.Length == 0
                 || string.Equals(_livenessModule, module, StringComparison.OrdinalIgnoreCase)
@@ -42,6 +45,29 @@ public sealed partial class CoopClient
     private uint _livenessGeneration;
 
     private bool _livenessHasGeneration;
+    private uint _livenessLoadSerial;
+    private uint _livenessNativeEpoch;
+    private bool _livenessLocalLoadQuarantined;
+    private bool _livenessAwaitFreshGeneration;
+
+    public void InvalidateCreatureLivenessForWorldTransition()
+    {
+        lock (_gate)
+        {
+            _livenessById.Clear();
+            _livenessAwaitFreshGeneration = true;
+        }
+    }
+
+    public void InvalidateCreatureLivenessForLocalLoad()
+    {
+        lock (_gate)
+        {
+            _livenessLocalLoadQuarantined = true;
+            _livenessById.Clear();
+            _livenessHasGeneration = false;
+        }
+    }
 
     private uint _livenessAnomalyCount;
 
@@ -49,10 +75,22 @@ public sealed partial class CoopClient
 
     private void HandleCreatureLiveness(IPEndPoint from, ReadOnlySpan<byte> span, long now)
     {
-        if (PacketCodec.ReadCreatureLiveness(span) is { } liveness)
-        {
+        if (PacketCodec.ReadCreatureLiveness(span) is { } liveness) ApplyCreatureLiveness(liveness);
+    }
+
+    internal void ApplyCreatureLiveness(CreatureLivenessPacket liveness)
+    {
             lock (_gate)
             {
+                bool sameNamespace = _livenessHasGeneration; // generation is global within this admitted host session
+                if (_livenessAwaitFreshGeneration && sameNamespace && liveness.Generation == _livenessGeneration) return;
+                if (liveness.HostNativeEpoch != _hostWorld.NativeWorldEpoch) return;
+                if (!string.Equals(liveness.Module, _hostWorld.Module, StringComparison.OrdinalIgnoreCase)
+                    || (sameNamespace && _livenessGeneration == liveness.Generation
+                        && !string.Equals(_livenessModule, liveness.Module, StringComparison.OrdinalIgnoreCase))) return;
+                if (!LivenessAdmissionRule.Accept(liveness.HostSessionId, _hostSessionId,
+                    liveness.HostLoadSerial, _hostWorld.LoadSerial, !_hostWorld.IsEmpty,
+                    _livenessLocalLoadQuarantined, liveness.Generation, _livenessGeneration, sameNamespace)) return;
                 // A NEW cycle — a different module, or the same module's next publish
                 // — replaces the accumulated set rather than merging into it: this is
                 // a full snapshot every cycle, not a delta, so a body the host has
@@ -66,13 +104,15 @@ public sealed partial class CoopClient
                     _livenessModule = liveness.Module;
                     _livenessGeneration = liveness.Generation;
                     _livenessHasGeneration = true;
+                    _livenessLoadSerial = liveness.HostLoadSerial;
+                    _livenessNativeEpoch = liveness.HostNativeEpoch;
                 }
 
                 foreach (CreatureLivenessEntry entry in liveness.Entries)
                 {
                     _livenessById[entry.ObjectId] = entry;
                 }
+                _livenessAwaitFreshGeneration = false;
             }
-        }
     }
 }

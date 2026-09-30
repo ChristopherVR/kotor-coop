@@ -77,6 +77,10 @@ public sealed partial class CoopClient
             return;
         }
 
+        if (!_localWorld.IsEmpty && (_localWorld.LoadSerial != digest.LoadSerial
+            || (_localWorld.NativeWorldEpoch != digest.NativeWorldEpoch
+                && string.Equals(_localWorld.Module, digest.Module, StringComparison.OrdinalIgnoreCase))))
+            InvalidateCreatureLivenessForLocalLoad();
         _localWorld = digest;
         RefineCompatibility();
     }
@@ -185,7 +189,14 @@ public sealed partial class CoopClient
     {
         if (PacketCodec.ReadWorldDigest(span) is { } hostDigest)
         {
+            lock (_gate)
+            {
+            if (!_hostWorld.IsEmpty && hostDigest.Digest.LoadSerial != _hostWorld.LoadSerial
+                && !LivenessAdmissionRule.IsNewer(hostDigest.Digest.LoadSerial, _hostWorld.LoadSerial)) return;
+            if (!_hostWorld.IsEmpty && hostDigest.Digest.NativeWorldEpoch != _hostWorld.NativeWorldEpoch
+                && !LivenessAdmissionRule.IsNewer(hostDigest.Digest.NativeWorldEpoch, _hostWorld.NativeWorldEpoch)) return;
             _hostWorld = hostDigest.Digest;
+            }
             RefineCompatibility();
         }
     }

@@ -299,6 +299,7 @@ public static partial class PacketCodec
         w.WriteUInt8(packet.Digest.DifficultyLevel ?? WorldDigest.UnknownDifficulty);
         w.WriteUInt32(packet.Digest.ScriptRefreshRevision);
         w.WriteUInt32(packet.Digest.ScriptRefreshSaveIdentity);
+        w.WriteUInt32(packet.Digest.NativeWorldEpoch);
         return w.Failed ? 0 : w.Position;
     }
 
@@ -320,10 +321,11 @@ public static partial class PacketCodec
         byte? difficultyLevel = rawDifficultyLevel <= 2 ? rawDifficultyLevel : null;
         uint scriptRefreshRevision = r.ReadUInt32();
         uint scriptRefreshIdentity = r.ReadUInt32();
+        uint nativeWorldEpoch = r.ReadUInt32();
         return r.Failed
             ? null
             : new WorldDigestPacket(peerId,
                 new WorldDigest(globals, saveIdentity, module, moduleGit, loadSerial, difficultyLevel,
-                    scriptRefreshRevision, scriptRefreshIdentity));
+                    scriptRefreshRevision, scriptRefreshIdentity, nativeWorldEpoch));
     }
 }

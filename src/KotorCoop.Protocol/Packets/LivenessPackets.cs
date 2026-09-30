@@ -52,6 +52,9 @@ public sealed record CreatureLivenessPacket(
     long ServerTimeMs, string Module, ulong Digest, uint Generation,
     byte PageIndex, byte PageCount, IReadOnlyList<CreatureLivenessEntry> Entries)
 {
+    public uint HostSessionId { get; init; }
+    public uint HostLoadSerial { get; init; }
+    public uint HostNativeEpoch { get; init; }
     /// <summary>See <see cref="ProtocolConstants.MaxCreatureLivenessEntries"/>.</summary>
     public const int MaxEntriesPerPacket = ProtocolConstants.MaxCreatureLivenessEntries;
 }

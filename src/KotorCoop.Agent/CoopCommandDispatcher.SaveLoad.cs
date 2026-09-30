@@ -347,8 +347,7 @@ public sealed partial class CoopCommandDispatcher
     private bool _soloCapturePending;
     private bool _soloCaptureWaiting;
     private long _soloCaptureRequestedMs;
-    private string? _soloCaptureSourceBefore;
-    private DateTime _soloCaptureStampBefore;
+    private ReturnSaveCapture? _soloReturnSaveCapture;
     private string _soloCaptureModuleBefore = string.Empty;
     private string _soloCaptureHostModuleBefore = string.Empty;
     private string _soloObservedHostModule = string.Empty;
@@ -363,8 +362,7 @@ public sealed partial class CoopCommandDispatcher
     private long _hostReturnSaveRequestedMs;
     private long _hostReturnSaveRetryMs;
     private long _hostReturnSaveLastBlockedLogMs;
-    private string? _hostReturnSaveSourceBefore;
-    private DateTime _hostReturnSaveStampBefore;
+    private ReturnSaveCapture? _hostReturnSaveCapture;
     private bool _hostReturnSaveReady = true;
 
     /// <summary>Set on the world-transfer thread when a joiner's request found no save of the
@@ -441,8 +439,7 @@ public sealed partial class CoopCommandDispatcher
             _soloCapturePending = false;
             _soloCaptureWaiting = false;
             _soloCaptureRequestedMs = 0;
-            _soloCaptureSourceBefore = null;
-            _soloCaptureStampBefore = default;
+            _soloReturnSaveCapture = null;
             _soloCaptureModuleBefore = string.Empty;
             _soloCaptureHostModuleBefore = string.Empty;
             _soloObservedHostModule = string.Empty;
@@ -453,6 +450,7 @@ public sealed partial class CoopCommandDispatcher
             _hostSoloLeg = false;
             _hostSoloLoadSerialBaseline = null;
             _hostReturnSavePending = false;
+            _hostReturnSaveCapture = null;
             _hostReturnSaveRetryMs = 0;
             _hostReturnSaveLastBlockedLogMs = 0;
             _hostReturnSaveReady = true;
@@ -993,11 +991,70 @@ public sealed partial class CoopCommandDispatcher
         });
     }
 
+    private sealed class ReturnSaveCapture(ICoopSession session, long generation, string module,
+        uint loadSerial, string source, DateTime stampBefore)
+    {
+        public readonly ICoopSession Session = session;
+        public readonly long Generation = generation;
+        public readonly string Module = module;
+        public readonly uint LoadSerial = loadSerial;
+        public readonly string Source = source;
+        public readonly DateTime StampBefore = stampBefore;
+        public bool Answered;
+        public bool Refused;
+        public DateTime ObservedStamp;
+        public long StableSinceMs;
+    }
+
+    private ReturnSaveCapture? BeginReturnSave()
+    {
+        ICoopSession? session = manager.Current;
+        if (ReturnSaveCoordinationBusy || session is null || !manager.TryGetCurrentGeneration(session, out long generation)
+            || !bridge.TryReadLocalState(out PlayerState state) || !ScriptSaveIsSafe(state)
+            || !bridge.TryReadWorldLoadSerial(out uint serial)) return null;
+        ReturnSaveCapture? capture = null;
+        string? source = RequestDedicatedCoopSave(quiet: true,
+            onPrepared: path =>
+            {
+                capture = new(session, generation, state.Module, serial, path, SaveStamp(path));
+                return ReturnSaveIsCurrent(capture);
+            },
+            onApplied: () => { if (capture is not null) capture.Answered = true; },
+            onRefused: () => { if (capture is not null) capture.Refused = true; });
+        return source is null ? null : capture;
+    }
+
+    private bool ReturnSaveCoordinationBusy => _rejoinState.Phase == RejoinPhase.InFlight
+        || _ownLoadVerdictPending || _ownLoadCaptureRequiresConfirmedSave || _verifiedOwnLoadAwaitingRejoin;
+
+    private bool ReturnSaveIsCurrent(ReturnSaveCapture capture) =>
+        !ReturnSaveCoordinationBusy && manager.Current == capture.Session && manager.LifecycleGeneration == capture.Generation
+        && bridge.TryReadLocalState(out PlayerState state) && ScriptSaveIsSafe(state)
+        && bridge.TryReadWorldLoadSerial(out uint serial)
+        && ManualWorldRefreshRule.IsSameWorld(capture.Module, capture.LoadSerial, state, serial);
+
+    private bool ReturnSaveHasLanded(ReturnSaveCapture capture, long nowMs)
+    {
+        if (!capture.Answered || capture.Refused || !ReturnSaveIsCurrent(capture)) return false;
+        DateTime stamp = SaveStamp(capture.Source);
+        if (stamp <= capture.StampBefore) return false;
+        if (stamp != capture.ObservedStamp)
+        {
+            capture.ObservedStamp = stamp;
+            capture.StableSinceMs = nowMs;
+            return false;
+        }
+        return nowMs - capture.StableSinceMs >= 750
+            && ClientCharacterPersistence.IsCaptureSourceReady(capture.Source)
+            && SaveDigest.TryReadActiveModuleName(capture.Source, out string savedModule)
+            && savedModule.Equals(capture.Module, StringComparison.OrdinalIgnoreCase)
+            && ReturnSaveIsCurrent(capture) && SaveStamp(capture.Source) == stamp;
+    }
+
     private void BeginSoloReturnCapture(long nowMs)
     {
-        string savesDirectory = Path.Combine(gameDirectory, "saves");
-        _soloCaptureSourceBefore = ClientCharacterPersistence.FindCaptureSource(savesDirectory);
-        _soloCaptureStampBefore = SaveStamp(_soloCaptureSourceBefore);
+        _soloReturnSaveCapture = BeginReturnSave();
+        if (_soloReturnSaveCapture is null) return;
         _soloCaptureModuleBefore = bridge.TryReadCurrentModule(out string captureModule)
             ? captureModule : string.Empty;
         _soloCaptureHostModuleBefore = _soloObservedHostModule;
@@ -1005,16 +1062,10 @@ public sealed partial class CoopCommandDispatcher
             ? captureSerial : null;
         _soloCaptureHostSerialBefore = _soloReturnState.HostLoadSerialKnown
             ? _soloReturnState.BaselineHostLoadSerial : null;
-        if (!bridge.TryRequestCheat(new CheatRequest(CheatKinds.QuickSave), out _))
-        {
-            Log?.Invoke("session-save: solo return adoption waiting - fresh client quicksave was refused");
-            return;
-        }
-
         _soloCaptureWaiting = false;
         _soloCapturePending = true;
         _soloCaptureRequestedMs = nowMs;
-        Log?.Invoke("session-save: requesting a fresh client quicksave before solo-return adoption");
+        Log?.Invoke("session-save: requesting a fresh client Co-op save before solo-return adoption");
     }
 
     private bool MaintainSoloReturnCapture(PlayerState? localState, long nowMs)
@@ -1049,6 +1100,8 @@ public sealed partial class CoopCommandDispatcher
         }
 
         if (!AutoAdoptWorldEnabled
+            || _soloReturnSaveCapture is not { } returnSave || !ReturnSaveIsCurrent(returnSave)
+            || returnSave.Refused
             || !_soloCaptureHostModuleBefore.Equals(_soloObservedHostModule, StringComparison.OrdinalIgnoreCase)
             || !bridge.TryReadCurrentModule(out string currentModule)
             || !_soloCaptureModuleBefore.Equals(currentModule, StringComparison.OrdinalIgnoreCase)
@@ -1071,14 +1124,8 @@ public sealed partial class CoopCommandDispatcher
             return false;
         }
 
-        string savesDirectory = Path.Combine(gameDirectory, "saves");
-        string? sourceNow = ClientCharacterPersistence.FindCaptureSource(savesDirectory);
-        bool landed = CharacterCaptureCadenceRule.SaveLanded(
-            _soloCaptureSourceBefore,
-            _soloCaptureStampBefore,
-            sourceNow,
-            SaveStamp(sourceNow))
-            && ClientCharacterPersistence.IsCaptureSourceReady(sourceNow);
+        string sourceNow = returnSave.Source;
+        bool landed = ReturnSaveHasLanded(returnSave, nowMs);
         if (!landed && !CharacterCaptureCadenceRule.WaitExpired(_soloCaptureRequestedMs, nowMs))
         {
             return false;
@@ -1087,14 +1134,13 @@ public sealed partial class CoopCommandDispatcher
         if (!landed)
         {
             _soloCapturePending = false;
-            Log?.Invoke("session-save: solo return adoption aborted - fresh client quicksave did not land");
+            Log?.Invoke("session-save: solo return adoption aborted - fresh client Co-op save did not land");
             return false;
         }
 
-        sourceNow = ClientCharacterPersistence.RefreshCaptureSource(savesDirectory, sourceNow);
         string? outcome = null;
         bool captured = _sessionSaveWatch is not null
-            && _sessionSaveWatch.CaptureNowWritten(sourceNow, out outcome);
+            && _sessionSaveWatch.CaptureVerifiedRefreshSource(sourceNow, out outcome);
         if (outcome is not null)
         {
             Log?.Invoke(outcome);
@@ -1105,7 +1151,8 @@ public sealed partial class CoopCommandDispatcher
         {
             Log?.Invoke("session-save: solo return adoption aborted - fresh character sidecar was not written");
         }
-        return captured;
+        return captured && ReturnSaveIsCurrent(returnSave)
+            && SaveStamp(returnSave.Source) == returnSave.ObservedStamp;
     }
 
     private static bool CaptureIsAllowed(PlayerState? state) =>
@@ -1132,10 +1179,8 @@ public sealed partial class CoopCommandDispatcher
             return;
         }
 
-        string savesDirectory = Path.Combine(gameDirectory, "saves");
-        _hostReturnSaveSourceBefore = ClientCharacterPersistence.FindCaptureSource(savesDirectory);
-        _hostReturnSaveStampBefore = SaveStamp(_hostReturnSaveSourceBefore);
-        if (bridge.TryRequestCheat(new CheatRequest(CheatKinds.QuickSave), out _))
+        _hostReturnSaveCapture = BeginReturnSave();
+        if (_hostReturnSaveCapture is not null)
         {
             _hostReturnSaveLastBlockedLogMs = 0;
             _hostReturnSavePending = true;
@@ -1161,14 +1206,13 @@ public sealed partial class CoopCommandDispatcher
             return;
         }
 
-        string savesDirectory = Path.Combine(gameDirectory, "saves");
-        string? sourceNow = ClientCharacterPersistence.FindCaptureSource(savesDirectory);
-        bool landed = CharacterCaptureCadenceRule.SaveLanded(
-            _hostReturnSaveSourceBefore,
-            _hostReturnSaveStampBefore,
-            sourceNow,
-            SaveStamp(sourceNow))
-            && ClientCharacterPersistence.IsCaptureSourceReady(sourceNow);
+        if (_hostReturnSaveCapture is not { } capture || capture.Refused || !ReturnSaveIsCurrent(capture))
+        {
+            _hostReturnSavePending = false;
+            _hostReturnSaveRetryMs = nowMs + 1000;
+            return;
+        }
+        bool landed = ReturnSaveHasLanded(capture, nowMs);
 
         if (landed)
         {

@@ -458,12 +458,39 @@ public sealed partial class KotorGameBridge
     /// </summary>
     public bool TryWriteCreatureLiveness(IReadOnlyList<CreatureLivenessEntry> entries)
     {
-        if (_pluginBlock == 0)
+        if (_pluginBlock == 0) return false;
+        if (entries.Count == 0)
         {
-            return false;
+            bool cleared = _memory.TryWrite(_pluginBlock + BlockLivenessCount, 0u);
+            return _memory.TryWrite(_pluginBlock + 0xB998, 0u) && cleared;
         }
+        return TryReadCurrentModule(out string module) && TryReadWorldLoadSerial(out uint worldSerial)
+            && TryWriteCreatureLiveness(entries, module, worldSerial);
+    }
 
-        bool ok = true;
+    public bool TryWriteCreatureLiveness(IReadOnlyList<CreatureLivenessEntry> entries, string module, uint worldSerial)
+        => TryReadLivenessEpoch(out uint epoch) && TryWriteCreatureLiveness(entries, module, worldSerial, epoch);
+
+    public bool TryReadLivenessEpoch(out uint epoch)
+    {
+        epoch = 0;
+        return _pluginBlock != 0 && _memory.TryReadUInt32(_pluginBlock + 0xB99C, out epoch);
+    }
+
+    public bool TryWriteCreatureLiveness(IReadOnlyList<CreatureLivenessEntry> entries, string module, uint worldSerial, uint nativeEpoch)
+    {
+        lock (Sync)
+        {
+        if (_pluginBlock == 0 || !TryReadWorldLoadSerial(out uint currentSerial) || currentSerial != worldSerial
+            || !TryReadCurrentModule(out string currentModule)
+            || !string.Equals(currentModule, module, StringComparison.OrdinalIgnoreCase)
+            || !_memory.TryReadUInt32(_pluginBlock + 0xB99C, out uint epoch) || epoch == 0 || epoch != nativeEpoch
+            || !_memory.TryReadUInt32(_pluginBlock + 0xB998, out uint previous)) return false;
+        uint sequence = (previous + 2) & ~1u;
+        if (sequence == 0) sequence = 2;
+        if (!_memory.TryWrite(_pluginBlock + 0xB998, sequence | 1)) return false;
+
+        bool ok = _memory.TryWrite(_pluginBlock + BlockLivenessCount, 0u);
         int count = Math.Min(entries.Count, BlockLivenessCapacity);
 
         for (int i = 0; i < count; i++)
@@ -476,8 +503,20 @@ public sealed partial class KotorGameBridge
             ok &= _memory.TryWrite(slot + 0x00, entry.ObjectId);
         }
 
+        ok &= _memory.TryWrite(_pluginBlock + 0xB990, worldSerial);
+        ok &= _memory.TryWrite(_pluginBlock + 0xB994, epoch);
         ok &= _memory.TryWrite(_pluginBlock + BlockLivenessCount, (uint)count);
-        return ok;
+        if (!ok || !TryReadWorldLoadSerial(out uint afterSerial) || afterSerial != worldSerial
+            || !TryReadCurrentModule(out string afterModule)
+            || !string.Equals(afterModule, module, StringComparison.OrdinalIgnoreCase)
+            || !_memory.TryReadUInt32(_pluginBlock + 0xB99C, out uint afterEpoch) || afterEpoch != epoch)
+        {
+            _memory.TryWrite(_pluginBlock + BlockLivenessCount, 0u);
+            _memory.TryWrite(_pluginBlock + 0xB998, 0u);
+            return false;
+        }
+        return _memory.TryWrite(_pluginBlock + 0xB998, sequence);
+        }
     }
 
     /// <summary>Non-owner side: the plugin's cumulative "host says alive, local already

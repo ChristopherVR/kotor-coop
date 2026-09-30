@@ -47,7 +47,8 @@ public readonly record struct WorldDigest(
     uint LoadSerial = 0,
     byte? DifficultyLevel = null,
     uint ScriptRefreshRevision = 0,
-    uint ScriptRefreshSaveIdentity = 0)
+    uint ScriptRefreshSaveIdentity = 0,
+    uint NativeWorldEpoch = 0)
 {
     /// <summary>Sent when the runtime setting could not be read safely.</summary>
     public const byte UnknownDifficulty = byte.MaxValue;

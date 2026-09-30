@@ -1590,8 +1590,20 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
         // already uses before resolving, exactly like Resolve's own fallback (mapped local id
         // if this is a stand-in, the raw id itself if it is GIT-identical).
         uint mappedId = MaterialisedEnemies.ToLocal(fightingId);
-        nint creature = Odyssey.ResolveServerObject(mappedId != 0 ? mappedId : fightingId);
-        bool dead = Odyssey.IsCreatureDead(creature);
+        uint effectiveId = mappedId != 0 ? mappedId : fightingId;
+        nint creature = Odyssey.ResolveServerObject(effectiveId);
+        bool readable = creature != 0 && NativeMethods.IsReadable(creature, (nuint)(ObjId + sizeof(uint)));
+        bool peerPhantom = false;
+        for (int peerSlot = 0; peerSlot < SharedBlock.SlotCapacity; peerSlot++)
+            peerPhantom |= block.GetPhantomId(peerSlot) == effectiveId;
+        LocalFightBodyVerdict bodyVerdict = LocalFightBodyRule.Decide(creature != 0,
+            readable ? (uint)*(nint*)creature : 0, readable ? *(uint*)(creature + ObjId) : 0,
+            effectiveId, effectiveId == playerId, peerPhantom,
+            MaterialisedEnemies.InBirthGrace(fightingId, now));
+        if (bodyVerdict == LocalFightBodyVerdict.AwaitBirth) return;
+        // ResolveServerObject can return a reused waypoint/PC/phantom after a load.
+        // A rejected body ends the old exclusion so the host's live entry can spawn again.
+        bool dead = bodyVerdict == LocalFightBodyVerdict.Release || Odyssey.IsCreatureDead(creature);
         bool disengaged = !dead && (player == 0 || !IsEngaged(creature, player));
 
         // §13: only worth reading this pass's evidence for a fight that is not already ending
@@ -1803,10 +1815,10 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
         // The cached pointer outlives a world reload (a client `loadgame` frees every object
         // while the slot still holds its address): prove the memory readable before the id and
         // vtable are read out of it — live 2026-09-29, an access violation right here.
-        if (cached != 0 && _trackedId[slot] == objectId
-            && NativeMethods.IsReadable(cached, (nuint)(ObjId + sizeof(uint)))
-            && *(uint*)(cached + ObjId) == objectId
-            && *(nint*)cached == CreatureVtable)
+        bool readable = cached != 0 && NativeMethods.IsReadable(cached, (nuint)(ObjId + sizeof(uint)));
+        if (_trackedId[slot] == objectId && LocalFightBodyRule.IsCurrentCachedBody(cached,
+            Odyssey.ResolveServerObject(objectId), readable,
+            readable ? (uint)*(nint*)cached : 0, readable ? *(uint*)(cached + ObjId) : 0, objectId))
         {
             return cached;
         }
@@ -1814,7 +1826,8 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
         Forget(slot);
 
         nint creature = Odyssey.ResolveServerObject(objectId);
-        if (creature == 0 || *(nint*)creature != CreatureVtable)
+        if (creature == 0 || !NativeMethods.IsReadable(creature, (nuint)(ObjId + sizeof(uint)))
+            || *(nint*)creature != CreatureVtable || *(uint*)(creature + ObjId) != objectId)
         {
             return 0;
         }

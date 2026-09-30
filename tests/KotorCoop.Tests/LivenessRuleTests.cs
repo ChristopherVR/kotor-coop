@@ -10,6 +10,63 @@ namespace KotorCoop.Tests;
 /// </summary>
 public class LivenessRuleTests
 {
+    [Theory]
+    [InlineData(0x007470C8, 300, 300, false, false, true)]
+    [InlineData(0x007470C8, 0x8000012Cu, 300, false, false, true)]
+    [InlineData(0x00748AD0, 300, 300, false, false, false)] // reused waypoint id
+    [InlineData(0x007470C8, 301, 300, false, false, false)]
+    [InlineData(0x007470C8, 300, 300, true, false, false)]
+    [InlineData(0x007470C8, 300, 300, false, true, false)]
+    public void ReusedObjectIdCannotReconcileASeparateBody(uint vtable, uint actual, uint expected,
+        bool player, bool phantom, bool allowed) =>
+        Assert.Equal(allowed, LivenessRule.CanReconcileBody(vtable, actual, expected, player, phantom));
+
+    [Fact]
+    public void ReusedMaterialisedIdCannotDestroyOrDressAReplacementCreature()
+    {
+        Assert.False(LivenessRule.IsCurrentMaterialisedBody((nint)0x10000, (nint)0x20000, 0x007470C8, 300, 300));
+        Assert.True(LivenessRule.IsCurrentMaterialisedBody((nint)0x10000, (nint)0x10000, 0x007470C8, 300, 300));
+        Assert.False(LivenessRule.IsCurrentMaterialisedBody((nint)0x10000, (nint)0x10000, 0x00748AD0, 300, 300));
+    }
+
+    [Fact]
+    public void TemporaryNullLookupRetainsBirthGraceButPositiveReplacementDoesNot()
+    {
+        Assert.False(LivenessRule.IsMaterialisedReplacement((nint)0x10000, 0, 0, 0, 300));
+        Assert.False(LivenessRule.IsMaterialisedReplacement((nint)0x10000, (nint)0x10000, 0x007470C8, 300, 300));
+        Assert.True(LivenessRule.IsMaterialisedReplacement((nint)0x10000, (nint)0x20000, 0x007470C8, 300, 300));
+        Assert.True(LivenessRule.IsMaterialisedReplacement((nint)0x10000, (nint)0x10000, 0x00748AD0, 300, 300));
+    }
+
+    [Fact]
+    public void ClearedReplacementMappingCannotFallBackToOwnerIdAndDestroyNewCreature()
+    {
+        MaterialisedOwnerRejections rejected = new();
+        const uint owner = 300;
+        Assert.Equal(301u, rejected.Resolve(owner, 301));
+        Assert.True(LivenessRule.IsMaterialisedReplacement((nint)0x10000, (nint)0x20000, 0x007470C8, 301, 301));
+        rejected.Reject(owner); // registry clears its mapping after that positive replacement
+        uint mapped = rejected.Resolve(owner, 0);
+        uint effective = mapped != 0 ? mapped : owner; // actual consumer fallback selection
+        Assert.Equal(MaterialisedOwnerRejections.InvalidObject, effective);
+        Assert.False(LivenessRule.CanReconcileBody(0x007470C8, owner, effective, false, false));
+        Assert.Equal(LivenessAction.Nothing, LivenessRule.Decide(LivenessHostState.Gone,
+            localResolved: false, localDead: false, localPlot: false));
+        Assert.Equal(0u, rejected.Resolve(302, 0));
+        rejected.AdmitFreshBody(owner);
+        Assert.Equal(303u, rejected.Resolve(owner, 303));
+    }
+
+    [Fact]
+    public void RejectedOwnerGuardSurvivesRepeatedReadsUntilWorldInvalidation()
+    {
+        MaterialisedOwnerRejections rejected = new();
+        rejected.Reject(65535);
+        Assert.Equal(MaterialisedOwnerRejections.InvalidObject, rejected.Resolve(65535, 0));
+        Assert.Equal(MaterialisedOwnerRejections.InvalidObject, rejected.Resolve(65535, 0));
+        rejected.Clear();
+        Assert.Equal(0u, rejected.Resolve(65535, 0));
+    }
     [Fact]
     public void BothSidesAliveIsNothing()
     {

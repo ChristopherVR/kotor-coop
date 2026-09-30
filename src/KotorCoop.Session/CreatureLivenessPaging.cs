@@ -20,7 +20,8 @@ public static class CreatureLivenessPaging
     /// set on the receiving side rather than leave it standing forever.
     /// </summary>
     public static List<CreatureLivenessPacket> Paginate(
-        long serverTimeMs, string module, uint generation, IReadOnlyList<CreatureLivenessEntry> entries)
+        long serverTimeMs, string module, uint generation, IReadOnlyList<CreatureLivenessEntry> entries,
+        uint hostSessionId = 0, uint hostLoadSerial = 0, uint hostNativeEpoch = 0)
     {
         ulong digest = EntryDigest.Empty;
         foreach (CreatureLivenessEntry entry in entries)
@@ -51,7 +52,8 @@ public static class CreatureLivenessPaging
             }
 
             pages.Add(new CreatureLivenessPacket(
-                serverTimeMs, module, digest, generation, (byte)page, (byte)pageCount, slice));
+                serverTimeMs, module, digest, generation, (byte)page, (byte)pageCount, slice)
+                { HostSessionId = hostSessionId, HostLoadSerial = hostLoadSerial, HostNativeEpoch = hostNativeEpoch });
         }
 
         return pages;

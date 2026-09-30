@@ -82,6 +82,11 @@ public interface IPluginChannelBridge
     /// docs/research/creature-liveness.md.
     /// </summary>
     bool TryWriteCreatureLiveness(IReadOnlyList<CreatureLivenessEntry> entries) => false;
+    bool TryWriteCreatureLiveness(IReadOnlyList<CreatureLivenessEntry> entries, string module, uint worldSerial) =>
+        TryWriteCreatureLiveness(entries);
+    bool TryWriteCreatureLiveness(IReadOnlyList<CreatureLivenessEntry> entries, string module, uint worldSerial, uint nativeEpoch) =>
+        TryWriteCreatureLiveness(entries, module, worldSerial);
+    bool TryReadLivenessEpoch(out uint epoch) { epoch = 0; return true; }
 
     /// <summary>
     /// Non-owner side: how many "host says alive, but this instance's own engine already had

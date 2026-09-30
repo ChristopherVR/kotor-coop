@@ -344,7 +344,7 @@ internal sealed unsafe partial class SharedBlockView(byte* baseAddress)
 
         EnemyPresenceCount = 0;
         PartyPresenceCount = 0;
-        LivenessCount = 0;
+        BeginLivenessEpoch();
         *U32(SharedBlock.OffsetPlayerCreature) = 0;
     }
 

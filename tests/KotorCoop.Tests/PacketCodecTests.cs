@@ -1158,7 +1158,8 @@ public class PacketCodecTests
             new CreatureLivenessEntry(0x99, CreatureLivenessState.Gone),
         ];
 
-        CreatureLivenessPacket packet = new(12345, "tar_m03aa", 0xC0FFEEUL, 7, 1, 3, entries);
+        CreatureLivenessPacket packet = new(12345, "tar_m03aa", 0xC0FFEEUL, 7, 1, 3, entries)
+            { HostSessionId = 123, HostLoadSerial = 17, HostNativeEpoch = 37 };
         int length = PacketCodec.Write(buffer, packet);
         CreatureLivenessPacket? read = PacketCodec.ReadCreatureLiveness(buffer[..length]);
 
@@ -1167,6 +1168,9 @@ public class PacketCodecTests
         Assert.Equal(packet.Module, read.Module);
         Assert.Equal(packet.Digest, read.Digest);
         Assert.Equal(packet.Generation, read.Generation);
+        Assert.Equal(packet.HostSessionId, read.HostSessionId);
+        Assert.Equal(packet.HostLoadSerial, read.HostLoadSerial);
+        Assert.Equal(packet.HostNativeEpoch, read.HostNativeEpoch);
         Assert.Equal(packet.PageIndex, read.PageIndex);
         Assert.Equal(packet.PageCount, read.PageCount);
         Assert.Equal(entries, read.Entries);
@@ -1204,6 +1208,9 @@ public class PacketCodecTests
         w.WriteString("mod", ProtocolConstants.MaxModuleLength);
         w.WriteUInt64(0);
         w.WriteUInt32(0);
+        w.WriteUInt32(0); // host session
+        w.WriteUInt32(0); // host world load serial
+        w.WriteUInt32(0); // host native world epoch
         w.WriteUInt8(0);
         w.WriteUInt8(1);
         w.WriteUInt8((byte)(CreatureLivenessPacket.MaxEntriesPerPacket + 1));

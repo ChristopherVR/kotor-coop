@@ -22,7 +22,7 @@ namespace KotorCoop.Plugin;
 /// (docs/review-seamless-2026-09-18.md). The agent-side digest default in CoopConfig.cs must
 /// agree with this one, or a client that sets 1 is overridden back to 0 by the host.
 /// </summary>
-internal sealed class LivenessReconcileController(SharedBlockView block, CombatController combat)
+internal sealed unsafe class LivenessReconcileController(SharedBlockView block, CombatController combat)
 {
     private const int IntervalFrames = 40;
 
@@ -77,6 +77,7 @@ internal sealed class LivenessReconcileController(SharedBlockView block, CombatC
 
     public void OnFrame()
     {
+        if (block.LivenessNativeEpoch == 0) { block.BeginLivenessEpoch(); return; }
         if (!_livenessSync.Resolve(block))
         {
             if (!_offLogged)
@@ -120,15 +121,23 @@ internal sealed class LivenessReconcileController(SharedBlockView block, CombatC
         }
 
         int actionsLeft = MaxActionsPerPass;
+        uint sequence = block.LivenessPublishSequence;
+        if (!BankCurrent(sequence)) return;
 
         for (int i = 0; i < count && actionsLeft > 0; i++)
         {
-            if (Apply(block.GetLiveness(i)))
+            LivenessView entry = block.GetLiveness(i);
+            if (!BankCurrent(sequence)) return;
+            if (Apply(entry))
             {
                 actionsLeft--;
             }
         }
     }
+
+    private bool BankCurrent(uint sequence) => block.LivenessPublishSequence == sequence
+        && LivenessBankRule.CanRead(sequence, block.LivenessExpectedWorldSerial, block.WorldLoadSerial,
+            block.LivenessExpectedEpoch, block.LivenessNativeEpoch);
 
     /// <summary>Returns true when this entry spent a dispatch (kill or destroy) from the
     /// pass's budget; false for every other outcome — nothing to do, or an anomaly, which is
@@ -186,6 +195,16 @@ internal sealed class LivenessReconcileController(SharedBlockView block, CombatC
 
         uint effectiveId = mapped != 0 ? mapped : entry.ObjectId;
         nint creature = Odyssey.ResolveServerObject(effectiveId);
+        if (creature != 0)
+        {
+            bool peerPhantom = false;
+            for (int slot = 0; slot < SharedBlock.SlotCapacity; slot++)
+                peerPhantom |= block.GetPhantomId(slot) == effectiveId;
+            // A same-module load can reuse a departed creature's id for a map
+            // waypoint or peer body. Never send it through creature virtual calls.
+            if (!LivenessRule.CanReconcileBody((uint)*(nint*)creature, *(uint*)(creature + 4),
+                effectiveId, effectiveId == Odyssey.GetPlayerObjectId(), peerPhantom)) return false;
+        }
         bool localResolved = creature != 0;
         bool localDead = localResolved && Odyssey.IsCreatureDead(creature);
         bool localPlot = localResolved && Odyssey.IsPlot(creature);

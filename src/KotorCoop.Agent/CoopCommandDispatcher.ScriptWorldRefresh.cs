@@ -39,7 +39,8 @@ public sealed partial class CoopCommandDispatcher
     private bool ScriptSaveIsSafe(PlayerState state) => ManualWorldRefreshRule.IsSafe(state)
         && !bridge.IsInDialogue && !(_kotor?.IsLocalFullScreenGuiOpen ?? false);
 
-    private string? RequestDedicatedCoopSave(bool quiet, ScriptSaveCapture? capture = null)
+    private string? RequestDedicatedCoopSave(bool quiet, ScriptSaveCapture? capture = null,
+        Func<string, bool>? onPrepared = null, Action? onApplied = null, Action? onRefused = null)
     {
         if (string.IsNullOrEmpty(gameDirectory) || !bridge.SupportsCheats
             || _pendingCheatSerial != 0 || _queuedCheats.Count != 0
@@ -51,9 +52,10 @@ public sealed partial class CoopCommandDispatcher
         int dash = folder.IndexOf(" - ", StringComparison.Ordinal);
         if (dash < 0 || !int.TryParse(folder.AsSpan(0, dash), out int number) || number < 2) return null;
         string path = Path.Combine(saves, folder);
+        if (onPrepared is not null && !onPrepared(path)) return null;
         SendCheat(new CheatRequest(CheatKinds.CoopSave, Amount: number, Text: CoopSaveSlot.SlotLabel),
-            onApplied: capture is null ? null : () => capture.Answered = true,
-            onRefused: capture is null ? null : () => capture.Refused = true, quiet: quiet);
+            onApplied: () => { if (capture is not null) capture.Answered = true; onApplied?.Invoke(); },
+            onRefused: () => { if (capture is not null) capture.Refused = true; onRefused?.Invoke(); }, quiet: quiet);
         return path;
     }
 

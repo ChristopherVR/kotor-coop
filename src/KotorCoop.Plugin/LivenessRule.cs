@@ -53,6 +53,19 @@ internal enum LivenessAction
 /// </summary>
 internal static class LivenessRule
 {
+    internal static bool CanReconcileBody(uint vtable, uint actualId, uint expectedId,
+        bool isLocalPlayer, bool isPeerPhantom) =>
+        vtable == 0x007470C8 && expectedId is > 0 and < 0x7F000000
+        && (actualId & 0x7FFFFFFF) == expectedId && !isLocalPlayer && !isPeerPhantom;
+
+    internal static bool IsCurrentMaterialisedBody(nint recorded, nint current,
+        uint vtable, uint actualId, uint expectedId) =>
+        recorded != 0 && current == recorded
+        && CanReconcileBody(vtable, actualId, expectedId, false, false);
+
+    internal static bool IsMaterialisedReplacement(nint recorded, nint current,
+        uint vtable, uint actualId, uint expectedId) =>
+        current != 0 && !IsCurrentMaterialisedBody(recorded, current, vtable, actualId, expectedId);
     /// <summary>
     /// Decides the action for one entry.
     ///

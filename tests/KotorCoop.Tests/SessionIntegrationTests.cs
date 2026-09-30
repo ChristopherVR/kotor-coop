@@ -1474,6 +1474,8 @@ public class SessionIntegrationTests
             host.PublishLocalState(hostState);
             client.PublishLocalState(clientState);
             host.PublishCreatureLiveness(Module, entries);
+            host.PublishWorldDigest(new WorldDigest(1, 1, Module, 1));
+            client.PublishWorldDigest(new WorldDigest(1, 1, Module, 1));
         }
 
         bool converged = await WaitForAsync(
@@ -1531,6 +1533,8 @@ public class SessionIntegrationTests
             host.PublishLocalState(hostState);
             client.PublishLocalState(clientState);
             host.PublishCreatureLiveness(HostModule, entries);
+            host.PublishWorldDigest(new WorldDigest(1, 1, HostModule, 1));
+            client.PublishWorldDigest(new WorldDigest(1, 1, ClientModule, 1));
         }
 
         bool arrived = await WaitForAsync(
