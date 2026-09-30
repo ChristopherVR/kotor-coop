@@ -451,6 +451,12 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
                 continue;
             }
 
+            bool peerPhantom = false;
+            for (int slot = 0; slot < SharedBlock.SlotCapacity; slot++)
+                peerPhantom |= block.GetPhantomId(slot) == objectId;
+            if (!LivenessRule.CanReconcileBody((uint)*(nint*)creature, *(uint*)(creature + 4),
+                objectId, objectId == Odyssey.GetPlayerObjectId(), peerPhantom)) continue;
+
             // Remembered BEFORE the apply, so "it was here once" is true even if the damage
             // itself is refused: the two failures are different and must not be conflated.
             RememberResolvable(objectId);

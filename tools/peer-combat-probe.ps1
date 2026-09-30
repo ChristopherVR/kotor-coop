@@ -15,6 +15,7 @@ public class PeerCombatReader {
     public IntPtr BaseAddress, AllocationBase; public uint AllocationProtect, __a1;
     public UIntPtr RegionSize; public uint State, Protect, Type, __a2; }
   public static uint Epoch(string module) { unchecked { uint hash=2166136261; foreach(char c in module) { hash ^= char.ToLowerInvariant(c); hash *=16777619; } return hash==0 ? 1 : hash; } }
+  public static uint WorldEpoch(string module,uint serial,uint epoch) { unchecked { uint hash=(Epoch(module)^serial)*16777619; hash=(hash^epoch)*16777619; return hash==0 ? 1 : hash; } }
   public static IntPtr Open(int pid){ return OpenProcess(0x0410, false, (uint)pid); }
   public static byte[] Read(IntPtr h, long a, int n){
     byte[] b = new byte[n]; int r;
@@ -115,7 +116,8 @@ try {
             if (!$array) { throw 'Current server object array unavailable.' }
             $tree = Word $array
             $nativeModule=Native-Module $internal
-            $nativeEpoch=[PeerCombatReader]::Epoch($nativeModule)
+            $nativeEpoch=if ((Value 8) -ge 88) { [PeerCombatReader]::WorldEpoch($nativeModule,$serial,$livenessEpoch) } else { [PeerCombatReader]::Epoch($nativeModule) }
+            if (!$NativeOnly -and (Value 8) -ge 88 -and (Value 0xB9A0) -ne $livenessEpoch) { throw 'Attributed bank belongs to another native world epoch.' }
             if (!$NativeOnly -and (Value 0x8704) -ne $nativeEpoch) { throw 'Attributed epoch does not match the current native module namespace.' }
             if (!$tree) { throw 'Current server object array unavailable.' }
             $appliedBefore=Word ($block+0x2014)
@@ -156,6 +158,7 @@ try {
             }
             $result = @{ Utc=[DateTime]::UtcNow.ToString('o'); Pid=$ProcId; ProcessStartTicks=$process.StartTime.ToUniversalTime().Ticks;
                 Version=Value 8; WorldLoadSerial=$serial; NativeLivenessEpoch=$livenessEpoch;
+                AttributedNativeWorldEpoch=$(if (!$NativeOnly -and (Value 8) -ge 88) { Value 0xB9A0 } else { $null });
                 AttributedAvailable=(!$NativeOnly); AttributedWorldLoadSerial=$(if (!$NativeOnly) { Value 0x870C } else { $null });
                 WorldLoadSerialNote='Unannounced teardown counter; zero is valid for the initial world and ordinary warps do not increment it';
                 NativeNamespace=@{ Module=$nativeModule; ModuleEpoch=$nativeEpoch; ObjectArray=$array; ObjectTree=$tree };

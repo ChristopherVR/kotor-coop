@@ -1447,7 +1447,7 @@ internal partial struct SharedBlock
     /// to attack CheatTarget through the engine's own <c>ActionAttack</c> action queue
     /// (<c>Odyssey.AttackTarget</c>), the same route a real player's click on a hostile
     /// produces: a queued attack action that starts the PC's own combat round. CheatTarget = 0
-    /// means "stop" — clears the queued attack via <c>Odyssey.ClearQueuedCombatActions</c>.
+    /// means "stop" — ends the active round and clears queued attacks via <c>Odyssey.StopLocalPlayerCombat</c>.
     /// Built so the sticky-aggro test (the unattended rig cannot click) and a live <c>cast</c>
     /// (which needs the caster's own active combat round, effect-sync.md §14.8/§14.9) can
     /// finally be exercised. See <c>IGameBridge.CheatKinds.Attack</c> and

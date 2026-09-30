@@ -22,6 +22,7 @@ internal sealed unsafe partial class SharedBlockView
         uint publishedCount = *U32(SharedBlock.OffsetAttributedDamageCount);
         if (publishedCount > rows.Length) return false;
         uint worldSerial = *U32(SharedBlock.OffsetAttributedDamageWorldSerial);
+        uint nativeEpoch = *U32(SharedBlock.OffsetAttributedDamageNativeEpoch);
         epoch = *U32(SharedBlock.OffsetAttributedDamageEpoch);
         count = (int)publishedCount;
         for (int i = 0; i < count; i++)
@@ -30,7 +31,8 @@ internal sealed unsafe partial class SharedBlockView
             rows[i] = new(slot[0], slot[1], slot[2]);
         }
         System.Threading.Thread.MemoryBarrier();
-        return before == System.Threading.Volatile.Read(ref sequence) && worldSerial == WorldLoadSerial;
+        return before == System.Threading.Volatile.Read(ref sequence) && worldSerial == WorldLoadSerial
+            && nativeEpoch != 0 && nativeEpoch == *U32(SharedBlock.OffsetLivenessNativeEpoch);
     }
 
     // ---- enemies ----------------------------------------------------------------

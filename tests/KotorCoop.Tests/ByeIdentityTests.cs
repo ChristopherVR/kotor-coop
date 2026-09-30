@@ -99,6 +99,8 @@ public class ByeIdentityTests
         {
             host.PublishLocalState(Somewhere);
             client.PublishLocalState(Somewhere);
+            host.PublishWorldDigest(new WorldDigest(1, 1, "end_m01aa", 1, NativeWorldEpoch: 1));
+            client.PublishWorldDigest(new WorldDigest(1, 1, "end_m01aa", 1, NativeWorldEpoch: 1));
             client.ReportEnemyDamage("end_m01aa", generation: 7, report);
             ledger.Merge("end_m01aa", host.GetEnemyDamage("end_m01aa"));
         }

@@ -59,6 +59,8 @@ public sealed partial class CoopHost
                 ScriptRefreshRevision = _scriptRefreshSaveIdentity == 0 ? 0 : _scriptRefreshRevision,
                 ScriptRefreshSaveIdentity = _scriptRefreshSaveIdentity,
             };
+            if (digest.NativeWorldEpoch != 0)
+                BeginEnemyDamageWorld(digest.Module, digest.LoadSerial, digest.NativeWorldEpoch);
             _hasPublishedLocalWorldDigest = true;
         }
 

@@ -1143,9 +1143,9 @@ public readonly record struct CoopCommand(
         try
         {
             IPAddress[] resolved = Dns.GetHostAddresses(hostPart);
-            if (resolved.Length > 0)
+            if (EndpointAddressRule.PreferIpv4(resolved) is IPAddress address)
             {
-                endpoint = new IPEndPoint(resolved[0], port);
+                endpoint = new IPEndPoint(address, port);
                 return true;
             }
         }

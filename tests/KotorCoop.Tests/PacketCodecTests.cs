@@ -150,7 +150,7 @@ public class PacketCodecTests
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
 
         EnemyDamagePacket original = new(2, "end_m01aa", 4,
-            [new EnemyDamageEntry(0x14, 27), new EnemyDamageEntry(0x17, 3)], Incarnation: 0x12345678);
+            [new EnemyDamageEntry(0x14, 27), new EnemyDamageEntry(0x17, 3)], Incarnation: 0x12345678, HostSessionId: 5, HostLoadSerial: 7, HostNativeEpoch: 9);
 
         int length = PacketCodec.Write(buffer, original);
         EnemyDamagePacket? decoded = PacketCodec.ReadEnemyDamage(buffer[..length]);
@@ -160,6 +160,9 @@ public class PacketCodecTests
         Assert.Equal("end_m01aa", decoded.Module);
         Assert.Equal(4u, decoded.Generation);
         Assert.Equal(0x12345678u, decoded.Incarnation);
+        Assert.Equal(5u, decoded.HostSessionId);
+        Assert.Equal(7u, decoded.HostLoadSerial);
+        Assert.Equal(9u, decoded.HostNativeEpoch);
         Assert.Equal(original.Damage, decoded.Damage);
     }
 

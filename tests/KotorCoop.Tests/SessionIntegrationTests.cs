@@ -777,10 +777,12 @@ public class SessionIntegrationTests
                 default, 0, DamageIncarnation: incarnation));
             peer.Send(endpoint, buffer.AsSpan(0, length));
         }
+        host.PublishWorldDigest(new WorldDigest(1, 1, "end_m01aa", 1, NativeWorldEpoch: 1));
+        uint hostSession = (uint)typeof(CoopHost).GetField("_sessionId", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(host)!;
         void Damage(uint incarnation, uint generation, uint amount, UdpChannel? sender = null)
         {
             int length = PacketCodec.Write(buffer, new EnemyDamagePacket(2, "end_m01aa", generation,
-                [new(0x14, amount)], incarnation));
+                [new(0x14, amount)], incarnation, hostSession, 0, 1));
             (sender ?? peer).Send(endpoint, buffer.AsSpan(0, length));
         }
         try
@@ -824,6 +826,8 @@ public class SessionIntegrationTests
         {
             host.PublishLocalState(state);
             client.PublishLocalState(state);
+            host.PublishWorldDigest(new WorldDigest(1, 1, "end_m01aa", 1, NativeWorldEpoch: 1));
+            client.PublishWorldDigest(new WorldDigest(1, 1, "end_m01aa", 1, NativeWorldEpoch: 1));
             client.ReportEnemyDamage("end_m01aa", generation, [new(0x14, total)]);
         }
         try
@@ -866,6 +870,8 @@ public class SessionIntegrationTests
         {
             host.PublishLocalState(state);
             client.PublishLocalState(state);
+            host.PublishWorldDigest(new WorldDigest(1, 1, "end_m01aa", 1, NativeWorldEpoch: 1));
+            client.PublishWorldDigest(new WorldDigest(1, 1, "end_m01aa", 1, NativeWorldEpoch: 1));
             client.ReportEnemyDamage("end_m01aa", 3, report);
         }
 

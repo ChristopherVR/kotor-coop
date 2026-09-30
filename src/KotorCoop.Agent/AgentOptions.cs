@@ -643,12 +643,12 @@ public sealed record AgentOptions
         }
 
         IPAddress[] resolved = Dns.GetHostAddresses(host);
-        if (resolved.Length == 0)
+        if (EndpointAddressRule.PreferIpv4(resolved) is not IPAddress resolvedAddress)
         {
             throw new FormatException($"Could not resolve host '{host}'.");
         }
 
-        return new IPEndPoint(resolved[0], port);
+        return new IPEndPoint(resolvedAddress, port);
     }
 
     public static string HelpText =>

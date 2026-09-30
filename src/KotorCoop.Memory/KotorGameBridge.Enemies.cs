@@ -435,8 +435,9 @@ public sealed partial class KotorGameBridge
             return (0, damage);
         }
 
-        _memory.TryReadUInt32(_pluginBlock + BlockDamageDealtGeneration, out uint generation);
-        _memory.TryReadUInt32(_pluginBlock + BlockDamageDealtCount, out uint count);
+        if (!_memory.TryReadUInt32(_pluginBlock + BlockDamageDealtGeneration, out uint generation)
+            || !TryReadLivenessEpoch(out uint nativeEpoch)
+            || !_memory.TryReadUInt32(_pluginBlock + BlockDamageDealtCount, out uint count)) return (0, damage);
 
         for (int i = 0; i < Math.Min(count, BlockDamageLedgerCapacity); i++)
         {
@@ -453,6 +454,8 @@ public sealed partial class KotorGameBridge
             }
         }
 
+        if (!_memory.TryReadUInt32(_pluginBlock + BlockDamageDealtGeneration, out uint afterGeneration)
+            || afterGeneration != generation || !TryReadLivenessEpoch(out uint afterEpoch) || afterEpoch != nativeEpoch) return (0, []);
         return (generation, damage);
     }
 
@@ -483,11 +486,13 @@ public sealed partial class KotorGameBridge
 
     /// <summary>Publishes accepted per-peer totals under a sequence lock. A failed write leaves
     /// an odd sequence, preventing partial damage application until the next complete pass.</summary>
-    public bool TryPublishAttributedDamageOwed(uint epoch, IReadOnlyList<PeerEnemyDamage> owed)
+    public bool TryPublishAttributedDamageOwed(uint epoch, IReadOnlyList<PeerEnemyDamage> owed, uint worldSerial, uint nativeEpoch)
     {
         const int sequenceOffset = 0x8700, epochOffset = 0x8704, countOffset = 0x8708, worldSerialOffset = 0x870C;
         const int slotsOffset = 0x8710, capacity = 8 * 128, stride = 12;
-        if (_pluginBlock == 0 || owed.Count > capacity || !TryReadWorldLoadSerial(out uint worldSerial)
+        if (_pluginBlock == 0 || owed.Count > capacity || nativeEpoch == 0
+            || !TryReadWorldLoadSerial(out uint currentSerial) || currentSerial != worldSerial
+            || !TryReadLivenessEpoch(out uint currentEpoch) || currentEpoch != nativeEpoch
             || !_memory.TryReadUInt32(_pluginBlock + sequenceOffset, out uint sequence)) return false;
         uint writing = (sequence + 1) | 1u;
         if (!_memory.TryWrite(_pluginBlock + sequenceOffset, writing)) return false;
@@ -500,6 +505,7 @@ public sealed partial class KotorGameBridge
         }
         return _memory.TryWrite(_pluginBlock + epochOffset, epoch)
             && _memory.TryWrite(_pluginBlock + worldSerialOffset, worldSerial)
+            && _memory.TryWrite(_pluginBlock + 0xB9A0, nativeEpoch)
             && _memory.TryWrite(_pluginBlock + countOffset, (uint)owed.Count)
             && _memory.TryWrite(_pluginBlock + sequenceOffset, writing + 1);
     }

@@ -44,10 +44,31 @@ public sealed partial class CoopHost
 
     /// <summary>Latest damage report per client, so a client's hits become real here.</summary>
     private sealed record EnemyDamageReport(
-        string Module, uint Generation, IReadOnlyList<EnemyDamageEntry> Damage, long ReceivedMs, uint Incarnation);
+        string Module, uint Generation, IReadOnlyList<EnemyDamageEntry> Damage, long ReceivedMs, uint Incarnation, uint HostSessionId, uint HostLoadSerial, uint HostNativeEpoch);
 
     private readonly Dictionary<uint, EnemyDamageReport> _enemyDamage = [];
     private readonly DamageGenerationWatch _enemyDamageGenerations = new();
+    private string _damageWorldModule = string.Empty;
+    private uint _damageWorldSerial, _damageWorldEpoch;
+
+    public void BeginEnemyDamageWorld(string module, uint worldSerial, uint nativeEpoch)
+    {
+        lock (_gate)
+        {
+            if (_damageWorldEpoch == nativeEpoch && _damageWorldSerial == worldSerial
+                && string.Equals(_damageWorldModule, module, StringComparison.OrdinalIgnoreCase)) return;
+            if (_damageWorldEpoch != 0 && nativeEpoch != _damageWorldEpoch
+                && unchecked((int)(nativeEpoch - _damageWorldEpoch)) <= 0) return;
+            _enemyDamageGenerations.RetireCurrentWorld();
+            _enemyDamage.Clear();
+            _damageWorldModule = module; _damageWorldSerial = worldSerial; _damageWorldEpoch = nativeEpoch;
+        }
+    }
+
+    private bool DamageWorldMatches(uint session, uint serial, uint epoch, string module) =>
+        session == _sessionId && epoch != 0 && epoch == _damageWorldEpoch && serial == _damageWorldSerial
+        && string.Equals(module, _damageWorldModule, StringComparison.OrdinalIgnoreCase);
+
 
     /// <summary>Reports older than this are stale — the client left, or changed module
     /// and its ids name strangers now.</summary>
@@ -69,7 +90,8 @@ public sealed partial class CoopHost
             {
                 EnemyDamageReport report = entry.Value;
 
-                if (!_enemyDamageGenerations.IsBound(entry.Key, report.Incarnation)
+                if (!DamageWorldMatches(report.HostSessionId, report.HostLoadSerial, report.HostNativeEpoch, report.Module)
+                    || !_enemyDamageGenerations.IsBound(entry.Key, report.Incarnation)
                     || now - report.ReceivedMs > EnemyReportFreshMs
                     || !string.Equals(report.Module, module, StringComparison.OrdinalIgnoreCase))
                 {
@@ -138,7 +160,8 @@ public sealed partial class CoopHost
 
         lock (_gate)
         {
-            if (!_peers.TryGetValue(report.PeerId, out PeerConnection? peer)
+            if (!DamageWorldMatches(report.HostSessionId, report.HostLoadSerial, report.HostNativeEpoch, report.Module)
+                || !_peers.TryGetValue(report.PeerId, out PeerConnection? peer)
                 || !peer.EndPoint.Equals(from)
                 || peer.DamageIncarnation != report.Incarnation
                 || !_enemyDamageGenerations.Observe(report.PeerId, report.Incarnation, report.Generation))
@@ -147,7 +170,7 @@ public sealed partial class CoopHost
             }
 
             _enemyDamage[report.PeerId] =
-                new EnemyDamageReport(report.Module, report.Generation, report.Damage, now, report.Incarnation);
+                new EnemyDamageReport(report.Module, report.Generation, report.Damage, now, report.Incarnation, report.HostSessionId, report.HostLoadSerial, report.HostNativeEpoch);
         }
     }
 }

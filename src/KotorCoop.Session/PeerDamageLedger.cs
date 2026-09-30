@@ -69,6 +69,8 @@ public sealed class PeerDamageLedger
     }
 
     private string _module = string.Empty;
+    private bool _hasNativeWorld;
+    private uint _worldSerial, _nativeEpoch;
 
     /// <summary>
     /// The module these totals were collected in, and the epoch handed to the plugin so
@@ -104,6 +106,24 @@ public sealed class PeerDamageLedger
     /// spends the difference, so republishing the same table costs nothing and a pass the
     /// plugin misses is picked up by the next one.
     /// </summary>
+    public IReadOnlyList<EnemyDamageEntry> Merge(string module, uint worldSerial, uint nativeEpoch, IReadOnlyList<PeerEnemyDamage> reports)
+    {
+        if (!_hasNativeWorld || worldSerial != _worldSerial || nativeEpoch != _nativeEpoch
+            || !string.Equals(module, _module, StringComparison.OrdinalIgnoreCase))
+        {
+            _generations.RetireCurrentWorld();
+            _seen.Clear();
+            _owed.Clear();
+            _attributed.Clear();
+            _module = module;
+            _worldSerial = worldSerial;
+            _nativeEpoch = nativeEpoch;
+            _hasNativeWorld = true;
+            Epoch = WorldEpochOf(module, worldSerial, nativeEpoch);
+        }
+        return Merge(module, reports);
+    }
+
     public IReadOnlyList<EnemyDamageEntry> Merge(string module, IReadOnlyList<PeerEnemyDamage> reports)
     {
         EnterModule(module);
@@ -222,7 +242,18 @@ public sealed class PeerDamageLedger
     }
 
     /// <summary>
-    /// FNV-1a of the module name, as the epoch the plugin compares against. A hash rather
+    /// Stable fingerprint of the exact native world, so an agent restart retains native
+    /// applied totals while a same-module reload resets them.
+    /// </summary>
+    public static uint WorldEpochOf(string module, uint serial, uint nativeEpoch)
+    {
+        uint hash = unchecked((EpochOf(module) ^ serial) * 16777619);
+        hash = unchecked((hash ^ nativeEpoch) * 16777619);
+        return hash == 0 ? 1 : hash;
+    }
+
+    /// <summary>
+    /// FNV-1a of the module name, used by the legacy module-only merge and world fingerprint. A hash rather
     /// than a counter so that an agent restarting mid-module lands on the same value and
     /// does not needlessly wipe the plugin's applied totals; 0 is reserved for "no epoch
     /// yet", so a name that hashes to it is nudged.

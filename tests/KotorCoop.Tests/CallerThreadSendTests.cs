@@ -91,6 +91,8 @@ public class CallerThreadSendTests
                 {
                     client.SetFlag(flag++, 1);
                     client.SetJournalEntry($"k_hammer_{serial % 16}", (int)(serial % 40));
+                    host.PublishWorldDigest(new WorldDigest(1, 1, "end_m01aa", 1, NativeWorldEpoch: 1));
+                    client.PublishWorldDigest(new WorldDigest(1, 1, "end_m01aa", 1, NativeWorldEpoch: 1));
                     client.ReportEnemyDamage(
                         "end_m01aa", generation: 7, [new EnemyDamageEntry(0x14, serial)]);
                     client.ReportProgression(

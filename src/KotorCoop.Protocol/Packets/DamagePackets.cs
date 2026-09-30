@@ -26,7 +26,7 @@ public readonly record struct EnemyDamageEntry(uint ObjectId, uint CumulativeDam
 /// knows a smaller number is a RESET rather than a stale datagram.
 /// </summary>
 public sealed record EnemyDamagePacket(
-    uint PeerId, string Module, uint Generation, IReadOnlyList<EnemyDamageEntry> Damage, uint Incarnation = 0);
+    uint PeerId, string Module, uint Generation, IReadOnlyList<EnemyDamageEntry> Damage, uint Incarnation = 0, uint HostSessionId = 0, uint HostLoadSerial = 0, uint HostNativeEpoch = 0);
 
 /// <summary>One peer's cumulative damage against one enemy, as the owner sees it after
 /// freshness and module filtering.</summary>

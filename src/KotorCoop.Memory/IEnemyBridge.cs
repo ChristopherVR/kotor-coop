@@ -65,7 +65,10 @@ public interface IEnemyBridge
     bool TryPublishDamageOwed(uint epoch, IReadOnlyList<EnemyDamageEntry> owed) => false;
 
     /// <summary>Per-peer accepted cumulative totals, preserving damage and threat ownership.</summary>
+    // An unbound publication cannot prove which world produced its totals.
     bool TryPublishAttributedDamageOwed(uint epoch, IReadOnlyList<PeerEnemyDamage> owed) => false;
+    bool TryPublishAttributedDamageOwed(uint epoch, IReadOnlyList<PeerEnemyDamage> owed, uint worldSerial, uint nativeEpoch) =>
+        TryPublishAttributedDamageOwed(epoch, owed);
 
     // ---- client-cast enemy effects (docs/research/enemy-effects.md, shared block 0x4C60) ----
 

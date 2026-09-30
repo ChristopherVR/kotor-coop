@@ -124,9 +124,15 @@ internal sealed partial class CombatPump
             // the plugin needs to hear about a module change BEFORE the first damage in the
             // new module rather than after — otherwise it would spend the new totals against
             // the old module's applied figures, which name different creatures.
-            IReadOnlyList<EnemyDamageEntry> owed = _peerDamage.Merge(censusModule, session.GetEnemyDamage(censusModule));
+            if (!bridge.TryReadWorldLoadSerial(out uint damageSerial) || !bridge.TryReadLivenessEpoch(out uint damageNativeEpoch)
+                || damageNativeEpoch == 0) return;
+            session.BeginEnemyDamageWorld(censusModule, damageSerial, damageNativeEpoch);
+            IReadOnlyList<EnemyDamageEntry> owed = _peerDamage.Merge(censusModule, damageSerial, damageNativeEpoch,
+                session.GetEnemyDamage(censusModule));
+            // Use the captured namespace. A load during collection must refuse the write,
+            // rather than stamp old debt with the new world's serial/epoch.
             bridge.TryPublishDamageOwed(_peerDamage.Epoch, owed);
-            bridge.TryPublishAttributedDamageOwed(_peerDamage.Epoch, _peerDamage.AttributedFor(owed));
+            bridge.TryPublishAttributedDamageOwed(_peerDamage.Epoch, _peerDamage.AttributedFor(owed), damageSerial, damageNativeEpoch);
 
             if (_peerDamage.RefusedRises != _refusedRisesLogged)
             {
@@ -300,11 +306,10 @@ internal sealed partial class CombatPump
         // whatever accrued arrives whole on the next tick that is allowed to send.
         if (!bridge.IsInDialogue)
         {
+            if (!bridge.TryReadLivenessEpoch(out uint beforeDamageEpoch) || beforeDamageEpoch == 0) return;
             (uint generation, List<EnemyDamageEntry> dealt) = bridge.ReadDamageDealt();
-            if (dealt.Count > 0)
-            {
-                session.ReportEnemyDamage(local.Module, generation, dealt);
-            }
+            if (!bridge.TryReadLivenessEpoch(out uint afterDamageEpoch) || afterDamageEpoch != beforeDamageEpoch) return;
+            session.ReportEnemyDamage(local.Module, generation, dealt, beforeDamageEpoch);
         }
     }
 

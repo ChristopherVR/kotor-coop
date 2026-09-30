@@ -73,11 +73,29 @@ public sealed partial class CoopClient
 
     private string _enemyModule = string.Empty;
 
+    private readonly DamageReportWorldWatch _damageReportWorld = new();
+
+    public void ReportEnemyDamage(string module, uint generation, IReadOnlyList<EnemyDamageEntry> damage, uint localNativeEpoch)
+    {
+        lock (_gate)
+        {
+            // The native world can turn over before the next managed digest tick. Do not
+            // bind its new generation against the old advertised host/local pairing.
+            if (localNativeEpoch == 0 || localNativeEpoch != _localWorld.NativeWorldEpoch) return;
+            ReportEnemyDamage(module, generation, damage);
+        }
+    }
+
     public void ReportEnemyDamage(string module, uint generation, IReadOnlyList<EnemyDamageEntry> damage)
     {
-        if (_localPeerId == 0 || damage.Count == 0)
+        EnemyDamagePacket packet;
+        lock (_gate)
         {
-            return;
+            if (_localPeerId == 0 || _livenessLocalLoadQuarantined || !_damageReportWorld.Accept(_hostSessionId, _hostWorld.Module,
+                _hostWorld.LoadSerial, _hostWorld.NativeWorldEpoch, module, generation)) return;
+            if (damage.Count == 0) return;
+            packet = new EnemyDamagePacket(_localPeerId, module, generation, damage, _settings.DamageIncarnation,
+                _hostSessionId, _hostWorld.LoadSerial, _hostWorld.NativeWorldEpoch);
         }
 
         // Unreliable and re-sent every tick, like the state update it travels beside. Safe
@@ -90,7 +108,7 @@ public sealed partial class CoopClient
         // baseline to whatever it is told, so the next honest report was read as a fresh rise
         // and the same fight was banked a second time.
         SendFromCaller(
-            new EnemyDamagePacket(_localPeerId, module, generation, damage, _settings.DamageIncarnation),
+            packet,
             static (buffer, packet) => PacketCodec.Write(buffer, packet));
     }
 

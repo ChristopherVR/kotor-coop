@@ -13,6 +13,8 @@ internal partial struct SharedBlock
     public const int OffsetAttributedDamageEpoch = 0x8704;
     public const int OffsetAttributedDamageCount = 0x8708;
     public const int OffsetAttributedDamageWorldSerial = 0x870C;
+    // ABI 88: captured native world, checked under the attributed-bank sequence lock.
+    public const int OffsetAttributedDamageNativeEpoch = 0xB9A0;
     public const int OffsetAttributedDamageSlots = 0x8710;
     public const int AttributedDamageCapacity = SlotCapacity * DamageLedgerCapacity;
     public const int AttributedDamageStride = 12;

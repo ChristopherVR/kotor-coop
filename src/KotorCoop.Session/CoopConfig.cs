@@ -852,7 +852,8 @@ public sealed record CoopConfig
         try
         {
             IPAddress[] resolved = Dns.GetHostAddresses(HostAddress);
-            return resolved.Length > 0 ? new IPEndPoint(resolved[0], Port) : null;
+            return EndpointAddressRule.PreferIpv4(resolved) is IPAddress address
+                ? new IPEndPoint(address, Port) : null;
         }
         catch
         {

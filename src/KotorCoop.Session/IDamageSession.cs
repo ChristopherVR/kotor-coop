@@ -21,12 +21,18 @@ public interface IDamageSession
     {
     }
 
+    void ReportEnemyDamage(string module, uint generation, IReadOnlyList<EnemyDamageEntry> damage, uint localNativeEpoch) =>
+        ReportEnemyDamage(module, generation, damage);
+
     /// <summary>
     /// Host only: every client's latest damage report for the given module, fresh ones
     /// only, one row per (peer, enemy). The host turns each increase into real damage on
     /// its own copy of that creature.
     /// </summary>
     IReadOnlyList<PeerEnemyDamage> GetEnemyDamage(string module) => [];
+
+    /// <summary>Capture the actual owner world before reading damage; never relabel old debt with a fresh load.</summary>
+    void BeginEnemyDamageWorld(string module, uint worldSerial, uint nativeEpoch) { }
 
     /// <summary>
     /// Tells the peer that owns <paramref name="targetPeerId"/> how much damage their

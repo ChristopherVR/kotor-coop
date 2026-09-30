@@ -342,12 +342,11 @@ internal static unsafe partial class PluginHost
 
         InputInjectionController.OnFrame();
 
-        // World-independent rig requests (input, screenshot, gamepad) at the main menu, where
-        // the SwapBuffers hook that normally serves them is dormant.
-        if (!Odyssey.TryGetWorldEpoch(out _))
-        {
-            _cheats?.OnMenuFrame();
-        }
+        // World-independent requests also work after quitting to the menu: the engine
+        // can retain its old server module/object array while SwapBuffers is dormant.
+        // OnMenuFrame filters to input/screenshot/gamepad and shares OnFrame's applied
+        // serial, so both hooks can drain these safely without delivering them twice.
+        _cheats?.OnMenuFrame();
     }
 
     /// <summary>How long the worker thread may go unseen before the game thread says so. The

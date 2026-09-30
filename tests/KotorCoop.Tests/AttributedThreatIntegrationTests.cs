@@ -108,6 +108,8 @@ public class AttributedThreatIntegrationTests
             AttributedDamageRow[] rows = new AttributedDamageRow[SharedBlock.AttributedDamageCapacity];
             *(uint*)(address + SharedBlock.OffsetAttributedDamageSequence) = 1;
             Assert.False(block.TryReadAttributedDamage(rows, out _, out _));
+            *(uint*)(address + SharedBlock.OffsetLivenessNativeEpoch) = 1;
+            *(uint*)(address + SharedBlock.OffsetAttributedDamageNativeEpoch) = 1;
             *(uint*)(address + SharedBlock.OffsetAttributedDamageEpoch) = 7;
             *(uint*)(address + SharedBlock.OffsetAttributedDamageCount) = 2;
             uint* slot = (uint*)(address + SharedBlock.OffsetAttributedDamageSlots);

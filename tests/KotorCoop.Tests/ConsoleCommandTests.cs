@@ -235,6 +235,7 @@ public class ConsoleCommandTests
         Assert.True(c.TryResolveEndpoint(7777, out IPEndPoint endpoint));
         Assert.Equal(9100, endpoint.Port);
         Assert.True(IPAddress.IsLoopback(endpoint.Address));
+        Assert.Equal(System.Net.Sockets.AddressFamily.InterNetwork, endpoint.Address.AddressFamily);
     }
 
     /// <summary>Roadmap item 24: a bracketed IPv6 literal with an explicit port must resolve —

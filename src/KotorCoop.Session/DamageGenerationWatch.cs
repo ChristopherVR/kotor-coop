@@ -10,6 +10,7 @@ public sealed class DamageGenerationWatch
         public uint Incarnation = incarnation;
         public uint Generation;
         public bool HasGeneration;
+        public bool AwaitFreshGeneration;
         public readonly HashSet<uint> RetiredIncarnations = [];
     }
     private readonly Dictionary<uint, PeerState> _peers = [];
@@ -26,21 +27,31 @@ public sealed class DamageGenerationWatch
         state.RetiredIncarnations.Add(state.Incarnation);
         state.Incarnation = incarnation;
         state.HasGeneration = false;
+        state.AwaitFreshGeneration = false;
         return true;
     }
 
     public bool Observe(uint peer, uint incarnation, uint generation)
     {
         if (!_peers.TryGetValue(peer, out PeerState? state) || state.Incarnation != incarnation) return false;
+        if (state.AwaitFreshGeneration && state.HasGeneration && generation == state.Generation) return false;
         if (state.HasGeneration && generation != state.Generation
             && unchecked((int)(generation - state.Generation)) <= 0) return false;
         state.Generation = generation;
         state.HasGeneration = true;
+        state.AwaitFreshGeneration = false;
         return true;
     }
 
     public bool IsBound(uint peer, uint incarnation) =>
         _peers.TryGetValue(peer, out PeerState? state) && state.Incarnation == incarnation;
+
+    /// <summary>World turnover retires each sender run even if its last report was removed
+    /// on disconnect or aged out. Re-Hello of that same process cannot reopen it.</summary>
+    public void RetireCurrentWorld()
+    {
+        foreach (PeerState state in _peers.Values) state.AwaitFreshGeneration = state.HasGeneration;
+    }
 
     public void Clear() => _peers.Clear();
 }
