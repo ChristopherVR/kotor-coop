@@ -1,0 +1,11 @@
+# Ending credits with default suppression, 2026-10-01
+
+Two isolated real games completed the original terminal ceremony and visibly scrolled credits with `party_select_host_only=1` in both configurations. This closes the previous default-suppression visual check. The entry was an explicit staged `warp STUNT_56a`; it does not prove the preceding finale fights or the complete natural ending.
+
+The owned pair used game3/game8, PIDs58560/72136, port36267, Native96/wire85 and the immutable artifacts already validated for the enemy-effect run. Native DLL SHA256 was `843148E23B21340F612CB393186D589AAB7CEF361438797FBD100C83C2CA6CB8`; Agent SHA256 was `656ADDB4F8A72FBEBCD008C944A690347F60BF509486F26388DDF5D95A08E79A`. This run predates the separate queued-resurrection expiry repair.
+
+The host entered `STUNT_56a` through the explicit console command. Both engines rendered the original Vandar/Dodonna dialogue, then reached `STUNT_57` through their own scripts at about09:37:31. Neither the later hop nor the credits were forced; no dialogue skip or quest/health/class writes were used. Both rendered the ceremony, including the final vigilance speech. Times here are Brisbane local time; the JSON snapshots also record UTC.
+
+At09:39:50 independent current-client pointer reads showed `creditsActive=1` and `areaNotReady=0` on both games. The native global alone was not used as proof. Actual GL_FRONT screenshots at09:40:17 showed the Assistant Lead Designer credit on both; subsequent screenshots at09:41:11 showed the programming and graphics-programming credits at different vertical positions. This establishes visible progressing credits on each real renderer. GL_BACK screenshots during credits were flat gray, so they were not treated as evidence of a rendering failure; the presented front buffer supplied the visual proof.
+
+Evidence is retained under `artifacts/credits-default-v96`: source-bound launch manifest and logs, guarded independent native snapshots, `game3-evidence/shots` and `game8-evidence/shots`, native logs, saves, and the zero-length crash files. The scoped rig was stopped by recorded PID/start-time/path identity at09:41:38. All51 protected original files were restored with exact SHA256, size and modification timestamps (`restore-result.json`); additional test evidence was retained. Other active campaign instances were untouched.

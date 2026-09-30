@@ -2627,3 +2627,14 @@ new screenshot/visual confirmation. Neither run proves a natural campaign or
 the actual Bastila/Malak fights before the staged ending entry. Logs for this
 run are `agent1-sep23-return.log` and `agent2-sep23-return.log` in the local
 `kotorcoop-review-live` temporary evidence directory.
+
+### 12.11 Default-suppression credits visual repeat (2026-10-01)
+
+Native96/wire85 repeated the staged STUNT_56a entry with
+`party_select_host_only=1` on both real instances. Original scripts reached
+STUNT_57 and credits without forcing the later hop or skipping dialogue. Both
+engines independently reported creditsActive=1/areaNotReady=0, and actual
+GL_FRONT screenshots showed progressing credit text on both. The old visual
+gap is closed; the preceding natural finale remains unverified. All51 protected
+original files were restored exactly after scoped cleanup. See
+[the focused report](credits-default-live-2026-10-01.md).
