@@ -99,6 +99,39 @@ public class AttributedThreatIntegrationTests
     }
 
     [Fact]
+    public unsafe void DownedPeerWithLivingPinnedPhantomIsExcludedAndNextAttackerWins()
+    {
+        byte[] memory = new byte[SharedBlock.TotalSize];
+        fixed (byte* address = memory)
+        {
+            var block = new SharedBlockView(address);
+            RemoteSlot* slots = (RemoteSlot*)(address + SharedBlock.SlotsOffset);
+            slots[0].Active = 1; slots[0].PeerId = 2; slots[0].Health = 1;
+            slots[1].Active = 1; slots[1].PeerId = 3; slots[1].Health = 20;
+            block.SetPhantomId(0, 200); block.SetPhantomId(1, 300);
+            ThreatTable threat = new();
+            threat.AddThreat(100, 200, 50, 0);
+            threat.AddThreat(100, 300, 30, 0);
+            Assert.True(threat.TryGetTopAttacker(100, 0, out uint top, out _, block.RemotePhantomMayFight));
+            Assert.Equal(200u, top);
+            slots[0].Flags = RemoteView.FlagDowned; // Engine holds both real PC and stand-in at1HP.
+            Assert.True(threat.TryGetTopAttacker(100, 0, out top, out _, block.RemotePhantomMayFight));
+            Assert.Equal(300u, top);
+            slots[0].Flags = 0; slots[0].Health = 0;
+            Assert.False(block.RemotePhantomMayFight(200));
+            slots[0].Health = 20; slots[0].Active = 0;
+            Assert.False(block.RemotePhantomMayFight(200));
+            slots[0].Active = 1; slots[0].Flags = RemoteView.FlagAway;
+            Assert.False(block.RemotePhantomMayFight(200));
+            slots[0].Flags = RemoteView.FlagInMinigame;
+            Assert.False(block.RemotePhantomMayFight(200));
+            slots[0].Flags = 0;
+            Assert.True(block.RemotePhantomMayFight(200));
+            Assert.True(block.RemotePhantomMayFight(999)); // Non-peer actor retains native eligibility checks.
+        }
+    }
+
+    [Fact]
     public unsafe void AttributedPublicationRejectsInProgressAndReadsAllPeerRows()
     {
         byte[] memory = new byte[SharedBlock.TotalSize];

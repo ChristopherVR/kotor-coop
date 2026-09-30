@@ -573,10 +573,10 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
         return debugRows;
     }
 
-    private static bool IsLiveThreatAttacker(uint id)
+    private bool IsLiveThreatAttacker(uint id)
     {
         nint body = Odyssey.ResolveServerObject(id);
-        return body != 0 && !Odyssey.IsDowned(body);
+        return body != 0 && !Odyssey.IsDowned(body) && block.RemotePhantomMayFight(id);
     }
 
     /// <summary>
@@ -648,7 +648,7 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
         // Never onto a dead or unresolved target: the top attacker's own phantom body has to
         // actually be here (and not downed) to be worth swinging at.
         nint topAttackerBody = Odyssey.ResolveServerObject(topAttackerId);
-        if (topAttackerBody == 0 || Odyssey.IsDowned(topAttackerBody))
+        if (topAttackerBody == 0 || Odyssey.IsDowned(topAttackerBody) || !block.RemotePhantomMayFight(topAttackerId))
         {
             return debugRows;
         }

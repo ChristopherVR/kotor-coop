@@ -14,6 +14,7 @@ internal readonly record struct RemoteView(
     public const uint FlagInDialogue = 1;
     public const uint FlagPaused = 2;
     public const uint FlagInCombat = 4;
+    public const uint FlagDowned = 8;
 
     /// <summary>Matches <c>PlayerState.FlagInMinigame</c> — the peer is in a swoop race or
     /// turret sequence and not meaningfully in the shared world. Carried verbatim through
@@ -56,6 +57,7 @@ internal readonly record struct RemoteView(
     public const uint FlagMenuGuard = 1024;
 
     public bool InCombat => (Flags & FlagInCombat) != 0;
+    public bool Downed => Health <= 0 || (Flags & FlagDowned) != 0;
 
     public bool Stealthed => (Flags & FlagStealth) != 0;
 
@@ -239,6 +241,18 @@ internal sealed unsafe partial class SharedBlockView(byte* baseAddress)
             if (peer.Active && peer.PeerId == peerId) return GetPhantomId(i);
         }
         return 0;
+    }
+
+    /// <summary>Peer state, rather than the immortal stand-in's native HP, decides eligibility.</summary>
+    public bool RemotePhantomMayFight(uint objectId)
+    {
+        for (int i = 0; i < SharedBlock.SlotCapacity; i++)
+        {
+            if (objectId == 0 || GetPhantomId(i) != objectId) continue;
+            RemoteView peer = GetRemote(i);
+            return peer.Active && !peer.Downed && !peer.Away && !peer.InMinigame;
+        }
+        return true; // Ordinary native actors are checked by the caller's native down test.
     }
 
     /// <summary>

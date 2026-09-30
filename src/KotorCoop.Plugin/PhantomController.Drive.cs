@@ -245,7 +245,7 @@ internal sealed unsafe partial class PhantomController
             bool menuGuarded = _menuGuardSync && remote.MenuGuarded;
             PhantomHitHook.SetMenuGuarded(i, menuGuarded);
 
-            ApplyTargetable(i, phantom, alive: remote.Health > 0, stealthed: remote.Stealthed, menuGuarded: menuGuarded);
+            ApplyTargetable(i, phantom, alive: !remote.Downed, stealthed: remote.Stealthed, menuGuarded: menuGuarded);
             ApplyStealthVisual(i, phantom, remote.Stealthed);
             ApplyVitals(i, phantom, remote);
 
@@ -265,7 +265,7 @@ internal sealed unsafe partial class PhantomController
             // same — otherwise a downed teammate looks alive and well in your game while
             // their screen shows a death. The pose comes back off the moment the peer's
             // health does, so a revive (or a respawned host) stands the phantom up.
-            bool down = remote.Health <= 0;
+            bool down = remote.Downed;
             if (down != _down[i])
             {
                 _down[i] = down;
