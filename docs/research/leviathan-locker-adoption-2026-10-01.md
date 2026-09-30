@@ -99,3 +99,23 @@ Actual locker retrieval and later reconnect remain in progress. Twelve focused
 cache/identity tests and all 5,560 fast tests pass, zero failures; the x86 native
 publish is warning-clean. Evidence: `artifacts/companion-v95-proof-cache`,
 `artifacts/companion-v95-proof-cache-validated` and the live recovery report.
+
+
+The actual reconnect exposed a second, independent native equipment defect: the
+joiner's clothes stack of three was present in the staged character, but the new
+companion clothes item held four units after CreateItemOnObject merged the stacks.
+Unlinking that item removed the player's entire clothing record. This was native
+post-load loss, rather than a failure of the saved inventory graft.
+
+Commits `2e91bf2` and `b9a6baa` create mirror equipment without that shared-repository
+merge, using the engine's floor-create, immediate RemoveFromArea and synchronous
+equip paths. The actual repeated retrieval/save/reconnect replay retained all eight
+original item records with matching contents and stack sizes. Each shared quest
+item appeared once, the private locker was empty, and the companion's clothes and
+weapons each held one unit. The saved area contained zero floor-item rows. The scene
+rendered normally after reconnect; one earlier container screenshot was transiently
+black, followed by a normal registered container screen before retrieval. It is not
+a persistent black-world result. All 5,568 fast tests pass, zero failures, 1m50s;
+the immutable x86 native build is warning-clean. Evidence:
+`artifacts/companion-v95-isolated-equipment-final` and the live recovery report.
+Cross-area unclaimed-locker testing remains in progress.
