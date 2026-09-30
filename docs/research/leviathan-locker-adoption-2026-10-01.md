@@ -15,8 +15,8 @@ adoption, so the before-state oracle is its parsed snapshot and recorded hashes;
 this is a staged-fixture finding, not a natural full-campaign proof.
 
 Commit `7d9b2bf` extends personal-inventory grafting to the same private locker
-already exempt from the live container-loot relay. When the own capture and staged
-save select the same active module, the joiner retains its own locker items with
+already exempt from the live container-loot relay. The initial fix covered matching active modules; the later archive extension below
+also preserves unclaimed gear after leaving the prison. The joiner retains its own locker items with
 all GFF fields, stacks, properties and upgrades. Shared quest entries already
 supplied in the adopted backpack are excluded from the locker to prevent duplicate
 returns. Other placeables and their fields use the host's current state. An empty
@@ -24,9 +24,9 @@ own locker remains empty. A first join cannot copy the host's personal locker ge
 Shared inventory mode retains its existing behavior.
 
 The private locker and nested GIT must resolve unambiguously. Malformed or ambiguous
-locker state refuses staging through the existing adoption error path. This patch
-covers adoption in the same active Leviathan module; it does not establish recovery
-of locker contents from an earlier module or the original full capture/rescue route.
+locker state refuses staging through the existing adoption error path. The initial patch
+covered the same active Leviathan module; the archive extension below broadens that
+transform. Neither certifies the original full capture/rescue route.
 
 25 focused personal-inventory and world-adoption tests pass. They cover an upgraded
 4100 rifle, stack size3, nested item properties, unchanged own capture, an unrelated
@@ -57,3 +57,14 @@ its standard win-x64 Agent publish is warning-clean. Logs and source are under
 combined live setup on `0f45162` reproduced the ordinary-save metadata gap directly
 (null source fingerprint), confirming that replay must use the follow-up or a
 confirmed dedicated capture before the interruption. It is not a recovery pass.
+
+
+Commit `66c4580` also preserves the private locker in previously visited module
+archives, even when both current saves name a different active area. Only the
+exempt private container's item list is overlaid; the current area and all other
+host world state stay authoritative. The same recorded-source proof is checked
+around reads, and duplicate module or locker mappings hold staging. A regression
+models both players leaving the prison while the joiner's gear remains unclaimed.
+28 focused inventory/adoption tests and all 5,554 fast tests pass, zero failures,
+1m45s, with a warning-clean standard x64 Agent publish. Evidence:
+`artifacts/companion-v95-archived-locker`. Cross-area live proof remains pending.
