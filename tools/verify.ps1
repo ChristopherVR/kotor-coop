@@ -27,6 +27,11 @@ param(
     # creature already fighting; the presence census also includes friendly story actors.
     [uint32]$CombatTargetHostId = 0,
 
+    # Native mouse input to the loot panel's real Close button. Default coordinates are
+    # the 800x600 baseline rig; use the observed button center for a different viewport.
+    [int]$ContainerCloseX = 400,
+    [int]$ContainerCloseY = 440,
+
     # The CLIENT agent's drop file (demo.ps1 starts it with --drop-file). This is the only
     # lever that makes a real, session-owned ground item exist: see section 15 for why the
     # shared block cannot be used to stage one.
@@ -1583,15 +1588,15 @@ Check 'a container opened on the client is held and shown open on the host' `
       elseif (-not $hostHoldsIt) { "container 0x{0:X}: host's copy mirrored open but its interaction-lock list (count={1}) has no Container-kind entry naming it" -f $containerId, $hostLockCount }
       else { "container 0x{0:X}: client opened it for real, host mirrors it open and holds the lock (peer-held)" -f $containerId })
 
-# Leave the world closed rather than open, so the next run does not inherit a held container —
-# closeplaceable is idempotent (a no-op, cleanly refused, on an already-closed target).
+# Close the actual loot GUI through its button. CloseInventoryReal alone leaves that GUI
+# open and its remaining use action can reopen the container; it is not a complete UI close.
 if ($containerId -ne 0) {
-    $containerCloseReplied = SendConsole $h2 $b2 ("closeplaceable 0x{0:X}" -f $containerId)
+    $containerCloseReplied = SendConsole $h2 $b2 ("input click {0} {1}" -f $ContainerCloseX, $ContainerCloseY)
     $containerClosedBoth = $clientPlaceableAddr -ne 0 -and $hostPlaceableAddr -ne 0 -and (WaitFor2 {
         [VF]::U32($h2, $clientPlaceableAddr + 0x338) -eq 0 -and [VF]::U32($h1, $hostPlaceableAddr + 0x338) -eq 0
     } 20)
     Check 'container close reaches the other instance' ($containerCloseReplied -and $containerClosedBoth) `
-        ("container 0x{0:X}, native close replied {1}, both engines closed {2}" -f $containerId, $containerCloseReplied, $containerClosedBoth)
+        ("container 0x{0:X}, native GUI Close click replied {1}, both engines closed {2}" -f $containerId, $containerCloseReplied, $containerClosedBoth)
     CheckObjectRelock 'container' $containerId $hostPlaceableAddr $clientPlaceableAddr 0x260 $true
 }
 else {
