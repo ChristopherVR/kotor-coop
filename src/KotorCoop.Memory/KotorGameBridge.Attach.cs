@@ -640,6 +640,14 @@ public sealed partial class KotorGameBridge
         // the menu button impossible to enable (the early returns below fire at the menu).
         TryFindPlugin();
 
+        if (TryReadPluginWorldAbsent())
+        {
+            _player = null;
+            _phantoms = [];
+            diagnostic = "native plugin has no current player/world yet";
+            return false;
+        }
+
         List<CreatureRef> creatures = EnumerateCreatures();
 
         if (creatures.Count == 0)
@@ -705,6 +713,10 @@ public sealed partial class KotorGameBridge
     /// <summary>Locates the plugin's shared block by its 16-byte signature.</summary>
     private void TryFindPlugin()
     {
+        // Once attached, the allocation belongs to this process for its lifetime. Validate
+        // its complete ABI signature before reuse; a parked render thread is not a reason
+        // to sweep hundreds of MiB again or re-baseline native event consumers.
+        if (CachedPluginSignatureValid()) return;
         _pluginBlock = 0;
 
         PatternScanner scanner = new(_memory);
@@ -740,6 +752,37 @@ public sealed partial class KotorGameBridge
             }
         }
     }
+
+    private static readonly byte[] AttachedPluginSignature = Convert.FromHexString(PluginSignature.Replace(" ", ""));
+    private const int BlockNativeWorldEpoch = 0xB99C;
+
+    internal bool CachedPluginSignatureValid()
+    {
+        if (_pluginBlock == 0) return false;
+        Span<byte> signature = stackalloc byte[16];
+        return _memory.TryRead(_pluginBlock, signature)
+            && signature.SequenceEqual(AttachedPluginSignature);
+    }
+
+    internal bool TryReadPluginWorldAbsent()
+    {
+        nint block = _pluginBlock;
+        if (!CachedPluginSignatureValid()
+            || !_memory.TryReadUInt32(block + BlockNativeWorldEpoch, out uint epoch)
+            || !_memory.TryReadUInt32(block + BlockEnginePlayerPointer, out uint player)
+            || player != 0) return false;
+
+        // A zero player combined with an unavailable running module is authoritative at
+        // the menu/chargen/load boundary. Do not search freed is_pc-shaped allocations.
+        bool moduleReady = EngineGlobals.TryReadModuleName(_memory, out string module) && module.Length > 0;
+        return _memory.TryReadUInt32(block + BlockEnginePlayerPointer, out uint afterPlayer)
+            && _memory.TryReadUInt32(block + BlockNativeWorldEpoch, out uint afterEpoch)
+            && PluginWorldAbsentSample(player, afterPlayer, epoch, afterEpoch, moduleReady)
+            && CachedPluginSignatureValid();
+    }
+
+    internal static bool PluginWorldAbsentSample(uint player, uint afterPlayer, uint epoch, uint afterEpoch, bool moduleReady)
+        => player == 0 && afterPlayer == 0 && epoch == afterEpoch && !moduleReady;
 
     /// <summary>
     /// Adopts the block's CURRENT take-serials as already-seen. The plugin outlives the

@@ -40,6 +40,13 @@ public sealed partial class KotorGameBridge
     {
         state = PlayerState.Empty;
 
+        if (TryReadPluginWorldAbsent())
+        {
+            _player = null;
+            _phantoms = [];
+            return false;
+        }
+
         // Re-resolve when the cached creature stops looking like the player. A module
         // transition frees every creature and the new module allocates its own, so a pointer
         // cached across a travel lands in reused memory: measured live after following a host
