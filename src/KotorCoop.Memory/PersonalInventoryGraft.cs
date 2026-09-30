@@ -51,7 +51,7 @@ namespace KotorCoop.Memory;
 /// (pre-2026-09-25) behaviour — the explicit regression guarantee this feature's own design
 /// doc asks for.
 /// </summary>
-public static class PersonalInventoryGraft
+public static partial class PersonalInventoryGraft
 {
     /// <summary>ResourceTypes "res" — the container type id both <c>INVENTORY.res</c> (inside
     /// <c>SAVEGAME.sav</c>) and <c>PARTYTABLE.res</c> (a loose file beside it) share.</summary>
@@ -186,6 +186,7 @@ public static class PersonalInventoryGraft
         }
 
         byte[] updated = ErfWriter.ReplaceMember(erf, "INVENTORY", ResType, inventory.ToBytes());
+        updated = PreservePrivateLocker(stagedSaveDirectory, ownCapture, updated, questItems, log);
         WriteAtomic(savegamePath, updated);
 
         log?.Invoke(

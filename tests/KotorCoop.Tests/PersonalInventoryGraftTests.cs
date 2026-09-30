@@ -137,6 +137,97 @@ public sealed class PersonalInventoryGraftTests : IDisposable
 
     // -- fixtures --------------------------------------------------------------------
 
+    [Fact]
+    public void PrivateLockerKeepsOwnUpgradedStacksAfterHostHasLooted()
+    {
+        string game = BuildGameDirectory();
+        string staged = BuildSaveDirectory(0, [Item("man28_envirosuit", true)]);
+        string own = BuildCoopSlot(game, 0, []);
+        AddLocker(staged, [], includeOther: true);
+        AddLocker(own, [Item("own_rifle", false), Item("man28_envirosuit", true)]);
+
+        PersonalInventoryGraft.Apply(game, staged, true, false, null);
+
+        IReadOnlyList<GffStruct> items = ReadLocker(staged);
+        GffStruct item = Assert.Single(items);
+        Assert.True(item.TryGetString("Tag", out string tag));
+        Assert.Equal("own_rifle", tag);
+        Assert.True(item.TryGetWord("StackSize", out ushort stack));
+        Assert.Equal((ushort)3, stack);
+        Assert.True(item.TryGetDword("Upgrades", out uint upgrades));
+        Assert.Equal(4100u, upgrades);
+        Assert.Single(item.GetList("PropertiesList"));
+        Assert.Equal(["man28_envirosuit"], ReadInventoryTags(staged));
+        Assert.Single(ReadLocker(staged, "ordinary_chest"));
+        Assert.Equal(2, ReadLocker(own).Count); // original capture is untouched
+    }
+
+    [Fact]
+    public void EmptyOwnLockerDoesNotRefillFromHostsGear()
+    {
+        string game = BuildGameDirectory();
+        string staged = BuildSaveDirectory(0, []);
+        string own = BuildCoopSlot(game, 0, []);
+        AddLocker(staged, [Item("host_rifle", false)]);
+        AddLocker(own, []);
+        PersonalInventoryGraft.Apply(game, staged, true, false, null);
+        Assert.Empty(ReadLocker(staged));
+    }
+
+    [Fact]
+    public void FirstJoinNeverCopiesHostPrivateGearButRetainsUnclaimedQuestItems()
+    {
+        string game = BuildGameDirectory();
+        string staged = BuildSaveDirectory(0, []);
+        AddLocker(staged, [Item("host_rifle", false), Item("man28_envirosuit", true)]);
+        PersonalInventoryGraft.Apply(game, staged, true, false, null);
+        GffStruct item = Assert.Single(ReadLocker(staged));
+        Assert.True(item.TryGetString("Tag", out string tag));
+        Assert.Equal("man28_envirosuit", tag);
+    }
+
+    [Fact]
+    public void SharedInventoryDoesNotRewritePrivateLocker()
+    {
+        string game = BuildGameDirectory();
+        string staged = BuildSaveDirectory(0, []);
+        AddLocker(staged, [Item("host_rifle", false)]);
+        byte[] before = File.ReadAllBytes(Path.Combine(staged, "SAVEGAME.sav"));
+        PersonalInventoryGraft.Apply(game, staged, false, true, null);
+        Assert.Equal(before, File.ReadAllBytes(Path.Combine(staged, "SAVEGAME.sav")));
+    }
+
+    private static void AddLocker(string directory, (string Tag, bool Plot)[] items, bool includeOther = false)
+    {
+        GffWriter git = new("GIT ");
+        GffWriterList placeables = git.Root.AddList("Placeable List");
+        GffWriterStruct locker = placeables.Add(9).SetString("Tag", "lev40_ptylocker");
+        GffWriterList contents = locker.AddList("ItemList");
+        foreach ((string tag, bool plot) in items)
+        {
+            GffWriterStruct item = contents.Add(0).SetString("Tag", tag)
+                .SetByte("Plot", (byte)(plot ? 1 : 0)).SetWord("StackSize", 3).SetDword("Upgrades", 4100);
+            item.AddList("PropertiesList").Add(0).SetWord("PropertyName", 1);
+        }
+        if (includeOther)
+            placeables.Add(9).SetString("Tag", "ordinary_chest").AddList("ItemList")
+                .Add(0).SetString("Tag", "other_item");
+        byte[] original = File.ReadAllBytes(Path.Combine(directory, "SAVEGAME.sav"));
+        Assert.True(ErfArchive.TryFindMember(original, 0, "INVENTORY", out byte[] inventory));
+        byte[] inner = BuildErf(("lev_m40aa", 2023, git.ToBytes()));
+        File.WriteAllBytes(Path.Combine(directory, "SAVEGAME.sav"),
+            BuildErf(("INVENTORY", 0, inventory), ("lev_m40aa", 2057, inner)));
+    }
+
+    private static IReadOnlyList<GffStruct> ReadLocker(string directory, string tag = "lev40_ptylocker")
+    {
+        byte[] outer = File.ReadAllBytes(Path.Combine(directory, "SAVEGAME.sav"));
+        Assert.True(ErfArchive.TryFindMember(outer, 2057, "lev_m40aa", out byte[] inner));
+        Assert.True(ErfArchive.TryFindMember(inner, 2023, "lev_m40aa", out byte[] git));
+        return Gff.Parse(git).Root.GetList("Placeable List")
+            .Single(p => p.TryGetString("Tag", out string value) && value == tag).GetList("ItemList");
+    }
+
     private string BuildGameDirectory()
     {
         string directory = TempDirectory();
