@@ -65,6 +65,7 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
     private static readonly ThreatRetargetOptions ThreatOptions = ThreatRetargetOptions.Default;
 
     private int _threatLogged;
+    private int _threatRetargetLogged;
 
     /// <summary>Scratch for the attacker set: the PC plus the party roster.</summary>
     private readonly uint[] _attackers = new uint[PartyNpcSlots + 1];
@@ -661,17 +662,17 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
 
         if (Odyssey.AttackTarget(creatureId, topAttackerId, out int failure))
         {
-            if (_threatLogged < 20)
+            if (_threatRetargetLogged < 20)
             {
-                _threatLogged++;
+                _threatRetargetLogged++;
                 PluginHost.Log(
                     $"threat: 0x{creatureId:X} retargeted 0x{currentTargetId:X} -> 0x{topAttackerId:X} "
                     + $"(threat {topThreat:F0} vs {currentTargetThreat:F0})");
             }
         }
-        else if (_threatLogged < 20)
+        else if (_threatRetargetLogged < 20)
         {
-            _threatLogged++;
+            _threatRetargetLogged++;
             PluginHost.Log(
                 $"threat: 0x{creatureId:X} retarget refused 0x{currentTargetId:X} -> 0x{topAttackerId:X} "
                 + $"(failure {failure})");
