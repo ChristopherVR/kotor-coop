@@ -228,6 +228,41 @@ public sealed class PersonalInventoryGraftTests : IDisposable
         Assert.Equal(before, File.ReadAllBytes(Path.Combine(staged, "SAVEGAME.sav")));
     }
 
+    [Fact]
+    public void LeavingPrisonKeepsUnclaimedGearInInactivePrivateLockerArchive()
+    {
+        string game = BuildGameDirectory();
+        string staged = BuildSaveDirectory(0, []);
+        string own = BuildCoopSlot(game, 0, []);
+        AddLocker(staged, []);
+        AddLocker(own, [Item("own_rifle", false)]);
+        AddOtherActiveModule(staged);
+        AddOtherActiveModule(own);
+        PersonalInventoryGraft.Apply(game, staged, true, false, null, _ => true);
+        GffStruct item = Assert.Single(ReadLocker(staged));
+        Assert.True(item.TryGetString("Tag", out string tag));
+        Assert.Equal("own_rifle", tag);
+        byte[] outer = File.ReadAllBytes(Path.Combine(staged, "SAVEGAME.sav"));
+        Assert.True(ErfArchive.TryFindMember(outer, 2057, "lev_m40ab", out byte[] active));
+        Assert.True(ErfArchive.TryFindMember(active, 2023, "lev_m40ab", out byte[] git));
+        Assert.Empty(Gff.Parse(git).Root.GetList("Placeable List"));
+    }
+
+    private static void AddOtherActiveModule(string directory)
+    {
+        byte[] outer = File.ReadAllBytes(Path.Combine(directory, "SAVEGAME.sav"));
+        Assert.True(ErfArchive.TryFindMember(outer, 0, "INVENTORY", out byte[] inventory));
+        Assert.True(ErfArchive.TryFindMember(outer, 2057, "lev_m40aa", out byte[] prison));
+        GffWriter active = new("GIT ");
+        active.Root.AddList("Placeable List");
+        File.WriteAllBytes(Path.Combine(directory, "SAVEGAME.sav"), BuildErf(
+            ("INVENTORY", 0, inventory), ("lev_m40aa", 2057, prison),
+            ("lev_m40ab", 2057, BuildErf(("lev_m40ab", 2023, active.ToBytes())))));
+        GffWriter info = new("NFO ");
+        info.Root.SetString("LASTMODULE", "lev_m40ab");
+        File.WriteAllBytes(Path.Combine(directory, "savenfo.res"), info.ToBytes());
+    }
+
     private static void AddLocker(string directory, (string Tag, bool Plot)[] items, bool includeOther = false)
     {
         GffWriter git = new("GIT ");

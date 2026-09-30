@@ -15,9 +15,21 @@ public static partial class PersonalInventoryGraft
         Func<string, bool>? verifiedOwnCapture)
     {
         ErfArchive staged = ErfArchive.Open(Path.Combine(stagedDirectory, "SAVEGAME.sav"));
-        if (!SavedModuleSelection.TrySelect(stagedDirectory, staged, out ArchiveResource module)
-            || !ContainerLootExemptionRule.IsExempt(module.Resref, "lev40_ptylocker")
-            || !ErfArchive.TryFindMember(stagedErf, module.ResourceType, module.Resref, out byte[] inner))
+        foreach (ArchiveResource module in staged.Resources)
+        {
+            if (module.ResourceType is not (2055 or 2057)
+                || !ContainerLootExemptionRule.IsExempt(module.Resref, "lev40_ptylocker")) continue;
+            stagedErf = PreservePrivateLockerModule(module, ownCapture, stagedErf,
+                sharedQuestItems, log, verifiedOwnCapture);
+        }
+        return stagedErf;
+    }
+
+    private static byte[] PreservePrivateLockerModule(ArchiveResource module, string? ownCapture,
+        byte[] stagedErf, IReadOnlyList<GffStruct> sharedQuestItems, Action<string>? log,
+        Func<string, bool>? verifiedOwnCapture)
+    {
+        if (!ErfArchive.TryFindMember(stagedErf, module.ResourceType, module.Resref, out byte[] inner))
         {
             return stagedErf;
         }
@@ -38,8 +50,12 @@ public static partial class PersonalInventoryGraft
         if (ownCapture is not null)
         {
             ErfArchive own = ErfArchive.Open(Path.Combine(ownCapture, "SAVEGAME.sav"));
-            if (SavedModuleSelection.TrySelect(ownCapture, own, out ArchiveResource ownModule)
-                && ownModule.Resref.Equals(module.Resref, StringComparison.OrdinalIgnoreCase)
+            ArchiveResource[] ownModules = own.Resources.Where(resource =>
+                resource.ResourceType is 2055 or 2057
+                && resource.Resref.Equals(module.Resref, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (ownModules.Length > 1)
+                throw new InvalidDataException("private locker: ambiguous own module archive");
+            if (ownModules.SingleOrDefault() is { } ownModule
                 && own.TryRead(ownModule.Resref, ownModule.Extension, out byte[] ownInner))
             {
                 if (verifiedOwnCapture is null || !verifiedOwnCapture(ownCapture))
