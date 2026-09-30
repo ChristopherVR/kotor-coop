@@ -10,6 +10,26 @@ namespace KotorCoop.Tests;
 /// </summary>
 public class LiveAttackTests
 {
+    [Theory]
+    [InlineData("attack ranged 0x35")]
+    [InlineData("attack RANGED 0x35")]
+    public void RangedAttackCarriesUnstagedModeAndExactTarget(string line)
+    {
+        CoopCommand command = ConsoleCommand.Parse(line);
+        Assert.Equal(CoopCommandKind.Attack, command.Kind);
+        Assert.Equal("0x35", command.Address);
+        Assert.Equal(1, command.Amount);
+        Assert.Equal(0, ConsoleCommand.Parse("attack 0x35").Amount);
+        Assert.Equal(0, ConsoleCommand.Parse("attack stop").Amount);
+    }
+
+    [Theory]
+    [InlineData("attack ranged stop")]
+    [InlineData("attack ranged 0x0")]
+    [InlineData("attack ranged 0x35 extra")]
+    public void RangedAttackRefusesInvalidTargetsAndExtraArguments(string line) =>
+        Assert.Equal(CoopCommandKind.Invalid, ConsoleCommand.Parse(line).Kind);
+
     [Fact]
     public void AttackParsesAnObjectId()
     {

@@ -28,6 +28,6 @@ public sealed partial class CoopCommandDispatcher
             return;
         }
 
-        SendCheat(new CheatRequest(CheatKinds.Attack, Target: target));
+        SendCheat(new CheatRequest(CheatKinds.Attack, Target: target, Amount: command.Amount));
     }
 }

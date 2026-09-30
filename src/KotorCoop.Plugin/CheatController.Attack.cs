@@ -55,7 +55,15 @@ internal sealed unsafe partial class CheatController
 
         int headBefore = Odyssey.GetHeadActionType(player);
 
-        CloseLocalPlayerToMeleeRange(player, targetCreature, targetId);
+        bool unstaged = block.CheatAmount == 1;
+        if (block.CheatAmount is not (0 or 1))
+        {
+            Answer(SharedBlock.CheatStatusRefused, "attack: unknown range mode");
+            return;
+        }
+        // A ranged fixture must keep its real distance from a downed teammate. The
+        // native client attack is still responsible for dice, movement and damage.
+        if (!unstaged) CloseLocalPlayerToMeleeRange(player, targetCreature, targetId);
 
         // combat-participation.md §16: the client-driven route (the exact function a real
         // click-to-attack calls) tried FIRST; the raw VM ActionAttackObject route
@@ -74,6 +82,12 @@ internal sealed unsafe partial class CheatController
             Answer(
                 SharedBlock.CheatStatusApplied,
                 $"attack 0x{targetId:X} sent via client route (head action 0x{headBefore:X} -> 0x{headAfter:X})");
+            return;
+        }
+
+        if (unstaged)
+        {
+            Answer(SharedBlock.CheatStatusEngineRefused, $"attack ranged: client route unavailable ({clientDiagnostic})");
             return;
         }
 

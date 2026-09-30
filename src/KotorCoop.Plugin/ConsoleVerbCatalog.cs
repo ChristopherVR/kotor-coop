@@ -188,7 +188,7 @@ internal static class ConsoleVerbCatalog
         // §16): a real queued ActionAttack for the local player, the same route a click on a
         // hostile produces, so the sticky-aggro test and a live `cast` (which needs the
         // caster's own active combat round) can be exercised on a rig that cannot click.
-        ("attack", "attack <0xid>  (dev-only: local player attacks via a real queued ActionAttack) | attack stop  (clears the queued attack)"),
+        ("attack", "attack <0xid> | attack ranged <0xid> (native attack without range staging) | attack stop (cancel combat)"),
 
         // The showgui equip primitive (2026-09-25, docs/research/companion-state-sync.md's
         // dated follow-up to §14): opens THIS instance's own Equipment screen through the

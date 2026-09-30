@@ -19,7 +19,14 @@ public static partial class ConsoleCommand
     private static CoopCommand ParseAttack(string[] rest)
     {
         const string usage = "attack <0xid>  (dev-only: local player attacks via a real queued "
-            + "ActionAttack) | attack stop  (clears the queued attack)";
+            + "ActionAttack) | attack ranged <0xid> (native client attack without range staging) | attack stop";
+
+        if (rest.Length == 2 && rest[0].Equals("ranged", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!TryParseObjectId(rest[1], out uint rangedTarget) || rangedTarget == 0)
+                return new CoopCommand(CoopCommandKind.Invalid, Error: usage);
+            return new CoopCommand(CoopCommandKind.Attack, Address: rest[1], Amount: 1);
+        }
 
         if (rest.Length != 1)
         {
