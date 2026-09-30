@@ -624,6 +624,14 @@ Agent e69d7bc `--help` without opening a game or changing existing Wine prefixes
 It failed before managed startup: Wine reports unimplemented
 `KERNEL32.dll.GetProcessGroupAffinity`, then a page fault. Evidence:
 `artifacts/wine-v95-agent-startup.txt`. A launcher exit alone was not treated as
-success. The owned prefix's wineserver was stopped; the prefix remains for inspection.
+success. The owned prefix's wineserver was stopped; diagnostic logs remain for inspection.
 This is a failure on old Wine6.0.3 under WSL, not a modern Wine/Proton or physical
 Steam Deck result. Modern compatibility remains unverified.
+
+
+A bounded follow-up in the separate durable prefix
+`/home/christophervr/.cache/kotor-coop-v95-audit-20261001` set
+`DOTNET_PROCESSOR_COUNT=1` and reproduced the same missing API before startup.
+Its artifact shell script retained timeout124 and stderr, then stopped only that
+prefix's wineserver. See `artifacts/wine-v95-affinity-probe.sh` / `.txt` / `.exit`.
+No application or game configuration change was made from this failed experiment.
