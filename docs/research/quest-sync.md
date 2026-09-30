@@ -656,8 +656,11 @@ deployed with `build.ps1 -Install`; both in `danm13`, the Jedi Enclave courtyard
    `localvar set <tag> b 5 1` → answer `… 0 -> 1; published to the session`; client log
    `localvar: applied '<tag>' … b5 0 -> 1`; then client `localvar set <tag> b 5 0` → host
    applies `1 -> 0` (both directions, last writer wins).
-6. Negative: fight anything for a minute (the generic AI writes slots 20+ every round): no
-   `localvar: captured` line may appear. `localvar get <npc> b 25` still works (read-only).
+6. Negative: witness actual stock-AI local-variable mutations during a fight for a minute,
+   bracketed by genuine VM-script positive captures. No excluded AI key may enter the
+   capture ring. The peer's own AI may independently change its own table; unchanged peer
+   values alone are insufficient evidence. The controlled fight passed on 2026-10-01;
+   see [the exact evidence and qualifications](localvar-combat-negative-2026-10-01.md).
 7. Late join: client disconnects, host sets a watched slot, client rejoins: after load the client
    logs `applied …` for it (snapshot path).
 8. World edge: warp away and back; plugin logs `localvar: world generation -> N` on each edge and
