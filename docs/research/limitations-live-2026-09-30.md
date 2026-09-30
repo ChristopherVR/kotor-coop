@@ -635,3 +635,14 @@ A bounded follow-up in the separate durable prefix
 Its artifact shell script retained timeout124 and stderr, then stopped only that
 prefix's wineserver. See `artifacts/wine-v95-affinity-probe.sh` / `.txt` / `.exit`.
 No application or game configuration change was made from this failed experiment.
+
+
+### Audited local-variable default enabled
+
+The actual stock-AI exclusion check completed on 2026-10-01; see
+[its focused report](localvar-combat-negative-2026-10-01.md). Commit `1a008b1`
+enables only the audited interaction allowlist when `local_var_sync` is absent.
+Explicit0 remains off. Native and Agent publishes are warning-clean; 117 focused
+tests and all 5,515 fast tests pass, zero failures (1m37s for the fast tier).
+Evidence: `artifacts/companion-v95-localvar-defaults`. The slow tier and live
+missing-key / explicit0 controls are still running or pending.
