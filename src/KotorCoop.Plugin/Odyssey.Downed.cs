@@ -104,6 +104,22 @@ internal static unsafe partial class Odyssey
 
         int stackPointer = *(int*)(internalVm + StackPointerOffset);
 
+        nint reviveBody = ResolveServerObject(objectId);
+        if (reviveBody == 0 || !NativeMethods.IsReadable(reviveBody, 8)
+            || *(uint*)reviveBody != 0x7470C8 || *(uint*)(reviveBody + 4) != objectId
+            || !TryGetWorldEpoch(out ulong reviveWorld))
+        {
+            failure = 10;
+            return false;
+        }
+        System.Span<ReviveRemovalEvent> pendingRemovals = stackalloc ReviveRemovalEvent[ReviveRemovalCapacity];
+        if (!SnapshotReviveRemovalEvents(objectId, reviveBody, pendingRemovals,
+            out int pendingRemovalCount, out nint reviveQueue))
+        {
+            failure = 11;
+            return false;
+        }
+
         // ApplyEffectToObject(nDurationType, eEffect, oTarget, fDuration), pushed in reverse
         // declaration order with EffectResurrection dispatched in the middle so its effect
         // lands exactly where the effect argument belongs — the KillCreature shape.
@@ -137,6 +153,9 @@ internal static unsafe partial class Odyssey
         {
             failure = 9;
         }
+
+        RetireReviveRemovalEvents(objectId, reviveBody, reviveWorld, reviveQueue,
+            pendingRemovals[..pendingRemovalCount]);
 
         return true;
     }
