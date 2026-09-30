@@ -1652,7 +1652,8 @@ public sealed partial class CoopCommandDispatcher
 
         if (name.Equals(CoopSaveSlot.SlotLabel, StringComparison.OrdinalIgnoreCase))
         {
-            RequestDedicatedCoopSave(quiet: false);
+            if (RequestDedicatedCoopSave(quiet: false) is null)
+                Reply("Co-op save unavailable: the game is busy or not ready to save; try again when normal control returns");
             return;
         }
 
