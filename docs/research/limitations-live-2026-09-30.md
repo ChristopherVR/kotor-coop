@@ -507,3 +507,12 @@ matched before/after, with new engine object IDs expected after loading. Actual 
 Load Game selections restored exact Sera provenance with the Agent stopped during
 loading and reattached about18s later; real missing/changed-manifest reloads held unknown
 identity. These are bounded fixture and original-script checks, not a natural BoS campaign.
+
+
+## Additional actual resolution coverage — 2026-10-01
+
+Native93 scoped three-instance checks produced actual 1280x960 GL buffers and native
+screen dimensions. The stock M-key map and HUD connection captions were readable
+without overlap. Evidence: `artifacts/final92-wipe/map1280x960.png`,
+`hud1280x960.png`, and that directory's README. Requested 1280x720 and 1920x1080
+configurations fell back to actual 800x600; they do not prove widescreen support.

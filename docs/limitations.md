@@ -216,9 +216,11 @@ Built and automatically tested, but nobody has watched them on the running game 
   zero distance on the real Swoop track and during a controlled Star Forge solo segment.
   Movement resumed after explicit host returns. Those checks establish the locks, not the
   natural story sequences. See [keyboard lock evidence](research/solo-keyboard-lock-live-2026-09-30.md).
-- Connection layouts beyond the measured 800x600 and1024x768 sizes. On 2026-10-01,
-  the actual1024x768 map showed readable connection text and a newly revealed corridor
-  while the joiner remained stationary. See [live checks](research/limitations-live-2026-09-30.md).
+- Connection layouts beyond the measured 800x600, 1024x768 and 1280x960 sizes. On 2026-10-01,
+  actual 1280x960 HUD and map buffers showed readable connection text without overlap.
+  Requested 1280x720 and 1920x1080 settings fell back to retail 800x600 here, so those
+  widescreen layouts remain unverified. The actual 1024x768 map also showed a newly
+  revealed corridor while the joiner remained stationary. See [live checks](research/limitations-live-2026-09-30.md).
 - Linux and Steam Deck (Proton): the whole thing, from the DLL loading under Wine to a session
   between a Deck and a Windows PC.
 - A complete run past Taris. Dantooine's natural training prerequisites and current private class-choice flow, Leviathan rescue and gear
