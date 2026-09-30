@@ -228,7 +228,10 @@ internal sealed unsafe class TestDriveController(SharedBlockView block)
         // ignored no-op, so nothing else means anything by it.
         if (target == 0)
         {
-            bool cleared = Odyssey.ClearQueuedCombatActions(attacker);
+            bool localPlayer = Odyssey.ResolveServerObject(attacker) == Odyssey.GetPlayerCreaturePointer();
+            bool cleared = localPlayer
+                ? Odyssey.StopLocalPlayerCombat(attacker, out _)
+                : Odyssey.ClearQueuedCombatActions(attacker);
             PluginHost.Log(cleared
                 ? $"test: 0x{attacker:X} ordered to break off combat"
                 : $"test: could not break off combat for 0x{attacker:X}");
