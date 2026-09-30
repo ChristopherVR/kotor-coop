@@ -28,7 +28,8 @@ files or our code), **INFERRED** (reasoned, not run), **NEEDS-LIVE**.
   coverage. Two successive live runs have not been repeated for this update.
 - The detection-only profiles do not supply companion or campaign rules. These mods
   retain stock recruitable identities; no custom mapping was justified. JFTS detection
-  was checked against `Jedi from the Start-1-4-0-0`, not a verified `v4.0.0.7` install.
+  was checked against `Jedi from the Start-1-4-0-0`. Its shipped README identifies
+  v4.0.0; see the October 1 package identity clarification below.
 - Remaining live checks, including JFTS saved-world refresh, same-world script edits,
   actual turret shooting and story-skip sessions with three or more players, are in
   [PLAYTEST.md](../PLAYTEST.md#story-skip-follow-up-checks-2026-09-30).
@@ -345,3 +346,24 @@ archive age, host refusal without replacing the session, and existing character/
 adoption coverage. The full JFTS command round trip has not been run live with the mod
 installed. This is a manual saved-world recovery; script-created friendly creatures and
 locker additions still do not mirror continuously.
+
+
+## Package identity clarification (2026-10-01)
+
+The extracted package actually used by the three-player install is retained at
+`artifacts/jfts-live/mod`. Its `readme.txt` explicitly identifies **Current Version:
+v4.0.0**, released May 22, 2024; `docs/changelog.txt` begins with the same 4.0.0
+release. The actual `install-game4-v85.log` identifies this extracted directory as
+the installer source. This establishes the tested package's declared version,
+without reinstalling or changing any live game files.
+
+The earlier filename `Jedi from the Start v4.0.0.7z` ends in the **.7z archive
+extension**. Treating its final 7 as part of the mod version introduced a false
+version discrepancy. The archive label `Jedi from the Start-1-4-0-0` remains in
+the evidence. This correction establishes v4.0.0 package identity; it does not
+certify other releases or a complete mod campaign.
+
+Retained SHA256: `readme.txt` =
+`554193BA110EDD85167653BE78A3F0488A519D17666D4E9E58AEB68DD102CF50`;
+`docs/changelog.txt` =
+`5E4ADEF23ACF2A9774FFB89501309811D982C6D4C01B7766F1CC5F1FC0ECD4AE`.

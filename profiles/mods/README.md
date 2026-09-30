@@ -9,8 +9,10 @@ The Super Skip Taris and Jedi From The Start profiles currently declare detectio
 only. They do not add companion or campaign recovery rules: Super Skip Taris uses
 stock companion identities, and JFTS adds no recruitable companions. Detection does
 not implement live replication of JFTS's scripted Trask/locker changes. The JFTS
-markers were checked with archive `Jedi from the Start-1-4-0-0`; the older package
-label `v4.0.0.7` was not a verified identification of that live-test archive.
+markers were checked with archive `Jedi from the Start-1-4-0-0`. Its shipped README
+identifies **v4.0.0**, released May 22, 2024. The earlier filename
+`Jedi from the Start v4.0.0.7z` has a `.7z` archive extension; it is not evidence of
+a separate v4.0.0.7 release. See the [package identity check](../../docs/research/story-skip-mods.md#package-identity-clarification-2026-10-01).
 
 ```json
 {
