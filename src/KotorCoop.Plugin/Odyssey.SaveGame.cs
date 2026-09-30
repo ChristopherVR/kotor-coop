@@ -57,7 +57,10 @@ internal static unsafe partial class Odyssey
 
     public static bool RequestCoopSave(int number)
     {
-        if (number < 2 || !TryGetQuickSaveReadiness(out _)) return false;
+        // A scripted companion may temporarily be the player while the solo flag or
+        // module is settling. Never serialize an automatic character/world capture
+        // through that handoff; the party table is the engine's authoritative guard.
+        if (number < 2 || IsPartyRosterFrozen() || !TryGetQuickSaveReadiness(out _)) return false;
         nint client = GetClient();
         if (client == 0) return false;
         byte* name = stackalloc byte[6] { (byte)'C', (byte)'o', (byte)'-', (byte)'o', (byte)'p', 0 };

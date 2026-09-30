@@ -159,6 +159,16 @@ internal static unsafe partial class PluginHost
         int destroyed = Math.Max(0, _saveFlush.StandingAtHold - left);
         SaveFlushHook.Capture held = _heldSave;
 
+        // The request can cross a script-control edge while its stand-ins are flushed.
+        // Check the dedicated automatic save again immediately before reissuing it.
+        if (held.Name.Equals("Co-op", StringComparison.OrdinalIgnoreCase) && Odyssey.IsPartyRosterFrozen())
+        {
+            _saveFlush.Reset();
+            ResumeSaveInputLock();
+            Log($"save flush: refused dedicated Co-op save #{held.Number} while a script controls the party");
+            return;
+        }
+
         // The request may have been accepted while the player was attached, then cross a
         // world-settle edge during the flush window.  SaveGame's later StallEventSaveGame
         // path resolves the current player and immediately dereferences its area-localized
