@@ -95,8 +95,8 @@ public sealed class ReturnSaveCaptureTests : IDisposable
         _bridge.Module = "lev_m40aa";
         _bridge.Flags = PlayerState.FlagInDialogue;
         SetField("_controlledSceneReturnPending", true);
-        var logs = new List<string>();
-        _dispatcher.Log = logs.Add;
+        var logs = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        _dispatcher.Log = logs.Enqueue;
         Call("TriggerRejoin", RejoinTrigger.HostReload, _manager.Current!, new Action(() => { }), false);
         Assert.Empty(_bridge.Requests);
         Assert.False((bool)Call("MaintainAutomaticRejoinCapture", 1000L)!);
@@ -105,6 +105,91 @@ public sealed class ReturnSaveCaptureTests : IDisposable
             Assert.Contains(logs, line => line.StartsWith("controlled scene interrupted by a host load:"));
         else
             Assert.Contains(logs, line => line.Contains("no verified living character checkpoint"));
+    }
+
+    [Fact]
+    public void FreshAgentWorldlessHostReloadCarriesExactLivingCheckpointWithoutSavingAbsentActor()
+    {
+        string saves = Path.Combine(_game, "saves");
+        string checkpoint = Path.Combine(saves, "000002 - Co-op");
+        WriteSave(checkpoint);
+        Assert.Equal(CharacterCapture.Written, ClientCharacterPersistence.Capture(saves, checkpoint, 1, out _));
+        _bridge.LocalReadable = false;
+        _bridge.WorldlessMenu = true;
+        var logs = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        _dispatcher.Log = logs.Enqueue;
+        Call("TriggerRejoin", RejoinTrigger.HostReload, _manager.Current!, new Action(() => { }), false);
+        Assert.Empty(_bridge.Requests);
+        Assert.False((bool)Call("MaintainAutomaticRejoinCapture", 1000L)!);
+        Assert.Contains(logs, line => line.StartsWith("host reload while at the verified main menu:"));
+    }
+
+    [Theory]
+    [InlineData(RejoinTrigger.HostReload, false)]
+    [InlineData(RejoinTrigger.SaveMismatch, true)]
+    public void ReadFailureOrWrongTriggerCannotUseWorldlessCheckpoint(RejoinTrigger trigger, bool menu)
+    {
+        _bridge.LocalReadable = false;
+        _bridge.WorldlessMenu = menu;
+        Call("TriggerRejoin", trigger, _manager.Current!, new Action(() => { }), false);
+        Assert.True((bool)Call("MaintainAutomaticRejoinCapture", 1000L)!);
+    }
+
+    [Fact]
+    public void WorldlessRecoveryRetainsPendingOwnLoadFence()
+    {
+        _bridge.LocalReadable = false;
+        _bridge.WorldlessMenu = true;
+        SetField("_ownLoadCaptureRequiresConfirmedSave", true);
+        Call("TriggerRejoin", RejoinTrigger.HostReload, _manager.Current!, new Action(() => { }), false);
+        Assert.False((bool)Call("MaintainAutomaticRejoinCapture", 1000L)!);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void WorldlessCheckpointRequiresExactStableOwnCharacterEvenWithLivingHealth(bool legacy)
+    {
+        string saves = Path.Combine(_game, "saves");
+        string checkpoint = Path.Combine(saves, "000002 - Co-op");
+        WriteSave(checkpoint);
+        Assert.Equal(CharacterCapture.Written, ClientCharacterPersistence.Capture(saves, checkpoint, 1, out _));
+        if (legacy)
+            File.WriteAllText(Path.Combine(saves, ClientCharacterPersistence.MetaFileName),
+                System.Text.Json.JsonSerializer.Serialize(new SidecarMetadata(1, DateTime.UtcNow)));
+        Assert.True(WorldlessRecoveryCheckpoint.TryRead(saves, out _, out _));
+        WriteSave(checkpoint, maximum: 24);
+        Assert.False(WorldlessRecoveryCheckpoint.TryRead(saves, out _, out _));
+    }
+
+    [Fact]
+    public void RecordedCheckpointCannotFallBackToNearbyIdenticalCharacterInDifferentPrivateWorld()
+    {
+        string saves = Path.Combine(_game, "saves");
+        string checkpoint = Path.Combine(saves, "000002 - Co-op");
+        string other = Path.Combine(saves, "000003 - Other");
+        WriteSave(checkpoint);
+        WriteSave(other);
+        Assert.Equal(CharacterCapture.Written, ClientCharacterPersistence.Capture(saves, checkpoint, 1, out _));
+        Assert.True(WorldlessRecoveryCheckpoint.TryRead(saves, out _, out _));
+        using (var append = File.OpenWrite(Path.Combine(checkpoint, "SAVEGAME.sav")))
+        { append.Seek(0, SeekOrigin.End); append.WriteByte(123); }
+        Assert.False(WorldlessRecoveryCheckpoint.TryRead(saves, out _, out _));
+    }
+
+    [Fact]
+    public void PartialSourceProofAndStagedHostArchiveCannotBecomeRecoveryCheckpoint()
+    {
+        string saves = Path.Combine(_game, "saves");
+        string checkpoint = Path.Combine(saves, "000002 - Co-op");
+        WriteSave(checkpoint);
+        Assert.Equal(CharacterCapture.Written, ClientCharacterPersistence.Capture(saves, checkpoint, 1, out _));
+        Assert.True(StagedSave.TryRecord(saves, checkpoint, out _));
+        Assert.False(WorldlessRecoveryCheckpoint.TryRead(saves, out _, out _));
+        File.Delete(Path.Combine(saves, StagedSave.MarkerFileName));
+        File.WriteAllText(Path.Combine(saves, ClientCharacterPersistence.MetaFileName),
+            System.Text.Json.JsonSerializer.Serialize(new SidecarMetadata(1, DateTime.UtcNow) { SourceSaveSha256 = "partial" }));
+        Assert.False(WorldlessRecoveryCheckpoint.TryRead(saves, out _, out _));
     }
 
     private object? Call(string name, params object[] args) => typeof(CoopCommandDispatcher)
@@ -252,13 +337,13 @@ public sealed class ReturnSaveCaptureTests : IDisposable
         Assert.False(Field<bool>("_hostReturnSaveReady"));
     }
 
-    private static void WriteSave(string directory, string module = "end_m01aa")
+    private static void WriteSave(string directory, string module = "end_m01aa", short maximum = 12)
     {
         Directory.CreateDirectory(directory);
         GffWriter ifo = new("IFO ");
         ifo.Root.AddList("Mod_PlayerList").Add(48813).SetInt("IsPC", 1)
             .SetInt("Mod_IsPrimaryPlr", 1).SetShort("CurrentHitPoints", 0)
-            .SetShort("HitPoints", 0).SetShort("MaxHitPoints", 12);
+            .SetShort("HitPoints", 0).SetShort("MaxHitPoints", maximum);
         File.WriteAllBytes(Path.Combine(directory, "SAVEGAME.sav"),
             Erf(module, 2057, Erf("Module", 2014, ifo.ToBytes())));
     }
@@ -286,13 +371,16 @@ public sealed class ReturnSaveCaptureTests : IDisposable
         public uint Answered;
         public int Status;
         public uint Flags;
+        public bool LocalReadable = true;
+        public bool WorldlessMenu;
+        public bool IsVerifiedWorldlessMenu() => WorldlessMenu;
         public string Module = "end_m01aa";
         public string Description => "return-save-test";
         public bool IsAttached => true;
         public bool CanWriteRemotes => true;
         public bool SupportsCheats => true;
         public bool TryReadLocalState(out PlayerState state)
-        { state = new(Vector3f.Zero, 0, Module, 100, 0, Flags: Flags); return true; }
+        { state = new(Vector3f.Zero, 0, Module, 100, 0, Flags: Flags); return LocalReadable; }
         public bool TryReadWorldLoadSerial(out uint serial) { serial = Serial; return SerialReadable; }
         public bool TryReadCurrentModule(out string module) { module = Module; return true; }
         public bool TryWriteRemotePeers(IReadOnlyList<RemotePeer> peers) => true;

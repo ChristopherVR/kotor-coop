@@ -6,6 +6,9 @@ namespace KotorCoop.Memory;
 
 public interface IWorldStateBridge
 {
+    /// <summary>Positively observed native main menu with no server or player; read failures are false.</summary>
+    bool IsVerifiedWorldlessMenu() => false;
+
     /// <summary>
     /// The module the world is in RIGHT NOW, read directly from the engine — not retained
     /// from an earlier successful read the way <see cref="TryReadLocalState"/>'s caller

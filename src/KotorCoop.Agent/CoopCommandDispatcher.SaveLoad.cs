@@ -1284,6 +1284,7 @@ public sealed partial class CoopCommandDispatcher
             _ => false,
         };
 
+        (GffStruct Player, SidecarMetadata Metadata)? worldlessCheckpoint = null;
         if (gateEnabled && !dedicatedCaptureReady
             && trigger is RejoinTrigger.HostReload or RejoinTrigger.SaveMismatch or RejoinTrigger.WipeRecovery)
         {
@@ -1293,7 +1294,21 @@ public sealed partial class CoopCommandDispatcher
             bool controlledSceneAborted = ControlledSceneRecoveryRule.MayUseLivingCheckpoint(trigger,
                 _controlledSceneReturnPending, recoveryReadable, recoveryLocal,
                 _kotor?.IsPartyScriptControlled ?? false);
-            if (incapacitated || controlledSceneAborted)
+            bool worldlessReload = trigger == RejoinTrigger.HostReload && !recoveryReadable
+                && bridge.IsVerifiedWorldlessMenu();
+            if (worldlessReload)
+            {
+                if (!WorldlessRecoveryCheckpoint.TryRead(Path.Combine(gameDirectory, "saves"), out var own, out var metadata)
+                    || !bridge.IsVerifiedWorldlessMenu())
+                {
+                    Reply("recovery held: no content-bound living own checkpoint is available; your connection and saves were retained");
+                    return;
+                }
+                worldlessCheckpoint = (own, metadata);
+                dedicatedCaptureReady = true;
+                Log?.Invoke("host reload while at the verified main menu: carrying the content-bound living own checkpoint; unsaved changes cannot be recovered");
+            }
+            else if (incapacitated || controlledSceneAborted)
             {
                 if (!TryUseAutomaticRecoveryCheckpoint())
                 {
@@ -1314,7 +1329,7 @@ public sealed partial class CoopCommandDispatcher
             }
         }
 
-        (GffStruct Player, SidecarMetadata Metadata)? ownLoadCharacter = null;
+        (GffStruct Player, SidecarMetadata Metadata)? ownLoadCharacter = worldlessCheckpoint;
         if (trigger == RejoinTrigger.OwnLoad && gateEnabled
             && ClientCharacterPersistence.TryReadSidecar(
                 Path.Combine(gameDirectory, "saves"), out GffStruct ownPlayer, out SidecarMetadata ownMetadata, out _))
@@ -1360,7 +1375,7 @@ public sealed partial class CoopCommandDispatcher
         _rejoinOwnsDisconnect = true;
 
         (GffStruct Player, SidecarMetadata Metadata)? carried = ownLoadCharacter;
-        if (trigger != RejoinTrigger.OwnLoad && ClientCharacterPersistence.TryReadSidecar(
+        if (carried is null && trigger != RejoinTrigger.OwnLoad && ClientCharacterPersistence.TryReadSidecar(
             Path.Combine(gameDirectory, "saves"), out GffStruct sidecarPlayer, out SidecarMetadata sidecarMeta, out _))
         {
             carried = (sidecarPlayer, sidecarMeta);
