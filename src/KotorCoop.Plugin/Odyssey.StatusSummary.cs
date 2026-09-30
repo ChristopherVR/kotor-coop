@@ -24,6 +24,27 @@ internal static unsafe partial class Odyssey
     /// <c>HandleInputEvent</c> 0x00625AC0 sits at the same +0x3C slot every CSWGuiPanel uses.</summary>
     private const nint StatusSummaryVtableAddress = 0x0074FF68;
 
+    // The explicit closegui dev action may use the proper OK path only when the
+    // current modal-stack top is this exact panel. Other panels retain plain close
+    // semantics; an unrelated notification must not authorize arbitrary stack pops.
+    internal static bool IsTopRegisteredStatusSummary()
+    {
+        nint gui = GetInGameGui();
+        if (gui == 0 || !NativeMethods.IsReadable(gui + InGameGuiStatusSummaryOffset, 4)
+            || !NativeMethods.IsReadable(gui + InGameGuiManagerOffset, 4)) return false;
+        nint panel = *(nint*)(gui + InGameGuiStatusSummaryOffset);
+        nint manager = *(nint*)(gui + InGameGuiManagerOffset);
+        if (panel == 0 || !NativeMethods.IsReadable(panel, 4)
+            || *(nint*)panel != StatusSummaryVtableAddress || manager == 0
+            || !NativeMethods.IsReadable(manager + GuiManagerModalStackCountOffset, 4)
+            || !NativeMethods.IsReadable(manager + 0x94, 4)) return false;
+        int count = *(int*)(manager + GuiManagerModalStackCountOffset);
+        nint entries = *(nint*)(manager + 0x94);
+        return count is > 0 and <= 64 && entries != 0
+            && NativeMethods.IsReadable(entries, (nuint)(count * 4))
+            && *(nint*)(entries + (count - 1) * 4) == panel;
+    }
+
     /// <summary>
     /// The Status Summary's own OK: <c>HandleInputEvent(panel, 0x27, 1)</c> through the vtable —
     /// the case at 0x00625AE7 (events 0x27/0x28/0x2D/0x2E) that marks the panel to destroy,
