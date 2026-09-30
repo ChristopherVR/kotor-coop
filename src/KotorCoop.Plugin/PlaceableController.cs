@@ -111,6 +111,16 @@ internal sealed class PlaceableController(SharedBlockView block)
             return;
         }
 
+        // Applying a delayed close must not also erase an independent local
+        // relock before its one-second scanner sees it. Do not acknowledge the
+        // retained local tuple: that would prime the scanner shadow and swallow
+        // the very change it still needs to publish.
+        if (_desired.HasUnpublishedLockChange(desired.ObjectId,
+                !Odyssey.IsPlaceableLocked(placeable), desired.Unlocked))
+        {
+            return;
+        }
+
         if (desired.Unlocked)
         {
             Odyssey.UnlockPlaceable(placeable);

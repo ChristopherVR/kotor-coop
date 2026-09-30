@@ -20,6 +20,12 @@ internal sealed class PlaceableDesiredStateTracker
         !_applied.TryGetValue(id, out byte previous) || previous != Encode(open, unlocked);
 
     public void Applied(uint id, bool open, bool unlocked) => _applied[id] = Encode(open, unlocked);
+    // A new close snapshot may still carry the lock value from before a local
+    // story relock. Leave that local edge intact for the external collector.
+    public bool HasUnpublishedLockChange(uint id, bool currentUnlocked, bool desiredUnlocked) =>
+        _applied.TryGetValue(id, out byte previous)
+        && ((previous & 2) != 0) != currentUnlocked
+        && currentUnlocked != desiredUnlocked;
     public void Clear() => _applied.Clear();
     private static byte Encode(bool open, bool unlocked) => (byte)((open ? 1 : 0) | (unlocked ? 2 : 0));
 }

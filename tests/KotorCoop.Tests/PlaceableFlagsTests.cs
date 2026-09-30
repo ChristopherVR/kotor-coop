@@ -79,6 +79,36 @@ public class PlaceableFlagsTests
     }
 
     [Fact]
+    public void DelayedCloseCannotEraseAStoryRelockBeforeItIsCollected()
+    {
+        PlaceableDesiredStateTracker tracker = new();
+        tracker.Applied(42, open: true, unlocked: true);
+        // The real GUI closed the lid and a story action immediately locked it.
+        // The older close snapshot still carries unlocked=true.
+        Assert.True(tracker.HasUnpublishedLockChange(42, currentUnlocked: false, desiredUnlocked: true));
+        Assert.True(tracker.IsNew(42, open: false, unlocked: true));
+        // Once the collector authors the real relock, applying its canonical
+        // tuple completes normally; the deferral is not a permanent latch.
+        Assert.False(tracker.HasUnpublishedLockChange(42, currentUnlocked: false, desiredUnlocked: false));
+        tracker.Applied(42, open: false, unlocked: false);
+        Assert.False(tracker.HasUnpublishedLockChange(42, currentUnlocked: false, desiredUnlocked: true));
+    }
+
+    [Fact]
+    public void LocalUnlockIsPreservedButRemoteAndInitialLocksStillApply()
+    {
+        PlaceableDesiredStateTracker tracker = new();
+        Assert.False(tracker.HasUnpublishedLockChange(42, currentUnlocked: true, desiredUnlocked: false));
+        tracker.Applied(42, open: false, unlocked: false);
+        Assert.True(tracker.HasUnpublishedLockChange(42, currentUnlocked: true, desiredUnlocked: false));
+        Assert.False(tracker.HasUnpublishedLockChange(42, currentUnlocked: true, desiredUnlocked: true));
+        tracker.Applied(42, open: false, unlocked: true);
+        Assert.False(tracker.HasUnpublishedLockChange(42, currentUnlocked: true, desiredUnlocked: false));
+        tracker.Clear();
+        Assert.False(tracker.HasUnpublishedLockChange(42, currentUnlocked: false, desiredUnlocked: true));
+    }
+
+    [Fact]
     public void UnchangedDesiredStateDoesNotFightLocalStoryChanges()
     {
         // Pins PlaceableDesiredStateTracker's exact contract, mirroring
