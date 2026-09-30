@@ -1168,3 +1168,27 @@ accumulate.
 **Verdict: this hazard is closed.** §11.4's "Left open as a staging hazard" status (and
 `limitations.md`'s "Open, 1/4" row) is superseded — see `limitations.md`'s combat table and
 `effect-sync.md` §11.5.
+
+
+### 2026-10-01 — the same stale party bound in `StallEventSaveGame`
+
+An actual three-player Native95 staged Endar-to-Dantooine run lost client 3 at
+04:38:41 Brisbane. Its persisted crash record reports `0x63D4B3`, with image-range
+stack values `0x60FB28` and `0x4B36D1`. The record does not retain general registers
+or the accessed address; a null versus dangling pointer cannot be distinguished.
+Evidence is retained in `artifacts/dorak-training-v95/crash-game8`.
+
+Fresh GOG executable disassembly identifies the caller inside
+`CServerExoAppInternal::StallEventSaveGame` (`0x4B3110`): at `0x4B36C5` it calls
+`CSWParty::GetCharacter`, moves the returned client creature into `ecx`, then at
+`0x4B36CC` calls `GetServerCreature` without first checking the result. The callee
+enters `GetServerObject`, whose first dereference at `0x63D4B3` faults. This is the
+same member-array invariant already guarded before travel, reached during saving.
+
+Commit `afeba60` applies the existing downward-only leading-resolvable-member guard
+in `TryGetQuickSaveReadiness`, both before sending a save and immediately before a
+held save is reissued after spawned bodies have been flushed. It logs any stale
+entries removed from the bound. Native ABI remains 95. The warning-clean native
+build is in `artifacts/live-native-v95-partyguard`; live reproduction against the
+repair is pending. Severe scene corruption in a later third-client retry was
+preserved separately and is not claimed fixed by this party guard.
