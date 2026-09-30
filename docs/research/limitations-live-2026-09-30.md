@@ -577,3 +577,19 @@ All 12 QuickSave files retained exact hashes and timestamps. Scoped cleanup rest
 64 original save files plus native/config/userdata files. This healthy replay did
 not log a naturally stale party bound, so it does not certify the original crash
 race. The earlier severe third-client rendering corruption was absent in this run.
+
+
+### Native95 uninterrupted first join completed
+
+With Agent `e69d7bc`, the actual automatic New Game request completed, followed by
+quick class1 and accept. Native capture wrote 559,983 bytes, the 10,854-byte own-PC
+sidecar was captured, and the 907,375-byte host world was adopted. The reconnected
+pair reported one remote/phantom each. The host retained class2/HP6; the joiner
+retained its newly created class1/HP9, both single-class characters. No false
+external-New-Game disconnect occurred during co-op-owned creation. Evidence:
+`artifacts/newgame-intent-v95/worldless-firstjoin/proof.json`, native stats, captured
+sidecar and complete logs. Original DLL/config files were restored by scoped cleanup;
+normal new saves and the intentionally selected fresh character were retained.
+Neither private install had a QuickSave directory before or after, so this run does
+not establish preservation of an existing QuickSave. The separate disconnect and
+three-player-save audits provide that evidence.
