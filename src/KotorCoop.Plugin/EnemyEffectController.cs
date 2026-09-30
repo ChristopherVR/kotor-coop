@@ -54,6 +54,12 @@ internal sealed unsafe class EnemyEffectController(SharedBlockView block)
         block.EnemyEffectInApplied = _handledInSerial;
     }
 
+    public void ReleaseSession()
+    {
+        Invalidate();
+        block.ClearEnemyEffectSession();
+    }
+
     public void OnFrame()
     {
         if (!EnemyEffectCapture.Enabled)
@@ -81,16 +87,18 @@ internal sealed unsafe class EnemyEffectController(SharedBlockView block)
             _outstandingSerial = 0;
         }
 
-        if (!EnemyEffectCapture.TryDequeue(out uint enemyId, out uint kind, out uint durationMs, out uint magnitude))
+        if (!EnemyEffectCapture.TryDequeue(out uint enemyId, out uint kind, out uint durationMs, out uint magnitude, out ulong world, out uint epoch, out uint load, out uint hostSession, out uint hostLoad, out uint hostEpoch))
         {
             return;
         }
 
+        if (epoch != block.LivenessNativeEpoch || load != block.WorldLoadSerial
+            || !Odyssey.TryGetWorldEpoch(out ulong currentWorld) || currentWorld != world) return;
         _nextOutSerial = EnemyEffectMailboxRule.NextSerial(_nextOutSerial);
         block.PublishEnemyEffectOut(
             enemyId,
             EnemyEffectMailboxRule.PackHead(_nextOutSerial, kind),
-            EnemyEffectMailboxRule.PackArgs(durationMs, magnitude));
+            EnemyEffectMailboxRule.PackArgs(durationMs, magnitude), epoch, load, hostSession, hostLoad, hostEpoch);
 
         _outstandingSerial = _nextOutSerial;
         _outstandingFrames = 0;
@@ -98,13 +106,18 @@ internal sealed unsafe class EnemyEffectController(SharedBlockView block)
 
     private void ApplyIn()
     {
-        (uint enemyId, uint head, uint args) = block.GetEnemyEffectIn();
+        (uint enemyId, uint head, uint args, uint sequence) = block.GetEnemyEffectIn();
         uint serial = EnemyEffectMailboxRule.SerialOf(head);
         if (serial == 0 || serial == _handledInSerial)
         {
             return;
         }
 
+        if (!block.EnemyEffectInWorldCurrent(sequence))
+        {
+            Finish(serial, "refused effect from a retired world or session");
+            return;
+        }
         uint kind = EnemyEffectMailboxRule.KindOf(head);
         uint durationMs = EnemyEffectMailboxRule.ClampDurationMs(EnemyEffectMailboxRule.DurationMsOf(args));
         uint magnitude = EnemyEffectMailboxRule.MagnitudeOf(args);

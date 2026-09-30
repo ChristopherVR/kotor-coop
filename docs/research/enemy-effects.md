@@ -265,3 +265,16 @@ Step 3 run with `enemy_effect_sync=1` in both `coop.ini` (module `sta_m45ac`, en
 
 Still not shown: a real Force-power cast (the console verb goes through the same VM pipeline, so this is expected to hold), the other eleven kinds through the wire, that the host's enemy visibly stops, and the throttle. The key stays OFF until someone has seen a real cast stop an enemy.
 
+
+
+## 2026-10-01: captured-world provenance and reconnect replay protection
+
+ABI96 / wire85 extend the relay end to end. A native cast captures the previously published host session/load/native epoch paired with this actual local epoch/load; the native queue also retains the engine world token. Queued OUT entries cannot acquire a later host namespace. A coherent managed read verifies the actual native process incarnation and local world before reporting. An unresolved or changed source publication holds capture safely.
+
+The host requires the admitted endpoint, Hello-bound process incarnation and exact host session/load/native epoch/module before ACK. The operation sequence is the native 24-bit OUT serial, retained for the plugin process across managed reconnects. A bounded 512-serial replay window allows nearby reordering, rejects duplicates and refuses captures older than the window instead of resurrecting evicted history. Runs remain across reconnect/world edges; abandoned peer runs are pruned only after their sticky retired identity is no longer reclaimable.
+
+The managed inbox and plugin queue recheck the world before handing over an effect. Native IN uses an even publication sequence plus expected epoch/load/session; partial writes remain odd. Session release clears capture-source and inbound eligibility. This keeps an old queued stun from reaching a newly recycled enemy ID after a same-module load.
+
+New aligned fields occupy `0xC420..0xC460` (end exclusive), preserving the accepted NewGame witness at C400 and the menu-load intent fence at C418. TotalSize remains C600. OUT epoch/load are C420/C424; IN epoch/load/session/active-session/sequence are C428–C438; captured OUT host session/load/epoch are C43C–C444; source sequence and paired host/local namespace occupy C448–C45C. Both bridge/plugin declarations and the ABI96 signature are asserted in tests.
+
+Validation: 42 enemy-effect tests pass, including real UDP endpoint rejection, retry deduplication, same-module recycled-ID rejection, fresh namespace admission and a world flip before drain. Native x86 Release builds with warnings treated as errors. This is automated evidence; no matching ABI96 live cast has yet been claimed.

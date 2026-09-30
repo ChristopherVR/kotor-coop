@@ -18,8 +18,8 @@ namespace KotorCoop.Protocol;
 /// </summary>
 public sealed record EnemyEffectPacket(
     uint OriginPeerId, uint OpSequence, string Module, uint EnemyId, PeerEffectKind Kind,
-    uint DurationMs, uint Magnitude);
+    uint DurationMs, uint Magnitude, uint Incarnation = 0, uint HostSessionId = 0, uint HostLoadSerial = 0, uint HostNativeEpoch = 0);
 
 /// <summary>host -&gt; client: acknowledges one <see cref="EnemyEffectPacket"/> op by its
 /// (origin, sequence) identity, like <see cref="ClassGrantAckPacket"/>.</summary>
-public sealed record EnemyEffectAckPacket(uint PeerId, uint OriginPeerId, uint OpSequence);
+public sealed record EnemyEffectAckPacket(uint PeerId, uint OriginPeerId, uint OpSequence, uint Incarnation = 0, uint HostSessionId = 0, uint HostLoadSerial = 0, uint HostNativeEpoch = 0);

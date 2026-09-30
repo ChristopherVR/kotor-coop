@@ -94,6 +94,8 @@ public interface IEnemyBridge
     /// previous write. False when there is no plugin.
     /// </summary>
     bool TryWriteEnemyEffectIn(in EnemyEffectSample sample) => false;
+    bool TrySetEnemyEffectHostSession(uint session) => false;
+    bool TryPublishEnemyEffectCaptureWorld(in EnemyEffectCaptureWorld world) => false;
 
     /// <summary>The serial of the last inbound effect the plugin has handled (applied or
     /// refused). False when there is no plugin.</summary>

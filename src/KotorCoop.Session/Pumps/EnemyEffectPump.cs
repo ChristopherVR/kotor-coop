@@ -52,6 +52,8 @@ internal sealed class EnemyEffectPump(
             return;
         }
 
+        bridge.TryPublishEnemyEffectCaptureWorld(session.EnemyEffectCaptureSource);
+        bridge.TrySetEnemyEffectHostSession(session.EnemyEffectHostSessionId);
         PublishOwn(local.Module);
         FeedPlugin(local.Module, changedModule);
     }
@@ -82,7 +84,7 @@ internal sealed class EnemyEffectPump(
         }
 
         session.PublishEnemyEffect(
-            module, sample.EnemyId, (PeerEffectKind)sample.Kind, sample.DurationMs, sample.Magnitude);
+            module, sample.EnemyId, (PeerEffectKind)sample.Kind, sample.DurationMs, sample.Magnitude, sample.Serial, sample.NativeEpoch, sample.LoadSerial, sample.HostSessionId, sample.HostLoadSerial, sample.HostNativeEpoch, sample.Incarnation);
         Log($"reporting kind {sample.Kind} on enemy 0x{sample.EnemyId:X} to the host "
             + $"({sample.DurationMs} ms, magnitude {sample.Magnitude})");
     }
@@ -98,7 +100,7 @@ internal sealed class EnemyEffectPump(
 
         foreach (EnemyEffectPacket packet in session.DrainEnemyEffects())
         {
-            if (!string.Equals(packet.Module, module, StringComparison.OrdinalIgnoreCase))
+            if (!session.EnemyEffectWorldCurrent(packet) || !string.Equals(packet.Module, module, StringComparison.OrdinalIgnoreCase))
             {
                 Log($"dropped a client's effect on 0x{packet.EnemyId:X}: it was cast in '{packet.Module}', "
                     + $"this world is '{module}'");
@@ -145,9 +147,10 @@ internal sealed class EnemyEffectPump(
         }
 
         EnemyEffectPacket next = _pending.Dequeue();
+        if (!session.EnemyEffectWorldCurrent(next)) return;
         _nextInSerial = EnemyEffectMailbox.NextSerial(_nextInSerial);
 
-        EnemyEffectSample sample = new(_nextInSerial, next.EnemyId, (uint)next.Kind, next.DurationMs, next.Magnitude);
+        EnemyEffectSample sample = new(_nextInSerial, next.EnemyId, (uint)next.Kind, next.DurationMs, next.Magnitude, next.HostNativeEpoch, next.HostLoadSerial, next.HostSessionId);
         if (!bridge.TryWriteEnemyEffectIn(sample))
         {
             return;

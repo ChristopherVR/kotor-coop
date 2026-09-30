@@ -16,6 +16,8 @@ public static partial class PacketCodec
         w.WriteUInt8((byte)packet.Kind);
         w.WriteUInt32(packet.DurationMs);
         w.WriteUInt32(packet.Magnitude);
+        w.WriteUInt32(packet.Incarnation); w.WriteUInt32(packet.HostSessionId);
+        w.WriteUInt32(packet.HostLoadSerial); w.WriteUInt32(packet.HostNativeEpoch);
         return w.Failed ? 0 : w.Position;
     }
 
@@ -34,6 +36,7 @@ public static partial class PacketCodec
         byte kind = r.ReadUInt8();
         uint durationMs = r.ReadUInt32();
         uint magnitude = r.ReadUInt32();
+        uint incarnation = r.ReadUInt32(), session = r.ReadUInt32(), load = r.ReadUInt32(), epoch = r.ReadUInt32();
 
         // A kind this side never forwards (a buff, a disguise, poison, an unknown byte) is
         // malformed, not something to hand the plugin: the receiver never trusts the wire's
@@ -45,7 +48,7 @@ public static partial class PacketCodec
 
         return new EnemyEffectPacket(
             origin, opSeq, module, enemyId, (PeerEffectKind)kind,
-            EnemyEffectRules.ClampDurationMs(durationMs), EnemyEffectRules.ClampMagnitude(magnitude));
+            EnemyEffectRules.ClampDurationMs(durationMs), EnemyEffectRules.ClampMagnitude(magnitude), incarnation, session, load, epoch);
     }
 
     public static int Write(Span<byte> buffer, EnemyEffectAckPacket packet)
@@ -55,6 +58,8 @@ public static partial class PacketCodec
         w.WriteUInt32(packet.PeerId);
         w.WriteUInt32(packet.OriginPeerId);
         w.WriteUInt32(packet.OpSequence);
+        w.WriteUInt32(packet.Incarnation); w.WriteUInt32(packet.HostSessionId);
+        w.WriteUInt32(packet.HostLoadSerial); w.WriteUInt32(packet.HostNativeEpoch);
         return w.Failed ? 0 : w.Position;
     }
 
@@ -69,6 +74,7 @@ public static partial class PacketCodec
         uint peerId = r.ReadUInt32();
         uint origin = r.ReadUInt32();
         uint opSeq = r.ReadUInt32();
-        return r.Failed ? null : new EnemyEffectAckPacket(peerId, origin, opSeq);
+        uint incarnation = r.ReadUInt32(), session = r.ReadUInt32(), load = r.ReadUInt32(), epoch = r.ReadUInt32();
+        return r.Failed ? null : new EnemyEffectAckPacket(peerId, origin, opSeq, incarnation, session, load, epoch);
     }
 }

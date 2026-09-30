@@ -27,7 +27,7 @@ namespace KotorCoop.Plugin;
 /// </summary>
 internal static unsafe class EnemyEffectCapture
 {
-    /// <summary>coop.ini <c>enemy_effect_sync</c> — default OFF, NEEDS-LIVE (docs/CONFIG.md). The
+    /// <summary>coop.ini <c>enemy_effect_sync</c> — default ON, audited relay (docs/CONFIG.md). The
     /// agent reads the same key for its own half (<c>CoopConfig.EnemyEffectSync</c>).</summary>
     public static readonly bool Enabled = PluginConfig.ReadBool("enemy_effect_sync", true);
 
@@ -37,6 +37,9 @@ internal static unsafe class EnemyEffectCapture
 
     public const int Capacity = 16;
 
+    private static readonly uint[] _hostSession = new uint[Capacity], _hostLoad = new uint[Capacity], _hostEpoch = new uint[Capacity];
+    private static readonly ulong[] _world = new ulong[Capacity];
+    private static readonly uint[] _epoch = new uint[Capacity], _load = new uint[Capacity];
     private static readonly uint[] _enemy = new uint[Capacity];
     private static readonly uint[] _kind = new uint[Capacity];
     private static readonly uint[] _durationMs = new uint[Capacity];
@@ -121,7 +124,22 @@ internal static unsafe class EnemyEffectCapture
             Overflowed++;
         }
 
+        nint block = PluginHost.BlockAddress;
+        if (block == 0 || !Odyssey.TryGetWorldEpoch(out ulong world) || world == 0) return;
+        uint epoch = *(uint*)(block + SharedBlock.OffsetLivenessNativeEpoch);
+        uint sequence = *(uint*)(block + SharedBlock.OffsetEnemyEffectSourceSequence);
+        uint hostSession = *(uint*)(block + SharedBlock.OffsetEnemyEffectSourceHostSession);
+        uint hostLoad = *(uint*)(block + SharedBlock.OffsetEnemyEffectSourceHostLoad);
+        uint hostEpoch = *(uint*)(block + SharedBlock.OffsetEnemyEffectSourceHostEpoch);
+        uint localEpoch = *(uint*)(block + SharedBlock.OffsetEnemyEffectSourceLocalEpoch);
+        uint localLoad = *(uint*)(block + SharedBlock.OffsetEnemyEffectSourceLocalLoad);
+        System.Threading.Thread.MemoryBarrier();
+        if (!EnemyEffectNamespaceRule.Matches(sequence, *(uint*)(block + SharedBlock.OffsetEnemyEffectSourceSequence),
+            hostSession, hostSession, localEpoch, epoch, localLoad, *(uint*)(block + SharedBlock.OffsetWorldLoadSerial)) || hostEpoch == 0) return;
         int slot = (_head + _count) % Capacity;
+        _hostSession[slot] = hostSession; _hostLoad[slot] = hostLoad; _hostEpoch[slot] = hostEpoch;
+        _world[slot] = world; _epoch[slot] = epoch;
+        _load[slot] = *(uint*)(block + SharedBlock.OffsetWorldLoadSerial);
         _enemy[slot] = enemyId;
         _kind[slot] = kind;
         _durationMs[slot] = EnemyEffectMailboxRule.ClampDurationMs(durationMs);
@@ -135,15 +153,17 @@ internal static unsafe class EnemyEffectCapture
     private static int _diagLogged;
 
     /// <summary>Frame thread: takes the oldest captured effect, if any.</summary>
-    public static bool TryDequeue(out uint enemyId, out uint kind, out uint durationMs, out uint magnitude)
+    public static bool TryDequeue(out uint enemyId, out uint kind, out uint durationMs, out uint magnitude, out ulong world, out uint epoch, out uint load, out uint hostSession, out uint hostLoad, out uint hostEpoch)
     {
-        enemyId = kind = durationMs = magnitude = 0;
+        enemyId = kind = durationMs = magnitude = epoch = load = hostSession = hostLoad = hostEpoch = 0; world = 0;
 
         if (_count == 0)
         {
             return false;
         }
 
+        hostSession = _hostSession[_head]; hostLoad = _hostLoad[_head]; hostEpoch = _hostEpoch[_head];
+        world = _world[_head]; epoch = _epoch[_head]; load = _load[_head];
         enemyId = _enemy[_head];
         kind = _kind[_head];
         durationMs = _durationMs[_head];

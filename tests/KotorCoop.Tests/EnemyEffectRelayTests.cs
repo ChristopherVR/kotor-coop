@@ -403,7 +403,7 @@ public class EnemyEffectRelayTests
     {
         using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
         using CoopClient malak = new(
-            new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new SessionSettings { PlayerName = "Malak", TickRate = 30, DamageIncarnation = 100 },
             new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
         using CoopClient bastila = new(
             new SessionSettings { PlayerName = "Bastila", TickRate = 30 },
@@ -417,14 +417,18 @@ public class EnemyEffectRelayTests
         PlayerState state = new(Vector3f.Zero, 0f, "tar_m03aa", 100, 0);
         void Publish()
         {
+            host.PublishWorldDigest(new WorldDigest(1, 1, state.Module, 1, NativeWorldEpoch: 3));
+            malak.PublishWorldDigest(new WorldDigest(1, 1, state.Module, 1, NativeWorldEpoch: 5));
+            bastila.PublishWorldDigest(new WorldDigest(1, 1, state.Module, 1, NativeWorldEpoch: 6));
             host.PublishLocalState(state);
             malak.PublishLocalState(state);
             bastila.PublishLocalState(state);
         }
 
-        Assert.True(await WaitForAsync(() => malak.IsConnected && bastila.IsConnected, TimeSpan.FromSeconds(15), Publish));
+        Assert.True(await WaitForAsync(() => malak.IsConnected && bastila.IsConnected && malak.RemoteWorldDigest.NativeWorldEpoch == 3, TimeSpan.FromSeconds(15), Publish));
 
-        malak.PublishEnemyEffect("tar_m03aa", 0x14, PeerEffectKind.Stunned, 4_000, 0);
+        EnemyEffectCaptureWorld source = malak.EnemyEffectCaptureSource;
+        malak.PublishEnemyEffect("tar_m03aa", 0x14, PeerEffectKind.Stunned, 4_000, 0, 45, 5, 0, source.HostSession, source.HostLoad, source.HostEpoch, 100);
 
         List<EnemyEffectPacket> atHost = [];
         Assert.True(
@@ -446,6 +450,49 @@ public class EnemyEffectRelayTests
 
         // Retransmits racing the ack are deduplicated: keep pumping and nothing more arrives.
         await WaitForAsync(() => false, TimeSpan.FromSeconds(1.5), Publish);
+        Assert.Empty(host.DrainEnemyEffects());
+
+        // Exercise the actual UDP admission path: known peer ID is insufficient without its endpoint.
+        byte[] effectBytes = new byte[ProtocolConstants.MaxPacketSize];
+        using (UdpChannel stranger = new(0))
+        {
+            EnemyEffectPacket spoof = received with { OpSequence = 46 };
+            int spoofLength = PacketCodec.Write(effectBytes, spoof);
+            stranger.Send(new IPEndPoint(IPAddress.Loopback,host.ListenEndPoint.Port), effectBytes.AsSpan(0,spoofLength));
+            await Task.Delay(150);
+            Assert.Empty(host.DrainEnemyEffects());
+        }
+        UdpChannel admitted = (UdpChannel)typeof(CoopClient).GetField("_channel",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(malak)!;
+        // A managed sender restart retry of the same native capture cannot apply twice.
+        admitted.Send(new IPEndPoint(IPAddress.Loopback,host.ListenEndPoint.Port), effectBytes.AsSpan(0,PacketCodec.Write(effectBytes,received)));
+        await Task.Delay(150);
+        Assert.Empty(host.DrainEnemyEffects());
+        // Same-module replacement recycles EnemyId 0x14. An old-namespace report from the
+        // genuine admitted endpoint is rejected; the fresh namespace is admitted once.
+        host.BeginEnemyDamageWorld("tar_m03aa",1,4);
+        Assert.False(host.EnemyEffectWorldCurrent(received));
+        admitted.Send(new IPEndPoint(IPAddress.Loopback,host.ListenEndPoint.Port),effectBytes.AsSpan(0,PacketCodec.Write(effectBytes,received with {OpSequence=46})));
+        await Task.Delay(150);
+        Assert.Empty(host.DrainEnemyEffects());
+        EnemyEffectPacket fresh=received with {OpSequence=46,HostLoadSerial=1,HostNativeEpoch=4};
+        admitted.Send(new IPEndPoint(IPAddress.Loopback,host.ListenEndPoint.Port),effectBytes.AsSpan(0,PacketCodec.Write(effectBytes,fresh)));
+        Assert.True(await WaitForAsync(()=>{atHost.Clear();atHost.AddRange(host.DrainEnemyEffects());return atHost.Count>0;},TimeSpan.FromSeconds(2)));
+        Assert.Equal(fresh,Assert.Single(atHost));
+        // Further queued reports are discarded again if the world flips before drain.
+        EnemyEffectPacket queued=fresh with {OpSequence=47};
+        admitted.Send(new IPEndPoint(IPAddress.Loopback,host.ListenEndPoint.Port),effectBytes.AsSpan(0,PacketCodec.Write(effectBytes,queued)));
+        await Task.Delay(150);
+        host.BeginEnemyDamageWorld("tar_m03aa",2,5);
+        Assert.Empty(host.DrainEnemyEffects());
+
+        host.PublishWorldDigest(new WorldDigest(1,1,"tar_m03aa",1,LoadSerial:2,NativeWorldEpoch:5));
+        Assert.True(await WaitForAsync(()=>malak.RemoteWorldDigest.NativeWorldEpoch==5,TimeSpan.FromSeconds(2)));
+        // Empty capture-source publication never rebrands this old local world with the
+        // new host tuple: only a real local epoch advance can establish a fresh pairing.
+        Assert.Equal(default,malak.EnemyEffectCaptureSource);
+        malak.PublishEnemyEffect("tar_m03aa",0x14,PeerEffectKind.Stunned,4000,0,48,5,0,source.HostSession,source.HostLoad,source.HostEpoch,100);
+        await Task.Delay(150);
         Assert.Empty(host.DrainEnemyEffects());
 
         // Nothing is relayed onward: the other client learns of it through the enemy census.

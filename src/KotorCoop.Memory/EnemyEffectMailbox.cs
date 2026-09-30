@@ -3,7 +3,9 @@ namespace KotorCoop.Memory;
 /// <summary>One enemy effect crossing the plugin/agent boundary. <see cref="Serial"/> is 24 bits
 /// (1..0xFFFFFF, 0 = empty), <see cref="Kind"/> a <c>PeerEffectKind</c> value.</summary>
 public readonly record struct EnemyEffectSample(
-    uint Serial, uint EnemyId, uint Kind, uint DurationMs, uint Magnitude);
+    uint Serial, uint EnemyId, uint Kind, uint DurationMs, uint Magnitude, uint NativeEpoch = 0, uint LoadSerial = 0, uint HostSessionId = 0, uint HostLoadSerial = 0, uint HostNativeEpoch = 0, uint Incarnation = 0);
+
+public readonly record struct EnemyEffectCaptureWorld(uint HostSession, uint HostLoad, uint HostEpoch, uint LocalEpoch, uint LocalLoad);
 
 /// <summary>
 /// The packing of one enemy-effect mailbox entry in the shared block (12 bytes:

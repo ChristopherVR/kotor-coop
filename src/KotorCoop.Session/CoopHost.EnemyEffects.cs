@@ -5,7 +5,7 @@ namespace KotorCoop.Session;
 
 /// <summary>
 /// CoopHost — the receiving end of the enemy-effect relay (docs/research/enemy-effects.md): a
-/// client's report is acked at once, deduplicated (a retransmit racing its own ack), bounded, and
+/// client's report is authenticated and world-fenced before ACK, deduplicated (a retransmit racing its own ack), bounded, and
 /// queued for THIS instance's plugin, which applies it to the real enemy body. Nothing is relayed
 /// onward: the other clients see the effect through the ordinary enemy census.
 /// </summary>
@@ -17,12 +17,15 @@ public sealed partial class CoopHost
 
     private readonly Queue<EnemyEffectPacket> _enemyEffectInbox = new();
 
-    private readonly HashSet<(uint Origin, uint Sequence)> _enemyEffectSeen = [];
-    private readonly Queue<(uint Origin, uint Sequence)> _enemyEffectSeenOrder = new();
-    private const int EnemyEffectSeenCapacity = 512;
+    private readonly EnemyEffectReplayWindow _enemyEffectReplay = new();
+    public uint EnemyEffectHostSessionId => _sessionId;
+    public bool EnemyEffectWorldCurrent(EnemyEffectPacket effect)
+    {
+        lock (_gate) return DamageWorldMatches(effect.HostSessionId, effect.HostLoadSerial, effect.HostNativeEpoch, effect.Module);
+    }
 
     /// <summary>The host's own casts already ran against the real enemy, so it reports nothing.</summary>
-    public void PublishEnemyEffect(string module, uint enemyId, PeerEffectKind kind, uint durationMs, uint magnitude)
+    public void PublishEnemyEffect(string module, uint enemyId, PeerEffectKind kind, uint durationMs, uint magnitude, uint capturedSerial = 0, uint localNativeEpoch = 0, uint localLoadSerial = 0, uint capturedHostSession = 0, uint capturedHostLoad = 0, uint capturedHostEpoch = 0, uint capturedIncarnation = 0)
     {
     }
 
@@ -38,7 +41,8 @@ public sealed partial class CoopHost
             List<EnemyEffectPacket> ready = [];
             while (_enemyEffectInbox.Count > 0)
             {
-                ready.Add(_enemyEffectInbox.Dequeue());
+                EnemyEffectPacket effect = _enemyEffectInbox.Dequeue();
+                if (DamageWorldMatches(effect.HostSessionId, effect.HostLoadSerial, effect.HostNativeEpoch, effect.Module)) ready.Add(effect);
             }
 
             return ready;
@@ -53,42 +57,22 @@ public sealed partial class CoopHost
             return;
         }
 
-        // Ack first and unconditionally: a duplicate means our previous ack was lost.
-        int length = PacketCodec.Write(
-            _replyBuffer, new EnemyEffectAckPacket(HostPeerId, effect.OriginPeerId, effect.OpSequence));
-        if (length > 0)
-        {
-            _channel.Send(from, _replyBuffer.AsSpan(0, length));
-        }
-
-        if (effect.OriginPeerId == HostPeerId)
-        {
-            return; // the host never reports to itself; a spoofed origin is not a peer's effect
-        }
-
         lock (_gate)
         {
-            if (!_peers.ContainsKey(effect.OriginPeerId))
-            {
-                return; // only a known peer
-            }
+            if (effect.OriginPeerId == HostPeerId
+                || !DamageWorldMatches(effect.HostSessionId, effect.HostLoadSerial, effect.HostNativeEpoch, effect.Module)
+                || !_peers.TryGetValue(effect.OriginPeerId, out PeerConnection? peer)
+                || !peer.EndPoint.Equals(from) || peer.DamageIncarnation != effect.Incarnation
+                || effect.Incarnation == 0 || effect.OpSequence is 0 or > 0xFFFFFF) return;
 
-            if (!_enemyEffectSeen.Add((effect.OriginPeerId, effect.OpSequence)))
-            {
-                return; // a retransmit that raced its ack
-            }
-
-            _enemyEffectSeenOrder.Enqueue((effect.OriginPeerId, effect.OpSequence));
-            while (_enemyEffectSeenOrder.Count > EnemyEffectSeenCapacity)
-            {
-                _enemyEffectSeen.Remove(_enemyEffectSeenOrder.Dequeue());
-            }
-
-            if (_enemyEffectInbox.Count >= EnemyEffectInboxCapacity)
-            {
-                _enemyEffectInbox.Dequeue(); // an effect is only worth its freshest replay
-            }
-
+            // Authenticate and validate the immutable namespace before acknowledging. A duplicate
+            // in this namespace is still acknowledged, since the previous ACK may have been lost.
+            int length = PacketCodec.Write(_replyBuffer, new EnemyEffectAckPacket(HostPeerId, effect.OriginPeerId,
+                effect.OpSequence, effect.Incarnation, effect.HostSessionId, effect.HostLoadSerial, effect.HostNativeEpoch));
+            if (length > 0) _channel.Send(from, _replyBuffer.AsSpan(0, length));
+            _enemyEffectReplay.Retain(_peers.Keys.Concat(_retired.Values.Select(peer => peer.Id)).ToHashSet());
+            if (!_enemyEffectReplay.Observe(effect.OriginPeerId, effect.Incarnation, effect.OpSequence)) return;
+            if (_enemyEffectInbox.Count >= EnemyEffectInboxCapacity) _enemyEffectInbox.Dequeue();
             _enemyEffectInbox.Enqueue(effect);
         }
     }

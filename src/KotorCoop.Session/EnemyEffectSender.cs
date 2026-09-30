@@ -41,7 +41,7 @@ public sealed class EnemyEffectSender(
     /// kind is not forwardable, the enemy id is empty, or the table is full.</summary>
     public EnemyEffectPacket? EnqueueLocal(
         uint originPeerId, string module, uint enemyId, PeerEffectKind kind,
-        uint durationMs, uint magnitude, long nowMs)
+        uint durationMs, uint magnitude, long nowMs, uint capturedSerial = 0, uint incarnation = 0, uint hostSession = 0, uint hostLoad = 0, uint hostEpoch = 0)
     {
         if (enemyId == 0 || !EnemyEffectRules.IsForwardable(kind))
         {
@@ -55,10 +55,11 @@ public sealed class EnemyEffectSender(
                 return null;
             }
 
-            uint sequence = _nextSequence++;
+            uint sequence = capturedSerial != 0 ? capturedSerial : _nextSequence++;
+            if (_pending.ContainsKey((originPeerId, sequence))) return null;
             EnemyEffectPacket packet = new(
                 originPeerId, sequence, module, enemyId, kind,
-                EnemyEffectRules.ClampDurationMs(durationMs), EnemyEffectRules.ClampMagnitude(magnitude));
+                EnemyEffectRules.ClampDurationMs(durationMs), EnemyEffectRules.ClampMagnitude(magnitude), incarnation, hostSession, hostLoad, hostEpoch);
             _pending[(originPeerId, sequence)] = new Pending { Packet = packet, EnqueuedMs = nowMs };
             return packet;
         }
@@ -72,6 +73,17 @@ public sealed class EnemyEffectSender(
             {
                 pending.Acked = true;
             }
+        }
+    }
+
+    public void Acknowledge(EnemyEffectAckPacket ack)
+    {
+        lock (_gate)
+        {
+            if (_pending.TryGetValue((ack.OriginPeerId, ack.OpSequence), out Pending? pending)
+                && pending.Packet.Incarnation == ack.Incarnation && pending.Packet.HostSessionId == ack.HostSessionId
+                && pending.Packet.HostLoadSerial == ack.HostLoadSerial && pending.Packet.HostNativeEpoch == ack.HostNativeEpoch)
+                pending.Acked = true;
         }
     }
 

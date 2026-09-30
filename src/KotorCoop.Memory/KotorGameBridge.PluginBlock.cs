@@ -1156,4 +1156,22 @@ public sealed partial class KotorGameBridge
         ok &= _memory.TryWrite(_pluginBlock + BlockCommand, CommandSpawnAndDrive);
         return ok;
     }
+
+    // ABI96: immutable native namespace and sequenced IN publication.
+    private const int BlockEnemyEffectOutEpoch = 0xC420;
+    private const int BlockEnemyEffectOutLoad = 0xC424;
+    private const int BlockEnemyEffectInEpoch = 0xC428;
+    private const int BlockEnemyEffectInLoad = 0xC42C;
+    private const int BlockEnemyEffectInSession = 0xC430;
+    private const int BlockEnemyEffectActiveSession = 0xC434;
+    private const int BlockEnemyEffectInSequence = 0xC438;
+    private const int BlockEnemyEffectOutHostSession = 0xC43C;
+    private const int BlockEnemyEffectOutHostLoad = 0xC440;
+    private const int BlockEnemyEffectOutHostEpoch = 0xC444;
+    private const int BlockEnemyEffectSourceSequence = 0xC448;
+    private const int BlockEnemyEffectSourceHostSession = 0xC44C;
+    private const int BlockEnemyEffectSourceHostLoad = 0xC450;
+    private const int BlockEnemyEffectSourceHostEpoch = 0xC454;
+    private const int BlockEnemyEffectSourceLocalEpoch = 0xC458;
+    private const int BlockEnemyEffectSourceLocalLoad = 0xC45C;
 }

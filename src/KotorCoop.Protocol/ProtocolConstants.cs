@@ -340,7 +340,8 @@ public static class ProtocolConstants
     // v76 adds the gameplay-content fingerprint to both handshake digests (scheme 2).
     /// <summary>Version 77 appends durable saved-script-world refresh fields to WorldDigest.</summary>
     // 82: companion occupant generations/templates plus host-world namespaces.
-    public const byte Version = 84;
+    // Version85 binds reliable enemy effects and ACKs to host world and native capture incarnation.
+    public const byte Version = 85;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

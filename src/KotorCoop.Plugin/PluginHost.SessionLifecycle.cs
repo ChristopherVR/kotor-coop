@@ -69,6 +69,7 @@ internal static unsafe partial class PluginHost
         _death?.ReleaseSession();
         _interactionLocks?.ReleaseSession();
         _partyRoster?.ReleaseSession();
+        _enemyEffects?.ReleaseSession();
         _portraits?.ReleaseSession();
         _soloSegment?.ReleaseSession();
 

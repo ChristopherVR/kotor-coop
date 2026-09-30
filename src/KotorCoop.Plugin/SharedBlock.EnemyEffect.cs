@@ -2,7 +2,7 @@ namespace KotorCoop.Plugin;
 
 internal partial struct SharedBlock
 {
-    // ---- client-cast enemy-effect relay (version 70, region 0x4C60..0x4C80, no TotalSize
+    // ---- client-cast enemy-effect relay (v70 payload, v96 namespace C420..C460, no TotalSize
     //      growth) ---------------------------------------------------------------------------
     //
     // docs/research/enemy-effects.md, coop.ini enemy_effect_sync. Enemies are host-authoritative,
@@ -49,4 +49,22 @@ internal partial struct SharedBlock
     /// <summary>Plugin -&gt; agent. The IN serial the plugin has handled (applied or refused).
     /// Region ends at 0x4C80.</summary>
     public const int OffsetEnemyEffectInApplied = 0x4C7C;
+
+    // ABI96: immutable native namespace and sequenced IN publication.
+    public const int OffsetEnemyEffectOutEpoch = 0xC420;
+    public const int OffsetEnemyEffectOutLoad = 0xC424;
+    public const int OffsetEnemyEffectInEpoch = 0xC428;
+    public const int OffsetEnemyEffectInLoad = 0xC42C;
+    public const int OffsetEnemyEffectInSession = 0xC430;
+    public const int OffsetEnemyEffectActiveSession = 0xC434;
+    public const int OffsetEnemyEffectInSequence = 0xC438;
+    public const int OffsetEnemyEffectOutHostSession = 0xC43C;
+    public const int OffsetEnemyEffectOutHostLoad = 0xC440;
+    public const int OffsetEnemyEffectOutHostEpoch = 0xC444;
+    public const int OffsetEnemyEffectSourceSequence = 0xC448;
+    public const int OffsetEnemyEffectSourceHostSession = 0xC44C;
+    public const int OffsetEnemyEffectSourceHostLoad = 0xC450;
+    public const int OffsetEnemyEffectSourceHostEpoch = 0xC454;
+    public const int OffsetEnemyEffectSourceLocalEpoch = 0xC458;
+    public const int OffsetEnemyEffectSourceLocalLoad = 0xC45C;
 }
