@@ -80,3 +80,22 @@ independently; it must allow the engine's normal deferred OK dismissal to finish
 See [the live recovery report](leviathan-recovery-live-2026-10-01.md) for exact
 scope and saved-health evidence. This same-area result does not establish the
 cross-area case above.
+
+
+The subsequent `96eefe6` Native 95 replay identified and repaired the repeating
+received-items notification. A hardware write watch showed native item acquisition;
+a 1 ms bank sampler then recorded 44 busy publication samples in five seconds while
+the companion identity stayed unchanged. The controller had discarded successful
+equipment state whenever proof was temporarily unavailable. It now withholds writes
+and preserves that state, resetting it for a verified source session, occupant
+generation or current engine body change. A reused body ID must also resolve to the
+same current engine pointer before the cache can be trusted.
+
+The matching repaired replay caught 30 further busy samples without repeated item
+creation. After the normal OK dismissal, 120 samples across 12 seconds stayed outside
+the modal with input and busy flags clear. Normal forward input moved the joiner's
+own character 8.14 metres. No position, health or quest alteration was needed.
+Actual locker retrieval and later reconnect remain in progress. Twelve focused
+cache/identity tests and all 5,560 fast tests pass, zero failures; the x86 native
+publish is warning-clean. Evidence: `artifacts/companion-v95-proof-cache`,
+`artifacts/companion-v95-proof-cache-validated` and the live recovery report.
