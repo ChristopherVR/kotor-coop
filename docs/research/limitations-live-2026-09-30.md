@@ -644,5 +644,8 @@ The actual stock-AI exclusion check completed on 2026-10-01; see
 enables only the audited interaction allowlist when `local_var_sync` is absent.
 Explicit0 remains off. Native and Agent publishes are warning-clean; 117 focused
 tests and all 5,515 fast tests pass, zero failures (1m37s for the fast tier).
-Evidence: `artifacts/companion-v95-localvar-defaults`. The slow tier also passes all 117 tests, zero failures, 9m39s. Live
-missing-key / explicit0 controls are being checked separately.
+Evidence: `artifacts/companion-v95-localvar-defaults`. The slow tier also passes all 117 tests, zero failures, 9m39s. Fresh live missing-key / explicit0 controls also passed: native status3 enabled
+original-script capture and peer apply only in the missing-key pair; explicit0
+reported status0 and the peer flag stayed unchanged after 30.9 seconds. Each pair
+was stopped and preserved files restored with exact hashes, sizes and timestamps.
+See [default controls](localvar-default-live-2026-10-01.md).
