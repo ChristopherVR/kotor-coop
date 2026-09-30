@@ -1287,9 +1287,13 @@ public sealed partial class CoopCommandDispatcher
         if (gateEnabled && !dedicatedCaptureReady
             && trigger is RejoinTrigger.HostReload or RejoinTrigger.SaveMismatch or RejoinTrigger.WipeRecovery)
         {
+            bool recoveryReadable = bridge.TryReadLocalState(out PlayerState recoveryLocal);
             bool incapacitated = trigger == RejoinTrigger.WipeRecovery
-                || bridge.TryReadLocalState(out PlayerState recoveryLocal) && (recoveryLocal.IsDowned || recoveryLocal.IsPartyWiped);
-            if (incapacitated)
+                || recoveryReadable && (recoveryLocal.IsDowned || recoveryLocal.IsPartyWiped);
+            bool controlledSceneAborted = ControlledSceneRecoveryRule.MayUseLivingCheckpoint(trigger,
+                _controlledSceneReturnPending, recoveryReadable, recoveryLocal,
+                _kotor?.IsPartyScriptControlled ?? false);
+            if (incapacitated || controlledSceneAborted)
             {
                 if (!TryUseAutomaticRecoveryCheckpoint())
                 {
@@ -1298,7 +1302,9 @@ public sealed partial class CoopCommandDispatcher
                     Reply("recovery held: no verified living character checkpoint is available; your connection and saves were retained");
                     return;
                 }
-                dedicatedCaptureReady = true; // Verified pre-wipe sidecar; the dead actor cannot save safely.
+                if (controlledSceneAborted)
+                    Log?.Invoke("controlled scene interrupted by a host load: carrying the verified living character checkpoint instead of waiting for the abandoned local script to save");
+                dedicatedCaptureReady = true; // Verified checkpoint; a dead/abandoned scripted actor cannot save safely.
             }
             else
             {

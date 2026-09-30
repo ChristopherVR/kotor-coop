@@ -77,6 +77,36 @@ public sealed class ReturnSaveCaptureTests : IDisposable
         Assert.False((bool)Call("MaintainAutomaticRejoinCapture", 1000L)!);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ControlledSceneHostReloadDoesNotWaitForAbandonedDialogueToSave(bool hasCheckpoint)
+    {
+        string quick = Path.Combine(_game, "saves", NamedSaveRule.QuickSaveFolder);
+        WriteSave(quick);
+        byte[] hash = SHA256.HashData(File.ReadAllBytes(Path.Combine(quick, "SAVEGAME.sav")));
+        if (hasCheckpoint)
+        {
+            string checkpoint = Path.Combine(_game, "saves", "000002 - Co-op");
+            WriteSave(checkpoint);
+            Assert.Equal(CharacterCapture.Written, ClientCharacterPersistence.Capture(
+                Path.Combine(_game, "saves"), checkpoint, 1, out _));
+        }
+        _bridge.Module = "lev_m40aa";
+        _bridge.Flags = PlayerState.FlagInDialogue;
+        SetField("_controlledSceneReturnPending", true);
+        var logs = new List<string>();
+        _dispatcher.Log = logs.Add;
+        Call("TriggerRejoin", RejoinTrigger.HostReload, _manager.Current!, new Action(() => { }), false);
+        Assert.Empty(_bridge.Requests);
+        Assert.False((bool)Call("MaintainAutomaticRejoinCapture", 1000L)!);
+        Assert.Equal(hash, SHA256.HashData(File.ReadAllBytes(Path.Combine(quick, "SAVEGAME.sav"))));
+        if (hasCheckpoint)
+            Assert.Contains(logs, line => line.StartsWith("controlled scene interrupted by a host load:"));
+        else
+            Assert.Contains(logs, line => line.Contains("no verified living character checkpoint"));
+    }
+
     private object? Call(string name, params object[] args) => typeof(CoopCommandDispatcher)
         .GetMethod(name, BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(_dispatcher, args);
     private T Field<T>(string name) => (T)typeof(CoopCommandDispatcher)
