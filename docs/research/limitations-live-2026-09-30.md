@@ -321,3 +321,10 @@ Both Quick Save trees retained their SHA256 fingerprints. The first checkpoint p
 incorrectly expected a new directory rather than an overwritten dedicated slot; its
 timeout is preserved, and the corrected probe checks the actual SAVEGAME timestamp.
 Evidence: `artifacts/stock-live-v89-relockfix/checkpoint-debt-evidence.txt`.
+
+The actual1024x768 framebuffer also passed a separate visible check. The joiner stayed at
+15.4248,20.1215,-1.275 while the host moved to35,22.2,-1.275. Its M map revealed the new
+corridor, with distinct host/joiner pins and a readable connection line. Both original
+game configurations were restored byte-for-byte with their original timestamps after
+the owned pair stopped. Images: `artifacts/stock-map-1024/map-client-before.png` and
+`map-client-after.png`.
