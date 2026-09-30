@@ -30,7 +30,9 @@ public class CreatureLivenessPumpTests
 
         public uint AnomalyCount { get; set; }
         public uint WorldLoadSerial { get; set; }
-        public uint LivenessEpoch { get; set; }
+        public uint LivenessEpoch { get; set; } = 1;
+        public Action? OnModuleRead { get; set; }
+        public Action? OnLocalRead { get; set; }
         public bool TryReadLivenessEpoch(out uint epoch) { epoch = LivenessEpoch; return true; }
         public bool TryReadWorldLoadSerial(out uint serial) { serial = WorldLoadSerial; return true; }
         public Action? OnWrite { get; set; }
@@ -48,11 +50,17 @@ public class CreatureLivenessPumpTests
         public bool TryReadLocalState(out PlayerState state)
         {
             state = new PlayerState(Vector3f.Zero, 0f, LocalModule, 20, 0);
+            var action = OnLocalRead;
+            OnLocalRead = null;
+            action?.Invoke();
             return true;
         }
 
         public bool TryReadCurrentModule(out string module)
         {
+            var action = OnModuleRead;
+            OnModuleRead = null;
+            action?.Invoke();
             module = CurrentModule ?? LocalModule;
             return module.Length > 0;
         }
@@ -143,7 +151,8 @@ public class CreatureLivenessPumpTests
 
         public IReadOnlyList<EnemyState> GetEnemies(string module) => [];
 
-        public void PublishWorldDigest(in WorldDigest digest) { }
+        public List<WorldDigest> Digests { get; } = [];
+        public void PublishWorldDigest(in WorldDigest digest) => Digests.Add(digest);
 
         public void PublishParty(IReadOnlyList<PartyMemberState> members) { }
 
@@ -431,5 +440,59 @@ public class CreatureLivenessPumpTests
         bridge.TryReadLocalState(out var after);
         pump.PumpCreatureLiveness(after, SessionCapabilities.All);
         Assert.Equal(4u, Assert.Single(bridge.LastWritten!).ObjectId);
+    }
+    [Fact]
+    public void TornTravelSampleCannotEstablishFalseSameAreaReloadBaseline()
+    {
+        var (_, bridge, session) = Build(authority: false);
+        LivenessPump pump = new(bridge, session, _ => { });
+        session.ToDeliver = [new(300, CreatureLivenessState.Gone)];
+        bridge.TryReadLocalState(out var before);
+        pump.PumpCreatureLiveness(before, SessionCapabilities.All);
+        bridge.OnModuleRead = () => { bridge.LocalModule = "end_m01ab"; bridge.LivenessEpoch = 2; };
+        pump.PumpCreatureLiveness(before, SessionCapabilities.All);
+        Assert.Empty(bridge.LastWritten!);
+        bridge.TryReadLocalState(out var after);
+        session.DeliverModule = after.Module;
+        session.ToDeliver = [new(4, CreatureLivenessState.Dead)];
+        pump.PumpCreatureLiveness(after, SessionCapabilities.All);
+        Assert.Equal(4u, Assert.Single(bridge.LastWritten!).ObjectId);
+    }
+
+    [Fact]
+    public void UnknownEpochClearsBankWithoutErasingSameAreaLoadBaseline()
+    {
+        var (_, bridge, session) = Build(authority: false);
+        LivenessPump pump = new(bridge, session, _ => { });
+        session.ToDeliver = [new(300, CreatureLivenessState.Gone)];
+        bridge.TryReadLocalState(out var local);
+        pump.PumpCreatureLiveness(local, SessionCapabilities.All);
+        bridge.LivenessEpoch = 0;
+        pump.PumpCreatureLiveness(local, SessionCapabilities.All);
+        Assert.Empty(bridge.LastWritten!);
+        bridge.LivenessEpoch = 1;
+        pump.PumpCreatureLiveness(local, SessionCapabilities.All);
+        Assert.Single(bridge.LastWritten!);
+        bridge.LivenessEpoch = 2;
+        pump.PumpCreatureLiveness(local, SessionCapabilities.All);
+        Assert.Empty(bridge.LastWritten!);
+    }
+    [Fact]
+    public void AgentCannotPublishOldPlayerModuleWithFreshTravelEpoch()
+    {
+        var (agent, bridge, session) = Build(authority: false);
+        agent.PumpOnce();
+        Assert.Equal(Module, session.Digests[^1].Module);
+        bridge.OnLocalRead = () => { bridge.LocalModule = "end_m01ab"; bridge.LivenessEpoch = 2; };
+        void AllowHeavyTick() => typeof(CoopAgent).GetField("_lastHeavyPumpMs",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.SetValue(agent, 0L);
+        AllowHeavyTick();
+        agent.PumpOnce();
+        Assert.Equal("", session.Digests[^1].Module);
+        Assert.Equal(2u, session.Digests[^1].NativeWorldEpoch);
+        AllowHeavyTick();
+        agent.PumpOnce();
+        Assert.Equal("end_m01ab", session.Digests[^1].Module);
+        Assert.Equal(2u, session.Digests[^1].NativeWorldEpoch);
     }
 }

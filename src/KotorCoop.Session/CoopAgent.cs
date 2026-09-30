@@ -527,6 +527,7 @@ public sealed partial class CoopAgent
             _perfClock.Restart();
         }
 
+        bool playerEpochReadable = _bridge.TryReadLivenessEpoch(out uint playerNativeEpoch);
         if (_bridge.TryReadLocalState(out PlayerState local))
         {
             LastReadSucceeded = true;
@@ -1050,6 +1051,8 @@ public sealed partial class CoopAgent
         // A changed load serial is first published without a ready module even if this tick's
         // player read succeeds. The next successful digest sample at that same serial can
         // advertise the module, proving the row was sampled after the load edge was observed.
+        bool epochReadable = _bridge.TryReadLivenessEpoch(out uint nativeEpoch);
+        bool moduleReadable = _bridge.TryReadCurrentModule(out string nativeModule);
         bool loadSerialReadable = _bridge.TryReadWorldLoadSerial(out uint sampledLoadSerial);
         uint loadSerial = loadSerialReadable
             ? sampledLoadSerial
@@ -1057,6 +1060,9 @@ public sealed partial class CoopAgent
         (WorldDigestReadinessState nextReadiness, bool moduleReady) = WorldDigestReadinessRule.Observe(
             _worldDigestReadinessState, loadSerial, LastReadSucceeded && loadSerialReadable);
         _worldDigestReadinessState = nextReadiness;
+        moduleReady &= playerEpochReadable && epochReadable && playerNativeEpoch == nativeEpoch
+            && !_bridge.IsWorldBetweenLives
+            && WorldDigestCoherenceRule.ModuleMatches(local.Module, moduleReadable, nativeModule, nativeEpoch);
         uint digestModuleGit = moduleReady ? _bridge.ModuleGitDigest(local.Module) : 0;
         WorldDigest digest = new WorldDigest(
             _bridge.GlobalsCatalogueDigest,
@@ -1065,7 +1071,13 @@ public sealed partial class CoopAgent
             digestModuleGit,
             loadSerial,
             difficultyLevel,
-            NativeWorldEpoch: _bridge.TryReadLivenessEpoch(out uint nativeEpoch) ? nativeEpoch : 0);
+            NativeWorldEpoch: epochReadable ? nativeEpoch : 0);
+        // Fingerprints may perform several remote reads. A transition anywhere in this
+        // span invalidates the label, even when the retained PC still reads successfully.
+        moduleReady &= _bridge.TryReadWorldLoadSerial(out uint afterSerial) && afterSerial == loadSerial
+            && _bridge.TryReadLivenessEpoch(out uint afterEpoch) && afterEpoch == nativeEpoch
+            && WorldDigestCoherenceRule.ModuleMatches(local.Module,
+                _bridge.TryReadCurrentModule(out string afterModule), afterModule, afterEpoch);
         _session.PublishWorldDigest(ForCurrentReadAvailability(digest, moduleReady));
 
         if (!_session.IsEnemyAuthority && _session is ICapabilitySession capabilitySession)

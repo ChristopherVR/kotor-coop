@@ -104,6 +104,54 @@ public sealed class DamageWorldTests
         Assert.True(freshAdmission.Accept(10, "end_m01aa", 3, 2, "end_m01aa", 2));
     }
 
+    [Theory]
+    [InlineData("tar_m10aa", false)]
+    [InlineData("end_m01aa", true)]
+    public void UnavailableTransitionDoesNotEraseReadyNamespace(string landedModule, bool quarantined)
+    {
+        using CoopClient client = new(new SessionSettings(), new IPEndPoint(IPAddress.Loopback, 27140));
+        client.PublishWorldDigest(new WorldDigest(1, 1, "end_m01aa", 1, 0, NativeWorldEpoch: 1));
+        client.PublishWorldDigest(new WorldDigest(1, 1, "", 0, 0, NativeWorldEpoch: 2));
+        Assert.False(IsQuarantined(client));
+        client.PublishWorldDigest(new WorldDigest(1, 1, landedModule, 1, 0, NativeWorldEpoch: 2));
+        Assert.Equal(quarantined, IsQuarantined(client));
+    }
+
+    [Fact]
+    public void UnknownEpochDoesNotQuarantineOrForgetPriorSameAreaWorld()
+    {
+        using CoopClient client = new(new SessionSettings(), new IPEndPoint(IPAddress.Loopback, 27140));
+        client.PublishWorldDigest(new WorldDigest(1, 1, "end_m01aa", 1, 0, NativeWorldEpoch: 1));
+        client.PublishWorldDigest(new WorldDigest(1, 1, "end_m01aa", 1, 0, NativeWorldEpoch: 0));
+        Assert.False(IsQuarantined(client));
+        client.PublishWorldDigest(new WorldDigest(1, 1, "end_m01aa", 1, 0, NativeWorldEpoch: 2));
+        Assert.True(IsQuarantined(client));
+    }
+
+    [Fact]
+    public void UnavailableNewNativeWorldCannotBindDamageToOldHostDigest()
+    {
+        using CoopClient client = new(new SessionSettings(), new IPEndPoint(IPAddress.Loopback, 27140));
+        void Set(string name, object value) => typeof(CoopClient).GetField(name,
+            BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(client, value);
+        Set("_hostSessionId", 10u); Set("_localPeerId", 2u);
+        Set("_hostWorld", new WorldDigest(1, 1, "end_m01aa", 1, 0, NativeWorldEpoch: 1));
+        client.PublishWorldDigest(new WorldDigest(1, 1, "end_m01aa", 1, 0, NativeWorldEpoch: 1));
+        client.ReportEnemyDamage("end_m01aa", 1, [], 1);
+        client.PublishWorldDigest(new WorldDigest(1, 1, "", 0, 0, NativeWorldEpoch: 2));
+        client.ReportEnemyDamage("end_m01aa", 2, [], 2);
+        client.PublishWorldDigest(new WorldDigest(1, 1, "tar_m10aa", 1, 0, NativeWorldEpoch: 2));
+        Set("_hostWorld", new WorldDigest(1, 1, "tar_m10aa", 1, 0, NativeWorldEpoch: 2));
+        client.ReportEnemyDamage("tar_m10aa", 2, [], 2);
+        var watch = (DamageReportWorldWatch)typeof(CoopClient).GetField("_damageReportWorld",
+            BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(client)!;
+        Assert.True(watch.Accept(10, "tar_m10aa", 0, 2, "tar_m10aa", 2));
+        Assert.False(IsQuarantined(client));
+    }
+
+    private static bool IsQuarantined(CoopClient client) => (bool)typeof(CoopClient)
+        .GetField("_livenessLocalLoadQuarantined", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(client)!;
+
     [Fact]
     public void LatestSenderGenerationRetiresEvenWhenEarlierEnemyRowsRemain()
     {

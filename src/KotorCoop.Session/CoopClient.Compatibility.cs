@@ -13,6 +13,7 @@ public sealed partial class CoopClient
     private CompatibilityVerdict? _installVerdict;
     private CompatibilityVerdict? _compatibility;
     private WorldDigest _localWorld = WorldDigest.Empty;
+    private WorldDigest _lastResolvedLocalWorld = WorldDigest.Empty;
     private WorldDigest _hostWorld = WorldDigest.Empty;
     private long _lastWorldDigestMs;
 
@@ -77,10 +78,17 @@ public sealed partial class CoopClient
             return;
         }
 
-        if (!_localWorld.IsEmpty && (_localWorld.LoadSerial != digest.LoadSerial
-            || (_localWorld.NativeWorldEpoch != digest.NativeWorldEpoch
-                && string.Equals(_localWorld.Module, digest.Module, StringComparison.OrdinalIgnoreCase))))
+        // Unavailable transition samples must not erase the last known namespace. A
+        // fresh epoch with an empty module is inconclusive until its label is resolved.
+        if (!_lastResolvedLocalWorld.IsEmpty &&
+            (_lastResolvedLocalWorld.LoadSerial != digest.LoadSerial ||
+             (digest.Module.Length > 0 && digest.NativeWorldEpoch != 0 &&
+              _lastResolvedLocalWorld.NativeWorldEpoch != 0 &&
+              _lastResolvedLocalWorld.NativeWorldEpoch != digest.NativeWorldEpoch &&
+              string.Equals(_lastResolvedLocalWorld.Module, digest.Module, StringComparison.OrdinalIgnoreCase))))
             InvalidateCreatureLivenessForLocalLoad();
+        if (digest.Module.Length > 0 && digest.NativeWorldEpoch != 0)
+            _lastResolvedLocalWorld = digest;
         _localWorld = digest;
         RefineCompatibility();
     }

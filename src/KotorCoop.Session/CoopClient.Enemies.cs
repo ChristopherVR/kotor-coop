@@ -81,7 +81,9 @@ public sealed partial class CoopClient
         {
             // The native world can turn over before the next managed digest tick. Do not
             // bind its new generation against the old advertised host/local pairing.
-            if (localNativeEpoch == 0 || localNativeEpoch != _localWorld.NativeWorldEpoch) return;
+            if (localNativeEpoch == 0 || localNativeEpoch != _localWorld.NativeWorldEpoch
+                || _localWorld.Module.Length == 0
+                || !string.Equals(module, _localWorld.Module, StringComparison.OrdinalIgnoreCase)) return;
             ReportEnemyDamage(module, generation, damage);
         }
     }

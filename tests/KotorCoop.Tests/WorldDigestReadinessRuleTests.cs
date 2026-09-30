@@ -46,4 +46,11 @@ public sealed class WorldDigestReadinessRuleTests
             afterFailure, loadSerial: 6, localReadSucceeded: true);
         Assert.True(ready);
     }
+    [Theory]
+    [InlineData("end_m01aa", true, "tar_m10aa", 2u, false)]
+    [InlineData("tar_m10aa", true, "TAR_M10AA", 2u, true)]
+    [InlineData("end_m01aa", false, "", 2u, false)]
+    [InlineData("end_m01aa", true, "", 2u, false)]
+    public void FreshNativeWorldCannotUseRetainedPlayerLabel(string playerModule, bool readable, string nativeModule, uint epoch, bool expected)
+        => Assert.Equal(expected, WorldDigestCoherenceRule.ModuleMatches(playerModule, readable, nativeModule, epoch));
 }

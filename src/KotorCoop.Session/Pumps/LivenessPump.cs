@@ -67,12 +67,23 @@ internal sealed class LivenessPump(IGameBridge bridge, ICoopSession session, Act
     /// </summary>
     public void PumpCreatureLiveness(in PlayerState local, SessionCapabilities caps)
     {
-        if (!bridge.TryReadWorldLoadSerial(out uint worldSerial) || !bridge.TryReadLivenessEpoch(out uint nativeEpoch))
+        if (bridge.IsWorldBetweenLives || !bridge.TryReadWorldLoadSerial(out uint worldSerial)
+            || !bridge.TryReadLivenessEpoch(out uint nativeEpoch) || nativeEpoch == 0)
         {
             bridge.TryWriteCreatureLiveness([]);
             return;
         }
         if (!bridge.TryReadCurrentModule(out string currentModule) || ModuleNameGuard.IsFallbackModuleName(currentModule))
+        {
+            bridge.TryWriteCreatureLiveness([]);
+            return;
+        }
+        // Do not adopt an old epoch with a new module label during ordinary travel.
+        // That torn baseline would misclassify the following stable tick as a same-area load.
+        if (!bridge.TryReadWorldLoadSerial(out uint stableSerial) || stableSerial != worldSerial
+            || !bridge.TryReadLivenessEpoch(out uint stableEpoch) || stableEpoch != nativeEpoch
+            || !bridge.TryReadCurrentModule(out string stableModule)
+            || !string.Equals(currentModule, stableModule, StringComparison.OrdinalIgnoreCase))
         {
             bridge.TryWriteCreatureLiveness([]);
             return;
