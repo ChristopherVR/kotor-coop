@@ -268,7 +268,8 @@ public class TransitionMovieTests
         // 128 and relocate into a new region, block grown to 0x8600 — see
         // SharedBlock.Combat.cs and SharedBlock.TotalSize's own remarks.
         // 83 preserves per-peer damage attribution in the plugin mailbox.
-        Assert.Equal(95, int.Parse(version.Groups[1].Value));
+        // 96 binds enemy-effect capture/report/apply to native world and process provenance.
+        Assert.Equal(96, int.Parse(version.Groups[1].Value));
     }
 
     private static string RepositoryRoot(
