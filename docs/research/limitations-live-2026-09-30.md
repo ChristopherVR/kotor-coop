@@ -285,3 +285,10 @@ A regression selects the remaining contributor when the leading peer has1HP plus
 then covers zeroHP, inactive, away, minigame and genuine revival. All61 focused threat and
 phantom-target tests passed, and Plugin Release built with warnings treated as errors.
 The longer live fallback rerun remains outstanding.
+
+The frozen inactive-companion snapshot2ceeb10 (native89/wire82) passed all5366 fast tests
+and all116 Slow tests (9m16s), with clean warning-as-error native and managed publishes.
+Its exact recruitment-template hook and occupant generation fencing are implementation
+coverage; live BoS replacement verification is tracked separately. Active replacements
+are deliberately held in this snapshot, including after a load; save-transfer identity
+binding is the next implementation step and is not credited to89/82.
