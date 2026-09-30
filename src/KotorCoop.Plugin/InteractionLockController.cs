@@ -361,6 +361,8 @@ internal sealed unsafe partial class InteractionLockController(SharedBlockView b
         if (closeSerial != 0 && closeSerial != _seenCloseSerial)
         {
             _seenCloseSerial = closeSerial;
+            _seenAttemptSerial = ContainerUseAttemptRule.ConsumeClosedAttempt(_seenAttemptSerial,
+                attemptId, serial, closedId, closeAttemptSerial);
             // Do not interpret a stale canonical reopen as completion of the
             // older use attempt that the player already closed. A genuinely
             // later local OpenInventory has a new attempt serial and proceeds.
@@ -373,7 +375,7 @@ internal sealed unsafe partial class InteractionLockController(SharedBlockView b
                 _localContainerId = 0;
             }
         }
-        if (serial != 0 && serial != _seenAttemptSerial)
+        if (ContainerUseAttemptRule.IsUnseen(serial, _seenAttemptSerial))
         {
             _seenAttemptSerial = serial;
             if (attemptId != 0 && attemptId != _localContainerId)
