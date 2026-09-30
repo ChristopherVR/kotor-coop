@@ -59,7 +59,7 @@ public sealed partial class CoopCommandDispatcher
             return;
         }
 
-        if (!_sessionSaveWatch.CaptureNowWritten(source, out string? outcome))
+        if (!_sessionSaveWatch.CaptureVerifiedRefreshSource(source!, out string outcome))
         {
             if (outcome is not null) Log?.Invoke(outcome);
             Reply("reconnect world cancelled: could not capture your freshly saved character; session left connected");

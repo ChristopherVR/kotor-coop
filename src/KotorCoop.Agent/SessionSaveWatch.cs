@@ -273,6 +273,28 @@ public sealed class SessionSaveWatch(string gameDirectory, Func<DateTime>? utcNo
         return result == CharacterCapture.Written;
     }
 
+    /// <summary>Re-extracts a source the manual refresh caller has verified against the
+    /// current loaded world. A periodic capture may already have written the same character;
+    /// its later sidecar timestamp is not a reason to reject this exact archive. Preserve
+    /// connection provenance and require unchanged archive/resources throughout extraction.</summary>
+    public bool CaptureVerifiedRefreshSource(string source, out string outcome)
+    {
+        FileInfo archive = new(Path.Combine(source, "SAVEGAME.sav"));
+        if (!archive.Exists || StagedSave.IsStagedCopy(SavesDirectory, source)
+            || _connectedSinceUtc != DateTime.MinValue && archive.LastWriteTimeUtc < _connectedSinceUtc
+            || !ClientCharacterPersistence.TryHashSave(source, out string hash, out long length))
+        {
+            outcome = "manual refresh character NOT captured: source is missing, staged, predates this connection or cannot be fingerprinted";
+            return false;
+        }
+
+        bool captured = ClientCharacterPersistence.TryCaptureVerifiedLoadSource(
+            SavesDirectory, source, hash, length, _sessionBaselineIdentity,
+            allowStagedDirectory: false, out string diagnostic);
+        outcome = $"manual refresh character{(captured ? string.Empty : " NOT")} captured: {diagnostic}";
+        return captured;
+    }
+
     /// <summary>Captures only the directory proven by a fresh, completed own-load request.
     /// This deliberately bypasses the ordinary newest-save and staged-copy rules because the
     /// provenance plus unchanged archive fingerprint establishes that this staged directory

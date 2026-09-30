@@ -9,6 +9,17 @@ namespace KotorCoop.Tests;
 public sealed class PlaceableLocalChangeTests
 {
     [Theory]
+    [InlineData(false, 0, 0, 0, 0, true)] // first close must survive a matching baseline
+    [InlineData(true, 0, 0, 1, 0, true)] // re-lock after published close
+    [InlineData(true, 1, 0, 0, 0, true)] // unlock after published close
+    [InlineData(true, 0, 1, 0, 0, true)] // independent disarm
+    [InlineData(true, 0, 0, 0, 0, false)] // stale reopen alone is suppressed
+    public void PendingOpenEdgeCannotSwallowIndependentChanges(bool published, byte oldLocked,
+        byte oldTrapped, byte locked, byte trapped, bool expected)
+    {
+        Assert.Equal(expected, PlaceableLocalChangeRule.ShouldPublish(published, oldLocked, oldTrapped, locked, trapped));
+    }
+    [Theory]
     [InlineData(2, 1, 0, 0)] // real close, then a genuine newer re-lock
     [InlineData(0, 0, 0, 2)] // real close, then a genuine newer unlock
     [InlineData(7, 1, 0, 1)] // real open, then newer lock/disarm

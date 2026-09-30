@@ -421,6 +421,51 @@ public sealed class SessionSaveWatchTests : IDisposable
         Assert.Contains("captured", second, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void VerifiedManualRefreshRecapturesExactOwnSaveAlreadyCapturedByPeriodicWatch()
+    {
+        string game = TempDirectory();
+        string saves = Path.Combine(game, "saves");
+        Directory.CreateDirectory(saves);
+        string source = Path.Combine(saves, "Co-op");
+        Directory.Move(BuildSave("Consular's own character"), source);
+        SessionSaveWatch watch = new(game, () => DateTime.UtcNow.AddMinutes(-1));
+        watch.ObserveClient(123, source);
+        Assert.True(watch.CaptureNowWritten(source, out _));
+        Assert.False(watch.CaptureNowWritten(source, out _));
+        Assert.True(PlayerIfo.TryExtractPlayer(source, out GffStruct expected, out _));
+        // A different retained sidecar must not be accepted merely because it is newer.
+        GffWriter unrelated = new("UTC ");
+        unrelated.Root.SetLocString("FirstName", -1, (0, "Host's character"));
+        Assert.True(ClientCharacterPersistence.TryWriteSidecar(saves,
+            Gff.Parse(unrelated.ToBytes()).Root, 123, DateTime.UtcNow, out _));
+
+        Assert.True(watch.CaptureVerifiedRefreshSource(source, out _));
+        Assert.True(ClientCharacterPersistence.TryReadSidecar(saves, out GffStruct actual, out _, out _));
+        Assert.Equal(PlayerIfo.BuildPifo(expected), PlayerIfo.BuildPifo(actual));
+        Assert.Equal("Consular's own character", actual.GetLocString("FirstName")!.Text());
+    }
+
+    [Fact]
+    public void VerifiedManualRefreshStillRejectsSaveFromBeforeThisConnection()
+    {
+        string game = TempDirectory();
+        Directory.CreateDirectory(Path.Combine(game, "saves"));
+        string source = Path.Combine(game, "saves", "Co-op");
+        Directory.Move(BuildSave("Old character"), source);
+        SessionSaveWatch watch = new(game, () => DateTime.UtcNow.AddMinutes(1));
+        watch.ObserveClient(123, source);
+        Assert.False(watch.CaptureVerifiedRefreshSource(source, out _));
+        Assert.False(ClientCharacterPersistence.TryReadSidecar(Path.Combine(game, "saves"), out _, out _, out _));
+    }
+
+    [Fact]
+    public void VerifiedManualRefreshRejectsSourceOutsideOwnSavesFolder()
+    {
+        SessionSaveWatch watch = new(TempDirectory());
+        Assert.False(watch.CaptureVerifiedRefreshSource(BuildSave("Wrong install"), out _));
+    }
+
     // ---- helpers --------------------------------------------------------------
 
     private string BuildSave(string name)

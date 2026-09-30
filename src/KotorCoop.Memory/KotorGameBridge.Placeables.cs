@@ -118,9 +118,12 @@ public sealed partial class KotorGameBridge
                 // The retained event authors only the open/close edge. A later
                 // story lock or disarm is independent and must use its current
                 // native value, rather than the earlier interaction's tuple.
-                _placeableShadow[objectId] = (localOpen, locked, trapped);
-                if (!local.Published)
+                (byte Open, byte Locked, byte Trapped) prior = _placeableShadow.GetValueOrDefault(objectId, (localOpen, locked, trapped));
+                bool publish = PlaceableLocalChangeRule.ShouldPublish(local.Published,
+                    prior.Locked, prior.Trapped, locked, trapped);
+                if (publish)
                 {
+                    _placeableShadow[objectId] = (localOpen, locked, trapped);
                     byte authored = PlaceableLocalChangeRule.MergeOpenWithCurrentState(local.Value, locked, trapped);
                     bool disarmed = (authored & 4) == 0 && _placeableBaselineTrapped.GetValueOrDefault(objectId) != 0;
                     changed.Add(new(PlaceableFlags.MakeKey(_placeableModuleHash, objectId),

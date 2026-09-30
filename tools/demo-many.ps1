@@ -83,8 +83,12 @@ function Set-Key([string]$directory,[string]$key,[string]$value) {
     $text = [regex]::IsMatch($text,$pattern) ? [regex]::Replace($text,$pattern,"$key = $value") : ($text.TrimEnd() + "`n$key = $value`n")
     [IO.File]::WriteAllText($path,$text)
 }
-function Own-Process($process) {
-    $script:rig.Processes += @{ Id=$process.Id; StartTicks=$process.StartTime.ToUniversalTime().Ticks; Path=$process.Path }
+function Own-Process($process, [string]$expectedPath = '') {
+    # The shell's freshly started Process can transiently report a null Path.
+    # Retain the exact executable we launched so scoped cleanup still validates it.
+    $ownedPath = $expectedPath ? [IO.Path]::GetFullPath($expectedPath) : $process.Path
+    if (!$ownedPath) { throw 'Cannot record an owned process without its executable path.' }
+    $script:rig.Processes += @{ Id=$process.Id; StartTicks=$process.StartTime.ToUniversalTime().Ticks; Path=$ownedPath }
     Save-State
 }
 function Start-Agent([string[]]$arguments,[string]$label,[switch]$Wait) {
@@ -92,7 +96,7 @@ function Start-Agent([string[]]$arguments,[string]$label,[switch]$Wait) {
     $quoted = @($arguments | ForEach-Object { '"' + $_.Replace('"','\"') + '"' })
     $out = Join-Path $WorkDir ($label + '.stdout.log'); $err = Join-Path $WorkDir ($label + '.stderr.log')
     $worker = Start-Process -FilePath $agent -ArgumentList $quoted -WorkingDirectory $repo -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError $err -PassThru
-    Own-Process $worker
+    Own-Process $worker $agent
     if ($Wait) {
         if (!$worker.WaitForExit(210000)) { throw "$label timed out; see $out" }
         if ($worker.ExitCode -ne 0) { throw "$label failed: $([IO.File]::ReadAllText($err))" }
