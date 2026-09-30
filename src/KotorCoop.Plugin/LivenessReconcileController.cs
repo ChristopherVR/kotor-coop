@@ -114,35 +114,36 @@ internal sealed unsafe class LivenessReconcileController(SharedBlockView block, 
             return;
         }
 
+        uint sequence = block.LivenessPublishSequence;
+        if (!BankCurrent(sequence)) return;
         uint count = Math.Min(block.LivenessCount, (uint)SharedBlock.LivenessCapacity);
+        if (!BankCurrent(sequence)) return;
         if (count == 0)
         {
             return;
         }
 
         int actionsLeft = MaxActionsPerPass;
-        uint sequence = block.LivenessPublishSequence;
-        if (!BankCurrent(sequence)) return;
 
         for (int i = 0; i < count && actionsLeft > 0; i++)
         {
             LivenessView entry = block.GetLiveness(i);
             if (!BankCurrent(sequence)) return;
-            if (Apply(entry))
+            if (Apply(entry, sequence))
             {
                 actionsLeft--;
             }
         }
     }
 
-    private bool BankCurrent(uint sequence) => block.LivenessPublishSequence == sequence
-        && LivenessBankRule.CanRead(sequence, block.LivenessExpectedWorldSerial, block.WorldLoadSerial,
+    private bool BankCurrent(uint sequence) => LivenessBankRule.IsSamePublication(sequence, block.LivenessPublishSequence,
+            block.LivenessExpectedWorldSerial, block.WorldLoadSerial,
             block.LivenessExpectedEpoch, block.LivenessNativeEpoch);
 
     /// <summary>Returns true when this entry spent a dispatch (kill or destroy) from the
     /// pass's budget; false for every other outcome — nothing to do, or an anomaly, which is
     /// a log line and a counter bump, never an engine call.</summary>
-    private bool Apply(LivenessView entry)
+    private bool Apply(LivenessView entry, uint sequence)
     {
         if (entry.ObjectId == 0 || entry.ObjectId == Odyssey.ObjectInvalid)
         {
@@ -216,6 +217,7 @@ internal sealed unsafe class LivenessReconcileController(SharedBlockView block, 
         switch (action)
         {
             case LivenessAction.Kill:
+                if (!BankCurrent(sequence)) return false;
                 // The owner's own gate for a plot creature (module rule: un-killable) is
                 // enforced above via localPlot, exactly like Apply's plot check does for the
                 // ordinary census path — LivenessRule.Decide already folds that in.
@@ -230,6 +232,7 @@ internal sealed unsafe class LivenessReconcileController(SharedBlockView block, 
                 return true;
 
             case LivenessAction.Destroy:
+                if (!BankCurrent(sequence)) return false;
                 if (Odyssey.DestroyObjectById(effectiveId, out int failure))
                 {
                     // Remember it on SUCCESS only, mirroring CombatController.KillOnce's own

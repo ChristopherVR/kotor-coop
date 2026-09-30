@@ -24,4 +24,14 @@ public sealed class LivenessBankTests
         Assert.True(SharedBlock.OffsetLivenessNativeEpoch + 4 <= SharedBlock.OffsetLocalPlaceableChanges);
         Assert.True(SharedBlock.OffsetLivenessNativeEpoch + 4 <= SharedBlock.TotalSize);
     }
+
+    [Fact]
+    public void ShorterPublicationBetweenSequenceCountAndActionReadsCannotExposeStaleTail()
+    {
+        const uint selectedBeforeCount = 2;
+        const uint shorterBankCommitted = 4;
+        Assert.True(LivenessBankRule.IsSamePublication(selectedBeforeCount, 2, 0, 0, 1, 1));
+        Assert.False(LivenessBankRule.IsSamePublication(selectedBeforeCount, shorterBankCommitted, 0, 0, 1, 1));
+        Assert.False(LivenessBankRule.IsSamePublication(selectedBeforeCount, 3, 0, 0, 1, 1));
+    }
 }

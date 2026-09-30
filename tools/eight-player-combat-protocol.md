@@ -33,7 +33,7 @@ stop and repair the fixture; do not attack a stale old ID or pretend the host ID
 2. One joiner at a time, issue `attack <verified-local-mirror-id>` through its CLI
    console. This invokes real engine attack actions/rolls; it does not apply synthetic
    damage. Limit each window to 15 seconds and stop immediately when that joiner's
-   host `AcceptedCumulative` rises. Always issue `attack 0` afterwards to clear the
+   host `AcceptedCumulative` rises. Always issue `attack stop` afterwards to clear the
    player's combat actions, including timeout/error paths. A miss is not a contribution;
    permit at most two bounded windows per joiner, then report incomplete coverage.
    Stop if host fixture base HP becomes nonpositive or health approaches exhaustion.
@@ -71,3 +71,4 @@ phantom; a diagnostic `Top` change is insufficient. Separately stage B downed an
 A's qualifying threat fresh to test fallback. This staging is not combat-damage proof.
 Retain snapshots of native target, mapped phantom HP, threat, accepted totals and health.
 Report threat coverage separately if safe commandable isolation cannot be established.
+
