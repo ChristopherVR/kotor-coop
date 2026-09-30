@@ -516,3 +516,20 @@ screen dimensions. The stock M-key map and HUD connection captions were readable
 without overlap. Evidence: `artifacts/final92-wipe/map1280x960.png`,
 `hud1280x960.png`, and that directory's README. Requested 1280x720 and 1920x1080
 configurations fell back to actual 800x600; they do not prove widescreen support.
+
+
+## Native95 queued-load intent fence — controlled live checks
+
+An isolated native instance completed console New Game and published accepted intent
+generation2. Two deliberately delayed requests retaining generation0, one automatic
+and one manual, were acknowledged with refusal status10; load serial and native epoch
+did not advance. A fresh real Agent CLI manual load bound generation2 and loaded
+successfully. Evidence: `artifacts/newgame-intent-v95/game3`. This proves the native
+fence with controlled old-generation payloads, not a naturally timed network race.
+
+Separate native-only controls completed character creation with session Command1,
+and with both Command1 and the new-character capture genuinely Armed1. Actual
+admitted first-join retries currently stall inside class-preview rendering before
+accepted intent is published. Stopping the Agent after the stall did not release it.
+The first-join exemption therefore remains unproven end to end on Native95; the
+rendering issue is under investigation, without attribution to the intent fence.
