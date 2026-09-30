@@ -613,6 +613,10 @@ internal static unsafe partial class PluginHost
             Log($"load provenance NOT installed: {loadProvenanceDiagnostic}");
         }
 
+        Log(NewGameIntentHook.Install(_view!, out string newGameIntentDiagnostic)
+            ? $"new-game intent: {newGameIntentDiagnostic}"
+            : $"new-game intent NOT installed: {newGameIntentDiagnostic}");
+
         if (SaveFlushHook.Install(out string saveFlushDiagnostic))
         {
             Log($"save flush: {saveFlushDiagnostic}");

@@ -170,6 +170,10 @@ public sealed class SessionSaveWatch(string gameDirectory, Func<DateTime>? utcNo
             _ownLoadWatch = SerialEdgeWatchState.Initial;
             _ownClassifier.Reset();
 
+            // Adoption also changes the save digest observed by the generic capture watch.
+            // Consume that edge without capturing: the newest archive may still be the
+            // host's staged source, rather than a completed save of our grafted live PC.
+            (_watch, _) = SaveIdentityWatch.Observe(SaveIdentityWatchState.Initial, digestNow);
             (_ownClassifyWatch, _) = SaveIdentityWatch.Observe(_ownClassifyWatch, digestNow);
             if (loadSerialNow is { } serial)
             {

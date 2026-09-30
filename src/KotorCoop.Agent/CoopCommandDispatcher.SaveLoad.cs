@@ -297,6 +297,7 @@ public sealed partial class CoopCommandDispatcher
     /// after a session wipe, which neither classifier can see. Reset with the two above.</summary>
     private WipeRecoveryState _wipeRecoveryState = WipeRecoveryState.Initial;
     private bool _wipeTeardownWithoutOwnLoad;
+    private uint? _lastNewGameIntentGeneration;
 
     /// <summary>See <see cref="HostWorldReplacedRule"/> — a host load whose serial edge never
     /// found a digest change to correlate with (live 2026-09-02: an in-world reload of the
@@ -416,6 +417,25 @@ public sealed partial class CoopCommandDispatcher
     /// </summary>
     private void MaintainSessionSave()
     {
+        // Observe even without a session so a previous character creation cannot be
+        // mistaken for new intent when its eventual co-op connection opens.
+        if (_kotor is { } gameBridge && gameBridge.TryReadNewGameIntent(out NewGameIntent? newGameIntent))
+        {
+            uint generation = newGameIntent?.Generation ?? 0;
+            bool freshIntent = _lastNewGameIntentGeneration.HasValue
+                && _lastNewGameIntentGeneration.Value != generation && generation != 0;
+            _lastNewGameIntentGeneration = generation;
+            if (freshIntent && manager.Current is CoopClient)
+            {
+                // Stock chargen has no selected-save provenance. Keep the chosen new
+                // game and the existing co-op checkpoint; recovery must not interrupt it.
+                _skipNextDisconnectCapture = true;
+                Reply("new game selected - left co-op so character creation can continue; connect again when you are ready");
+                manager.Disconnect();
+                return;
+            }
+        }
+
         if (_sessionSaveWatch is null)
         {
             return;

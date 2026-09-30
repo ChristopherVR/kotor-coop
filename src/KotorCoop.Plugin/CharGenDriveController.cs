@@ -285,6 +285,7 @@ internal sealed unsafe class CharGenDriveController(SharedBlockView block)
         // is precisely OnSelectButton's own silent bail. It looked exactly like a bad
         // constructor argument and was not.
         AddPanel(guiManager, panel, ClassSelectionPanelLayer, 1);
+        NewGameIntentHook.PublishAccepted();
 
         // ⚠ After this the menu object is condemned; do not read `menu` again.
         *(uint*)(menu + MenuStateBits) = (*(uint*)(menu + MenuStateBits) & ~0x300u) | 0x400u;

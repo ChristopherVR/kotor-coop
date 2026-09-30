@@ -466,6 +466,28 @@ public sealed class SessionSaveWatchTests : IDisposable
         Assert.False(watch.CaptureVerifiedRefreshSource(BuildSave("Wrong install"), out _));
     }
 
+    [Fact]
+    public void AdoptedDigestDoesNotCaptureHostSourceOverOwnCharacter()
+    {
+        string own = BuildSave("Own character");
+        string host = BuildSave("Host character");
+        string game = TempDirectory();
+        SessionSaveWatch watch = new(game);
+        Assert.NotNull(watch.CaptureOnDisconnect(own));
+        Assert.Null(watch.ObserveClient(0x1111, null));
+        File.SetLastWriteTimeUtc(Path.Combine(host, "SAVEGAME.sav"), DateTime.UtcNow.AddSeconds(1));
+
+        watch.RebaseOwnVerdictAfterAdoptedLoad(0x2222, 8);
+        Assert.Null(watch.ObserveClient(0x2222, host));
+        Assert.True(ClientCharacterPersistence.TryReadSidecar(Path.Combine(game, "saves"), out GffStruct retained, out _, out _));
+        Assert.Equal("Own character", retained.GetLocString("FirstName")!.Text());
+
+        File.SetLastWriteTimeUtc(Path.Combine(own, "SAVEGAME.sav"), DateTime.UtcNow.AddSeconds(2));
+        Assert.NotNull(watch.ObserveClient(0x3333, own));
+        Assert.True(ClientCharacterPersistence.TryReadSidecar(Path.Combine(game, "saves"), out GffStruct saved, out _, out _));
+        Assert.Equal("Own character", saved.GetLocString("FirstName")!.Text());
+    }
+
     // ---- helpers --------------------------------------------------------------
 
     private string BuildSave(string name)
