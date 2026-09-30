@@ -212,6 +212,7 @@ internal static unsafe partial class PluginHost
         }
 
         NativeSaveCompletionHook.Block = BlockAddress;
+        NativeSaveCompletionHook.BeforeSerialization = BoundSaveSerializationParty;
         NativeSaveCompletionHook.Install(out string saveCompletionDiagnostic);
         Log(saveCompletionDiagnostic);
         PartyOccupantHook.PublicationBank = BlockAddress + SharedBlock.OffsetLocalPartyOccupants;

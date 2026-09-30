@@ -9,6 +9,7 @@ namespace KotorCoop.Plugin;
 internal static unsafe class NativeSaveCompletionHook
 {
     internal static nint Block = 0;
+    internal static Action? BeforeSerialization;
     private static bool _installed;
     private static readonly NativeSaveIoWatch Io = new();
     private static readonly byte[] Rows = new byte[9 * 24];
@@ -105,10 +106,7 @@ internal static unsafe class NativeSaveCompletionHook
             // stall event; controllers may have resumed since its request or
             // save-flush reissue. The later 4B36C5 party walk cannot tolerate
             // a member which GetCharacter no longer resolves.
-            if (_installed && Odyssey.TryBoundClientPartyCountByResolvable(
-                out int before, out int resolved, out string entries))
-                PluginHost.Log($"party count: bounded {before} -> {resolved} at save serialization "
-                    + $"(entries {entries}; StallEventSaveGame walks the array without a null check)");
+            if (_installed) BeforeSerialization?.Invoke();
             if(!_installed || Block==0 || !PartyOccupantHook.Installed)return;
             string path=ReadString(stall+0x18,128).Replace('\\','/');
             int colon=path.LastIndexOf(':'); if(colon>=0)path=path[(colon+1)..];

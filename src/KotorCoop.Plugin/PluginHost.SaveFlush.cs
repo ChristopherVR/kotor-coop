@@ -7,6 +7,13 @@ namespace KotorCoop.Plugin;
 // in PluginHost.Frame.cs.
 internal static unsafe partial class PluginHost
 {
+    private static void BoundSaveSerializationParty()
+    {
+        if (Odyssey.TryBoundClientPartyCountByResolvable(out int before, out int resolved, out string entries))
+            Log($"party count: bounded {before} -> {resolved} at save serialization "
+                + $"(entries {entries}; StallEventSaveGame walks the array without a null check)");
+    }
+
     private static readonly SaveFlushRule _saveFlush = new();
 
     /// <summary>The held request's arguments, replaced by a coalesced one (the latest wins).</summary>
