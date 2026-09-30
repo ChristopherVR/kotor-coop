@@ -339,6 +339,7 @@ see [personal-inventory.md](research/personal-inventory.md).
 | `delay_probe` | OFF | DIAGNOSTIC-only: install `DelayEventProbeHook`'s read-only splices, log-only | [minigames.md §24](research/minigames.md) |
 | `delay_probe_events` | OFF | DIAGNOSTIC-only, with `delay_probe`: also log every delayed-event enqueue/dispatch (high volume) | [minigames.md §24](research/minigames.md) |
 | `gui_probe` | OFF | DIAGNOSTIC-only: splice Show/HideSWInGameGui and watch `CGuiInGame+0x30`, log-only | [minigames.md §24](research/minigames.md) |
+| `gui_summary_watch` | OFF | diagnostic hardware write watch on the typed received-items summary flags; logs native writers without changing game state | [Leviathan recovery](research/leviathan-recovery-live-2026-10-01.md) |
 | `isolate_real_input` (added 2026-09-25) | OFF | RIG-only: drop every REAL keyboard/mouse input from reaching this game (DirectInput GetDeviceState/GetDeviceData answer neutral/empty; the plugin's own synthetic input via the `input`/`gamepad` console verbs still works) — for `tools/demo.ps1`/`demo3.ps1 -Isolated`, whose windows sit invisibly on the user's own monitor while they play something else. Never set by hand; the rig scripts write it for the run and restore `0` on `-Stop` | [isolated-rig.md](research/isolated-rig.md) |
 
 ## Debug / test-only keys
