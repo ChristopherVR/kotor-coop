@@ -96,6 +96,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.NewGameIntent.cs" Link="Plugin\SharedBlock.NewGameIntent.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlockView.NewGameIntent.cs" Link="Plugin\SharedBlockView.NewGameIntent.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\NewGameIntentStub.cs" Link="Plugin\NewGameIntentStub.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\NewGameLoadFenceRule.cs" Link="Plugin\NewGameLoadFenceRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\NativeSaveIoWatch.cs" Link="Plugin\NativeSaveIoWatch.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\NativeSaveCompletionHook.cs" Link="Plugin\NativeSaveCompletionHook.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.NativeSaveCompletion.cs" Link="Plugin\SharedBlock.NativeSaveCompletion.cs" />

@@ -2,6 +2,8 @@ namespace KotorCoop.Plugin;
 
 internal sealed unsafe partial class SharedBlockView
 {
+    public uint NewGameIntentGeneration => *U32(SharedBlock.OffsetNewGameIntent);
+    public uint MenuLoadNewGameGeneration => *U32(SharedBlock.OffsetMenuLoadNewGameGeneration);
     public void PublishNewGameIntent(long requestedAtTick)
     {
         byte* bank=Base+SharedBlock.OffsetNewGameIntent;

@@ -133,6 +133,18 @@ internal sealed unsafe partial class MenuLoadController(SharedBlockView block)
             return;
         }
 
+        // Before either engine entry, a selected New Game revokes every older queued
+        // request, including a hand-typed load. Once phase 2 entered the engine its
+        // chronological load already started; this is not an attempt to undo it.
+        if (!_pumping && !NewGameLoadFenceRule.MayStart(block.MenuLoadNewGameGeneration,block.NewGameIntentGeneration))
+        {
+            _panel=0;
+            block.MenuLoadStatus=10;
+            block.MenuLoadApplied=serial;
+            PluginHost.Log($"menu: request #{serial} refused because New Game intent changed before load entry");
+            return;
+        }
+
         if (serial != _staleCheckedSerial)
         {
             _staleCheckedSerial = serial;

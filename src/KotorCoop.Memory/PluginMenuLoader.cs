@@ -280,6 +280,14 @@ public static class PluginMenuLoader
             return false;
         }
 
+        // Capture intent before any request writes; New Game may invalidate this request
+        // even if its manual/stall flag would otherwise permit it.
+        if (!memory.TryReadUInt32(block + 0xC400,out uint newGameGeneration) || (newGameGeneration&1)!=0)
+        {
+            diagnostic="could not read coherent New Game intent";
+            return false;
+        }
+
         // The module the staged save stands in; the engine's LoadModule needs the name.
         string savesDirectory = stagedSaveDirectory ?? string.Empty;
         try
@@ -330,6 +338,13 @@ public static class PluginMenuLoader
         if (!memory.TryWrite(block + BlockMenuLoadManualIntent, manualIntent ? 1u : 0u))
         {
             diagnostic = "could not write the manual request intent";
+            return false;
+        }
+
+        if (!memory.TryWrite(block+0xC418,newGameGeneration)
+            || !memory.TryReadUInt32(block+0xC400,out uint newGameAfter) || newGameAfter!=newGameGeneration)
+        {
+            diagnostic="New Game intent changed while preparing the load request";
             return false;
         }
 

@@ -127,6 +127,12 @@ switch ($Command) {
             WU32 0x3F24 1
             # Raw probes model automatic requests; never inherit an earlier typed load.
             WU32 0x8634 0
+            if ($version -ge 95) {
+                $intent = U32 0xC400
+                if (($intent -band 1) -ne 0) { throw 'New Game intent is being published; request not filed.' }
+                WU32 0xC418 $intent
+                if ((U32 0xC400) -ne $intent) { throw 'New Game intent changed; request not filed.' }
+            }
             WU32 0x9A4 ((U32 0x9A4) + 1)
             "mid-session load request filed: serial $(U32 0x9A4)"
         }

@@ -7,6 +7,16 @@ namespace KotorCoop.Tests;
 
 public sealed class NewGameIntentTests
 {
+    [Theory]
+    [InlineData(0u,0u,true)]
+    [InlineData(2u,2u,true)]
+    [InlineData(0u,2u,false)]
+    [InlineData(2u,4u,false)]
+    [InlineData(2u,3u,false)]
+    [InlineData(3u,3u,false)]
+    public void OldQueuedLoadsCannotOverwriteAcceptedNewGameEvenWhenManual(uint expected,uint current,bool allowed)
+        => Assert.Equal(allowed,NewGameLoadFenceRule.MayStart(expected,current));
+
     [Fact]
     public void AcceptedStockSplicePreservesRegistersFlagsAndOriginalAbsoluteRead()
     {
@@ -48,6 +58,8 @@ public sealed class NewGameIntentTests
             Assert.Equal(5678,intent.RequestedAtTick);
             Assert.True(SharedBlock.OffsetNativePartyLoadProof+SharedBlock.NativePartyLoadProofSize<=SharedBlock.OffsetNewGameIntent);
             Assert.True(SharedBlock.OffsetNewGameIntent+SharedBlock.NewGameIntentSize<=SharedBlock.TotalSize);
+            Assert.Equal(SharedBlock.OffsetNewGameIntent+SharedBlock.NewGameIntentSize,SharedBlock.OffsetMenuLoadNewGameGeneration);
+            Assert.True(SharedBlock.OffsetMenuLoadNewGameGeneration+4<=SharedBlock.TotalSize);
             Assert.Equal(0,SharedBlock.OffsetNewGameIntent%8);
         }
         finally { Marshal.FreeHGlobal(block); }
