@@ -57,10 +57,11 @@ public class InputIsolationRuleTests
         Assert.True(InputIsolationRule.ShouldNeutralizeMouseState(isolate: true, size: 0x10));
         Assert.False(InputIsolationRule.ShouldNeutralizeMouseState(isolate: false, size: 0x10));
 
-        // DIMOUSESTATE2 (0x14, 8 buttons) or any other size is not the shape this engine ever
-        // requests (mouse-cursor-input.md: c_dfDIMouse, cbData 0x10) - leave it alone rather
-        // than guess at an unrecognised shape.
-        Assert.False(InputIsolationRule.ShouldNeutralizeMouseState(isolate: true, size: 0x14));
+        // Both documented mouse layouts carry three LONG axes; the extended one has eight
+        // buttons. Unknown formats still pass through.
+        Assert.True(InputIsolationRule.ShouldNeutralizeMouseState(isolate: true, size: 0x14));
+        Assert.False(InputIsolationRule.ShouldNeutralizeMouseState(isolate: false, size: 0x14));
+        Assert.False(InputIsolationRule.ShouldNeutralizeMouseState(isolate: true, size: 0x100));
         Assert.False(InputIsolationRule.ShouldNeutralizeMouseState(isolate: true, size: 0));
     }
 }

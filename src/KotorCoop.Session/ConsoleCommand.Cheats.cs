@@ -619,6 +619,8 @@ public static partial class ConsoleCommand
         "  usedoor [tag|id]            walk through a transition door (nearest by default)",
         "  crossdoor [tag|id]          cross a transition door without walking (when usedoor stalls)",
         "  opendoor [tag|id]           open an ordinary door (nearest by default)",
+        "  closedoor [tag|id]          dev: close an ordinary door through the engine",
+        "  setlock <id> on|off         dev: change a real door/container lock",
         "items:",
         "  drop <0xid|resref> [n]      drop one of YOUR items (or n of a stack) for your partner;",
         "                              quest items stay shared (F2 in the agent window picks)",

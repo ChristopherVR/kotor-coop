@@ -5,6 +5,18 @@ namespace KotorCoop.Plugin;
 // death handling and one-shot animations. See SharedBlock.cs for the struct header.
 internal partial struct SharedBlock
 {
+    // v83: one complete, sequenced per-peer damage publication. 8 peers x 128 enemies.
+    /// <summary>Version 86: native damage process incarnation, stable across module resets.</summary>
+    public const int OffsetDamageDealtIncarnation = 0xB980;
+
+    public const int OffsetAttributedDamageSequence = 0x8700;
+    public const int OffsetAttributedDamageEpoch = 0x8704;
+    public const int OffsetAttributedDamageCount = 0x8708;
+    public const int OffsetAttributedDamageWorldSerial = 0x870C;
+    public const int OffsetAttributedDamageSlots = 0x8710;
+    public const int AttributedDamageCapacity = SlotCapacity * DamageLedgerCapacity;
+    public const int AttributedDamageStride = 12;
+
     // ---- enemy replication (version 3) -----------------------------------------
     //
     // The peer that owns enemies publishes their health; every other instance mirrors it

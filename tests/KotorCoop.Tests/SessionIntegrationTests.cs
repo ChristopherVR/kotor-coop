@@ -763,6 +763,91 @@ public class SessionIntegrationTests
     }
 
     [Fact]
+    public async Task DamageIncarnationMustMatchAdmissionAndOldRunCannotReturn()
+    {
+        using CoopHost host = new(new SessionSettings { Port = 0, TickRate = 30 });
+        using UdpChannel peer = new(0), stranger = new(0);
+        using CancellationTokenSource cts = new(Timeout + TimeSpan.FromSeconds(10));
+        Task hostTask = host.RunAsync(cts.Token);
+        IPEndPoint endpoint = new(IPAddress.Loopback, host.ListenEndPoint.Port);
+        byte[] buffer = new byte[ProtocolConstants.MaxPacketSize];
+        void Hello(uint incarnation)
+        {
+            int length = PacketCodec.Write(buffer, new HelloPacket("raw", "end_m01aa", 12345,
+                default, 0, DamageIncarnation: incarnation));
+            peer.Send(endpoint, buffer.AsSpan(0, length));
+        }
+        void Damage(uint incarnation, uint generation, uint amount, UdpChannel? sender = null)
+        {
+            int length = PacketCodec.Write(buffer, new EnemyDamagePacket(2, "end_m01aa", generation,
+                [new(0x14, amount)], incarnation));
+            (sender ?? peer).Send(endpoint, buffer.AsSpan(0, length));
+        }
+        try
+        {
+            Assert.True(await WaitForAsync(() => host.GetStats().PeerCount == 1, Timeout, () => Hello(100)));
+            Assert.True(await WaitForAsync(() => host.GetEnemyDamage("end_m01aa").Any(d => d.Incarnation == 100 && d.Generation == 2), Timeout, () => Damage(100, 2, 3)));
+            // Never-seen generation1 and unannounced incarnation200 are both stale/unbound,
+            // even when sent from the genuine admitted endpoint with the right stable ID.
+            for (int pass=0; pass<8; pass++)
+            {
+                Damage(100, 1, 10);
+                Damage(200, 1, 20);
+                await Task.Delay(35);
+                Assert.All(host.GetEnemyDamage("end_m01aa"), d => { Assert.Equal(100u, d.Incarnation); Assert.Equal(2u, d.Generation); });
+            }
+            // A new admitted native process may restart its generation at1.
+            Assert.True(await WaitForAsync(() => host.GetEnemyDamage("end_m01aa").Count == 0, Timeout, () => Hello(200)));
+            Assert.True(await WaitForAsync(() => host.GetEnemyDamage("end_m01aa").Any(d => d.Incarnation == 200 && d.Generation == 1), Timeout, () => Damage(200, 1, 3)));
+            for (int pass=0; pass<8; pass++)
+            {
+                Damage(100, 3, 30);
+                Hello(100); // delayed retired admission must not rebind the peer backwards
+                Damage(200, 2, 40, stranger); // a different endpoint cannot impersonate it
+                await Task.Delay(35);
+                Assert.All(host.GetEnemyDamage("end_m01aa"), d => { Assert.Equal(200u, d.Incarnation); Assert.Equal(1u, d.Generation); Assert.Equal(3u, d.CumulativeDamage); });
+            }
+        }
+        finally { await cts.CancelAsync(); await hostTask; }
+    }
+
+    [Fact]
+    public async Task DelayedRetiredDamageGenerationCannotReplaceTheFreshRun()
+    {
+        using CoopHost host = new(new SessionSettings { Port = 0, TickRate = 30 });
+        using CoopClient client = new(new SessionSettings { TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+        using CancellationTokenSource cts = new(Timeout + TimeSpan.FromSeconds(10));
+        Task hostTask = host.RunAsync(cts.Token), clientTask = client.RunAsync(cts.Token);
+        PlayerState state = new(Vector3f.Zero, 0f, "end_m01aa", 100, 0);
+        void Publish(uint generation, uint total)
+        {
+            host.PublishLocalState(state);
+            client.PublishLocalState(state);
+            client.ReportEnemyDamage("end_m01aa", generation, [new(0x14, total)]);
+        }
+        try
+        {
+            Assert.True(await WaitForAsync(() => client.IsConnected, Timeout, () => Publish(9000, 10)));
+            Assert.True(await WaitForAsync(() => host.GetEnemyDamage("end_m01aa").Any(d => d.Generation == 9000), Timeout, () => Publish(9000, 10)));
+            Assert.True(await WaitForAsync(() => host.GetEnemyDamage("end_m01aa").Any(d => d.Generation == 9001), Timeout, () => Publish(9001, 3)));
+            // Keep delivering the retired generation for several actual UDP tick passes.
+            for (int pass = 0; pass < 12; pass++)
+            {
+                Publish(9000, 10);
+                await Task.Delay(35);
+                Assert.All(host.GetEnemyDamage("end_m01aa"), d => Assert.Equal(9001u, d.Generation));
+            }
+            Assert.True(await WaitForAsync(() => host.GetEnemyDamage("end_m01aa").Any(d => d.Generation == 9001 && d.CumulativeDamage == 5), Timeout, () => Publish(9001, 5)));
+        }
+        finally
+        {
+            await cts.CancelAsync();
+            await Task.WhenAll(hostTask, clientTask);
+        }
+    }
+
+    [Fact]
     public async Task ClientEnemyDamageReachesTheHost()
     {
         using CoopHost host = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });

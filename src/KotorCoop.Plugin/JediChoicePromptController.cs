@@ -196,7 +196,7 @@ internal sealed unsafe class JediChoicePromptController(SharedBlockView block)
 
     private void WatchPrompt()
     {
-        int node = Odyssey.GetDialogueNodeIndex();
+        int node = Odyssey.GetPrivateJediChoiceNodeIndex();
 
         if (node < 0)
         {

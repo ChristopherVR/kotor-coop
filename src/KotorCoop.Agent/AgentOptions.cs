@@ -406,7 +406,7 @@ public sealed record AgentOptions
 
                 case "--instance":
                     instance = int.TryParse(Next(), out int parsedInstance)
-                        ? Math.Clamp(parsedInstance, 1, 9)
+                        ? Math.Clamp(parsedInstance, 1, 99)
                         : instance;
                     break;
 
@@ -735,7 +735,7 @@ public sealed record AgentOptions
                                Strongly recommended: you cannot watch a console behind a
                                fullscreen game.
           --via-steam          launch through steam://rungameid/32370 instead of the exe
-          --instance <n>       co-op instance number (default 1). 2 and above start with a
+          --instance <n>       co-op instance number 1..99 (default 1). 2 and above start with a
                                per-instance mutex name so several copies of KOTOR run at
                                once, which the retail single-instance guard otherwise
                                refuses. Needs a DRM-free (GOG) build.

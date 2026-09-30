@@ -388,14 +388,22 @@ public static class SaveDigest
 
         try
         {
-            string quick = Path.Combine(gameDirectory, "saves", "000000 - QUICKSAVE");
-            FileInfo quickFile = new(Path.Combine(quick, "SAVEGAME.sav"));
             FileInfo stagedFile = new(Path.Combine(staged, "SAVEGAME.sav"));
-            if (quickFile.Exists && stagedFile.Exists
-                && quickFile.LastWriteTimeUtc > stagedFile.LastWriteTimeUtc)
+            DateTime newest = stagedFile.Exists ? stagedFile.LastWriteTimeUtc : DateTime.MinValue;
+            string latest = staged;
+            string saves = Path.Combine(gameDirectory, "saves");
+            foreach (string candidate in Directory.EnumerateDirectories(saves)
+                .Where(d => Path.GetFileName(d) == CoopSaveRedirect.QuickSaveFolder
+                    || CoopSaveSlot.IsCoopSlot(Path.GetFileName(d))))
             {
-                return quick;
+                FileInfo archive = new(Path.Combine(candidate, "SAVEGAME.sav"));
+                if (archive.Exists && archive.LastWriteTimeUtc > newest)
+                {
+                    newest = archive.LastWriteTimeUtc;
+                    latest = candidate;
+                }
             }
+            return latest;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
             or System.Security.SecurityException)

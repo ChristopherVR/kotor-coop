@@ -143,6 +143,20 @@ internal sealed unsafe partial class SharedBlockView
             *(slot + 0x05) != 0);
     }
 
+    public void AcknowledgeDoor(int index, byte value, byte sequence)
+    {
+        byte* slot = baseAddress + SharedBlock.OffsetDoorSlots
+            + (Clamp(index, SharedBlock.DoorCapacity) * SharedBlock.DoorSlotStride);
+        slot[6] = value;
+        slot[7] = sequence; // publish after the applied tuple
+    }
+
+    public void ClearDoorAcknowledgements()
+    {
+        for (int i = 0; i < SharedBlock.DoorCapacity; i++)
+            (baseAddress + SharedBlock.OffsetDoorSlots + i * SharedBlock.DoorSlotStride)[7] = 0;
+    }
+
 
     // ---- placeables -------------------------------------------------------------
 
@@ -164,6 +178,38 @@ internal sealed unsafe partial class SharedBlockView
             *(slot + 0x04) != 0,
             *(slot + 0x05) != 0,
             *(slot + 0x06) != 0);
+    }
+
+    public void AcknowledgePlaceable(int index, uint id, byte value, uint generation)
+    {
+        byte* row = baseAddress + SharedBlock.OffsetPlaceableAcknowledgements
+            + Clamp(index, SharedBlock.PlaceableCapacity) * SharedBlock.PlaceableAcknowledgementStride;
+        *(uint*)(row + 8) = 0;
+        *(uint*)(row + 4) = value;
+        *(uint*)row = id;
+        *(uint*)(row + 8) = generation;
+    }
+
+    public void ClearPlaceableAcknowledgements()
+    {
+        for (int i = 0; i < SharedBlock.PlaceableCapacity; i++)
+            *U32(SharedBlock.OffsetPlaceableAcknowledgements + i * SharedBlock.PlaceableAcknowledgementStride + 8) = 0;
+    }
+
+    public void PublishLocalPlaceableChange(int index, uint id, byte value, uint generation)
+    {
+        byte* row = baseAddress + SharedBlock.OffsetLocalPlaceableChanges
+            + Clamp(index, SharedBlock.PlaceableCapacity) * SharedBlock.LocalPlaceableChangeStride;
+        *(uint*)(row + 8) = 0;
+        *(uint*)(row + 4) = value;
+        *(uint*)row = id;
+        *(uint*)(row + 8) = generation;
+    }
+
+    public void ClearLocalPlaceableChanges()
+    {
+        for (int i = 0; i < SharedBlock.PlaceableCapacity; i++)
+            *U32(SharedBlock.OffsetLocalPlaceableChanges + i * SharedBlock.LocalPlaceableChangeStride + 8) = 0;
     }
 
 

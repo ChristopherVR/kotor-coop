@@ -6,6 +6,47 @@ namespace KotorCoop.Tests;
 
 public class ConsoleCommandTests
 {
+    [Theory]
+    [InlineData("closedoor", null)]
+    [InlineData("closedoor 0xC6", "0xC6")]
+    [InlineData("closedoor end_door01", "end_door01")]
+    public void CloseDoorAcceptsNearestTagOrId(string text, string? target)
+    {
+        CoopCommand command = ConsoleCommand.Parse(text);
+        Assert.Equal(CoopCommandKind.CloseDoor, command.Kind);
+        Assert.Equal(target, command.Address);
+    }
+
+    [Theory]
+    [InlineData("closedoor end_door01 extra")]
+    [InlineData("closedoor a/tag")]
+    public void CloseDoorRejectsMalformedTarget(string text)
+    {
+        Assert.Equal(CoopCommandKind.Invalid, ConsoleCommand.Parse(text).Kind);
+    }
+
+    [Theory]
+    [InlineData("setlock 0xC6 on", 1)]
+    [InlineData("setlock 0xC6 off", 0)]
+    public void SetLockRequiresExplicitIdAndState(string text, int state)
+    {
+        CoopCommand command = ConsoleCommand.Parse(text);
+        Assert.Equal(CoopCommandKind.SetLock, command.Kind);
+        Assert.Equal("0xC6", command.Address);
+        Assert.Equal(state, command.Amount);
+    }
+
+    [Theory]
+    [InlineData("setlock end_chest01 on")]
+    [InlineData("setlock 0 on")]
+    [InlineData("setlock 0xFFFFFFFF on")]
+    [InlineData("setlock 0xC6 maybe")]
+    [InlineData("setlock 0xC6 on extra")]
+    public void SetLockRejectsAmbiguousOrInvalidTargets(string text)
+    {
+        Assert.Equal(CoopCommandKind.Invalid, ConsoleCommand.Parse(text).Kind);
+    }
+
     [Fact]
     public void StartDialogRejectsTruncatedTagAndResourceButAcceptsObjectId()
     {

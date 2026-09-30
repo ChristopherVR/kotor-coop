@@ -175,6 +175,7 @@ public sealed partial class CoopCommandDispatcher(
                     // at which that is freshest.
                     MaintainSteamPresence();
                     PumpSteamJoinRequests();
+                    MaintainScriptWorldRefresh();
                     MaintainSessionSave();
                     PumpEnemyScalingPersistence();
                     MaintainWorldServing();
@@ -327,6 +328,8 @@ public sealed partial class CoopCommandDispatcher(
         [CoopCommandKind.UseDoor] = c => UseDoor(c.Address ?? string.Empty),
         [CoopCommandKind.CrossDoor] = c => CrossDoor(c.Address ?? string.Empty),
         [CoopCommandKind.OpenDoor] = c => OpenDoor(c.Address ?? string.Empty),
+        [CoopCommandKind.CloseDoor] = c => CloseDoor(c.Address ?? string.Empty),
+        [CoopCommandKind.SetLock] = c => SetLock(c.Address ?? string.Empty, c.Amount == 1),
         [CoopCommandKind.UsePlaceable] = c => UsePlaceable(c.Address ?? string.Empty),
         [CoopCommandKind.ClosePlaceable] = c => ClosePlaceable(c.Address ?? string.Empty),
         [CoopCommandKind.Who] = WhoCommand,

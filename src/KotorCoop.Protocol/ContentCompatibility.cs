@@ -198,7 +198,7 @@ public static class ContentCompatibility
                 & ~(SessionCapabilities.Phantoms | SessionCapabilities.Appearance);
             caps &= ~dropped;
             notes.Add(new CompatibilityNote(CompatibilityCode.Gameplay, dropped,
-                "gameplay mod files or recruitment profiles differ; shared world, dialogue, combat, party and item channels are off — install matching NPC and campaign content"));
+                "game archives, gameplay resources, media or recruitment profiles differ; shared world, dialogue, combat, party and item channels are off — install matching game and campaign content"));
         }
 
         // A peer that could fingerprint nothing (no game-file access) cannot be checked.

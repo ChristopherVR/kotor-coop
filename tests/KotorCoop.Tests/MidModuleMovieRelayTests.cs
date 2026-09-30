@@ -205,21 +205,9 @@ public class MidModuleMovieRelayTests
         Assert.True(SharedBlock.OffsetMidModuleMovieSerial >= SharedBlock.OffsetClientDoorRefusalArmed + 4);
         Assert.True(SharedBlock.OffsetMidModulePlayStatus + 4 <= SharedBlock.OffsetPeerEffectSerial);
 
-        // TotalSize did not grow to make room for THIS region (it grew later — to 0x4100 for
-        // the unrelated companion-equipment channel, see SharedBlock.cs's own version-54
-        // comment, then to 0x4700 for the item-template-spawn ring (version 58), then to 0x4800
-        // for that ring's own per-entry cheat flag (version 59, docs/research/
-        // party-pool-sync.md §20), then to 0x4B00 in one pass by the 2026-09-02 combat wave:
-        // N-slot local_combat's excluded-id array (61, 0x4800), per-attacker damage attribution
-        // (62, 0x4900) and the companion-damage channel (63, 0x4A00), then to 0x4C00 the same
-        // day for the materialised-owner-id table (65, 0x4B00), then to 0x4D00 on 2026-09-03
-        // for the galaxy-map departure relay (67, 0x4C00), then to 0x4F00 for v74's protocol-59
-        // acknowledged container-loot mailbox (0x4D00..0x4E3B), then to 0x5400 for v75's
-        // item-spawn provenance arrays, then to 0x5C00 for the 2026-09-24 wave (v76-78), then to
-        // 0x8600 for v80's "no cap really" pass (the enemy census/presence/materialised-owner/
-        // damage-ledger tables relocated to a new 0x6000 region, past v79's reserved
-        // 0x5C00..0x6000 gap) — see SharedBlock.TotalSize.
-        Assert.Equal(0x8700, SharedBlock.TotalSize);
+        // Later channels can extend the block without moving or overlapping this mailbox.
+        Assert.True(SharedBlock.OffsetMidModulePlayStatus + sizeof(uint) <= SharedBlock.OffsetAttributedDamageSequence);
+        Assert.True(SharedBlock.OffsetAttributedDamageSlots + SharedBlock.AttributedDamageCapacity * SharedBlock.AttributedDamageStride <= SharedBlock.TotalSize);
     }
 
     // ---- end-to-end through CoopAgent: dedup, same-module filter ----------------------

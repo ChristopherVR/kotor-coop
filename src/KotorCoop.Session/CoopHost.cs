@@ -23,6 +23,7 @@ public sealed partial class CoopHost : ICoopSession
         /// <summary>The client's stable nonce, so a peer that reconnects from a new port
         /// reclaims this slot instead of appearing as a second player.</summary>
         public required uint Nonce;
+        public uint DamageIncarnation;
 
         public PlayerState LastState = PlayerState.Empty;
         public long LastSeenMs;

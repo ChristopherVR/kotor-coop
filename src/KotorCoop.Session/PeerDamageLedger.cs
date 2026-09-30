@@ -44,10 +44,29 @@ public sealed class PeerDamageLedger
 {
     /// <summary>The last total seen from one peer for one enemy, and the generation it
     /// belonged to.</summary>
-    private readonly Dictionary<(uint Peer, uint ObjectId), (uint Generation, uint Total)> _seen = [];
+    private readonly Dictionary<(uint Peer, uint ObjectId), (uint Incarnation, uint Generation, uint Total)> _seen = [];
+    private readonly DamageGenerationWatch _generations = new();
 
     /// <summary>Everything every peer has ever dealt to one enemy, in this module.</summary>
     private readonly Dictionary<uint, uint> _owed = [];
+    private readonly Dictionary<(uint Peer, uint ObjectId), uint> _attributed = [];
+    public const int MaxPublishedEnemies = 128;
+
+    /// <summary>Accepted damage remains attributed across generations and reconnects.
+    /// Rows for the current aggregate publication come first, so every active fight fits.</summary>
+    public IReadOnlyList<PeerEnemyDamage> AttributedFor(IReadOnlyList<EnemyDamageEntry> enemies)
+    {
+        List<PeerEnemyDamage> result = [];
+        foreach (EnemyDamageEntry enemy in enemies.Take(MaxPublishedEnemies))
+        {
+            foreach (var row in _attributed)
+            {
+                if (row.Key.ObjectId == enemy.ObjectId)
+                    result.Add(new PeerEnemyDamage(row.Key.Peer, Epoch, enemy.ObjectId, row.Value));
+            }
+        }
+        return result;
+    }
 
     private string _module = string.Empty;
 
@@ -91,7 +110,8 @@ public sealed class PeerDamageLedger
 
         foreach (PeerEnemyDamage report in reports)
         {
-            if (report.ObjectId == 0)
+            if (report.ObjectId == 0 || !_generations.Bind(report.PeerId, report.Incarnation)
+                || !_generations.Observe(report.PeerId, report.Incarnation, report.Generation))
             {
                 continue;
             }
@@ -99,19 +119,21 @@ public sealed class PeerDamageLedger
             (uint Peer, uint ObjectId) key = (report.PeerId, report.ObjectId);
 
             uint previous = 0;
-            if (_seen.TryGetValue(key, out (uint Generation, uint Total) seen))
+            if (_seen.TryGetValue(key, out (uint Incarnation, uint Generation, uint Total) seen))
             {
                 // Same run of ids: only the rise is new. A different run means the peer
                 // started counting again, so everything it now reports is new damage.
-                previous = seen.Generation == report.Generation ? seen.Total : 0;
+                previous = seen.Incarnation == report.Incarnation && seen.Generation == report.Generation ? seen.Total : 0;
             }
-
-            _seen[key] = (report.Generation, report.CumulativeDamage);
 
             if (report.CumulativeDamage <= previous)
             {
+                // Keep the high-water mark: an older datagram followed by the current one
+                // must not bank the same rise again, for damage or for attributed threat.
                 continue;
             }
+
+            _seen[key] = (report.Incarnation, report.Generation, report.CumulativeDamage);
 
             uint delta = report.CumulativeDamage - previous;
 
@@ -128,6 +150,8 @@ public sealed class PeerDamageLedger
                 continue;
             }
 
+            uint attributed = _attributed.GetValueOrDefault(key);
+            _attributed[key] = delta > uint.MaxValue - attributed ? uint.MaxValue : attributed + delta;
             uint owed = OwedFor(report.ObjectId);
 
             // Saturating. A wrap would read as a reset on the plugin's side and hand the
@@ -191,7 +215,9 @@ public sealed class PeerDamageLedger
 
         _module = module;
         _seen.Clear();
+        _generations.Clear();
         _owed.Clear();
+        _attributed.Clear();
         Epoch = EpochOf(module);
     }
 

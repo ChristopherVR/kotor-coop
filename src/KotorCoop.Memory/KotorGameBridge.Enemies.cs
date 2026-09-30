@@ -414,6 +414,9 @@ public sealed partial class KotorGameBridge
     /// sum of damage dealt cannot be raced, because nothing ever reads it back out of the
     /// game.
     /// </summary>
+    public uint ReadDamageDealtIncarnation() => _pluginBlock != 0
+        && _memory.TryReadUInt32(_pluginBlock + 0xB980, out uint value) ? value : 0;
+
     public (uint Generation, List<EnemyDamageEntry> Damage) ReadDamageDealt()
     {
         List<EnemyDamageEntry> damage = [];
@@ -476,6 +479,29 @@ public sealed partial class KotorGameBridge
 
         _memory.TryReadUInt32(_pluginBlock + BlockDamageDealtDropped, out uint dropped);
         return dropped;
+    }
+
+    /// <summary>Publishes accepted per-peer totals under a sequence lock. A failed write leaves
+    /// an odd sequence, preventing partial damage application until the next complete pass.</summary>
+    public bool TryPublishAttributedDamageOwed(uint epoch, IReadOnlyList<PeerEnemyDamage> owed)
+    {
+        const int sequenceOffset = 0x8700, epochOffset = 0x8704, countOffset = 0x8708, worldSerialOffset = 0x870C;
+        const int slotsOffset = 0x8710, capacity = 8 * 128, stride = 12;
+        if (_pluginBlock == 0 || owed.Count > capacity || !TryReadWorldLoadSerial(out uint worldSerial)
+            || !_memory.TryReadUInt32(_pluginBlock + sequenceOffset, out uint sequence)) return false;
+        uint writing = (sequence + 1) | 1u;
+        if (!_memory.TryWrite(_pluginBlock + sequenceOffset, writing)) return false;
+        for (int i = 0; i < owed.Count; i++)
+        {
+            nint slot = _pluginBlock + slotsOffset + i * stride;
+            if (!_memory.TryWrite(slot, owed[i].PeerId)
+                || !_memory.TryWrite(slot + 4, owed[i].ObjectId)
+                || !_memory.TryWrite(slot + 8, owed[i].CumulativeDamage)) return false;
+        }
+        return _memory.TryWrite(_pluginBlock + epochOffset, epoch)
+            && _memory.TryWrite(_pluginBlock + worldSerialOffset, worldSerial)
+            && _memory.TryWrite(_pluginBlock + countOffset, (uint)owed.Count)
+            && _memory.TryWrite(_pluginBlock + sequenceOffset, writing + 1);
     }
 
     /// <summary>

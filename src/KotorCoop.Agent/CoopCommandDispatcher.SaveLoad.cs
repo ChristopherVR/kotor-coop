@@ -127,7 +127,8 @@ public sealed partial class CoopCommandDispatcher
     /// <summary>The client's periodic capture, one step per tick — see the section comment.</summary>
     private void MaintainPeriodicCapture(PlayerState? localState, long nowMs, string savesDirectory)
     {
-        if (_sessionSaveWatch is null || _ownLoadVerdictPending || _verifiedOwnLoadAwaitingRejoin)
+        if (_sessionSaveWatch is null || _ownLoadVerdictPending || _verifiedOwnLoadAwaitingRejoin
+            || _scriptSaveCapture is not null)
         {
             return;
         }
@@ -557,7 +558,7 @@ public sealed partial class CoopCommandDispatcher
             // saved since the last module change, live 2026-09-26: every re-adopt after an
             // agent restart failed "host has no save to share yet"). Save now, through the
             // same fresh-save path a solo return uses, so the joiner's retry finds it.
-            if (_hostFreshSaveWanted && !_hostReturnSavePending)
+            if (_hostFreshSaveWanted && !_hostReturnSavePending && !_scriptHostRefreshWanted)
             {
                 _hostFreshSaveWanted = false;
                 BeginHostReturnFreshSave(nowMs, _hostFreshSaveReason);
@@ -816,6 +817,10 @@ public sealed partial class CoopCommandDispatcher
                 // An unproven load may have replaced the live PC while newest-on-disk still
                 // belongs to a different save. Hold every automatic adoption path until a
                 // later confirmed own save captures the current character.
+            }
+            else if (_scriptSaveCapture is not null)
+            {
+                // The exact dedicated client save owns adoption until it settles.
             }
             else if (remoteVerdict == SaveOrLoadVerdict.Load
                 && HostWorldReplacedRule.IsHostReady(hostState, hostDigest.Module))
@@ -1209,7 +1214,7 @@ public sealed partial class CoopCommandDispatcher
     /// unreadable selected archive yields an unknown snapshot rather than raw partial bytes.</summary>
     private (IReadOnlyList<WorldFile> World, uint SaveIdentity) BuildWorldSnapshot(string gameDirectory)
     {
-        if (!_hostReturnSaveReady || _hostReturnSavePending)
+        if (!_hostReturnSaveReady || _hostReturnSavePending || _scriptHostRefreshWanted)
         {
             return ([], 0);
         }
@@ -1263,7 +1268,7 @@ public sealed partial class CoopCommandDispatcher
     /// currently holds as the character to bring in — <see cref="SessionSaveWatch.ObserveClient"/>
     /// already wrote it fresh this same tick for an own-load trigger.
     /// </summary>
-    private void TriggerRejoin(RejoinTrigger trigger, ICoopSession expectedSession)
+    private void TriggerRejoin(RejoinTrigger trigger, ICoopSession expectedSession, Action? onCompleted = null)
     {
         if (!OwnLoadCaptureSafetyRule.MayAutomaticallyAdopt(
                 _ownLoadCaptureRequiresConfirmedSave,
@@ -1291,6 +1296,7 @@ public sealed partial class CoopCommandDispatcher
             RejoinTrigger.SaveMismatch => AutoAdoptWorldEnabled,
             RejoinTrigger.SoloReturn => AutoAdoptWorldEnabled,
             RejoinTrigger.ManualWorldRefresh => true,
+            RejoinTrigger.ScriptWorldRefresh => AutoAdoptWorldEnabled,
             _ => false,
         };
 
@@ -1356,13 +1362,13 @@ public sealed partial class CoopCommandDispatcher
                 int maxAttempts = trigger switch
                 {
                     RejoinTrigger.SoloReturn => SoloReturnRejoinMaxAttempts,
-                    RejoinTrigger.HostReload or RejoinTrigger.SaveMismatch or RejoinTrigger.ManualWorldRefresh => HostReloadRejoinMaxAttempts,
+                    RejoinTrigger.HostReload or RejoinTrigger.SaveMismatch or RejoinTrigger.ManualWorldRefresh or RejoinTrigger.ScriptWorldRefresh => HostReloadRejoinMaxAttempts,
                     _ => 1,
                 };
                 TimeSpan retryDelay = trigger switch
                 {
                     RejoinTrigger.SoloReturn => TimeSpan.FromMilliseconds(SoloReturnRejoinRetryDelayMs),
-                    RejoinTrigger.HostReload or RejoinTrigger.SaveMismatch or RejoinTrigger.ManualWorldRefresh
+                    RejoinTrigger.HostReload or RejoinTrigger.SaveMismatch or RejoinTrigger.ManualWorldRefresh or RejoinTrigger.ScriptWorldRefresh
                         => TimeSpan.FromMilliseconds(HostReloadRejoinRetryDelayMs),
                     _ => TimeSpan.Zero,
                 };
@@ -1379,16 +1385,16 @@ public sealed partial class CoopCommandDispatcher
                         adoption = await manager
                         .RejoinAfterLoadAsync(
                             bridge, gameDirectory, carried, managerGeneration, cancellationToken,
-                            carriedIsAuthoritative: trigger is RejoinTrigger.SoloReturn or RejoinTrigger.OwnLoad or RejoinTrigger.ManualWorldRefresh
+                            carriedIsAuthoritative: trigger is RejoinTrigger.SoloReturn or RejoinTrigger.OwnLoad or RejoinTrigger.ManualWorldRefresh or RejoinTrigger.ScriptWorldRefresh
                                 || JoinModeSetting == JoinMode.Auto,
                             worldTransferUdpFallback: WorldTransferUdpFallbackEnabled,
-                            onHostWorldUnavailable: trigger is RejoinTrigger.HostReload or RejoinTrigger.SaveMismatch or RejoinTrigger.ManualWorldRefresh
+                            onHostWorldUnavailable: trigger is RejoinTrigger.HostReload or RejoinTrigger.SaveMismatch or RejoinTrigger.ManualWorldRefresh or RejoinTrigger.ScriptWorldRefresh
                                 ? () => hostWorldUnavailable = true
                                 : null)
                         .ConfigureAwait(false);
                         if (adoption is null && attempt < maxAttempts
                             && (trigger == RejoinTrigger.SoloReturn
-                                || trigger is RejoinTrigger.HostReload or RejoinTrigger.SaveMismatch or RejoinTrigger.ManualWorldRefresh
+                                || trigger is RejoinTrigger.HostReload or RejoinTrigger.SaveMismatch or RejoinTrigger.ManualWorldRefresh or RejoinTrigger.ScriptWorldRefresh
                                     && hostWorldUnavailable))
                         {
                             string reason = trigger switch
@@ -1413,7 +1419,7 @@ public sealed partial class CoopCommandDispatcher
                         && _rejoinState.Phase == RejoinPhase.InFlight,
                     rejoinCts.Token,
                     shouldRetryFailedAttempt: () =>
-                        trigger is not (RejoinTrigger.HostReload or RejoinTrigger.SaveMismatch or RejoinTrigger.ManualWorldRefresh) || hostWorldUnavailable)
+                        trigger is not (RejoinTrigger.HostReload or RejoinTrigger.SaveMismatch or RejoinTrigger.ManualWorldRefresh or RejoinTrigger.ScriptWorldRefresh) || hostWorldUnavailable)
                     .ConfigureAwait(false);
 
                 if (!adoptedSuccessfully || adoption is null)
@@ -1501,6 +1507,7 @@ public sealed partial class CoopCommandDispatcher
                             bridge.SaveIdentityDigest, adoptedLoadSerial);
 
                         bridge.ForgetWorldShadows();
+                        onCompleted?.Invoke();
                     }))
                 {
                     return;
@@ -1555,6 +1562,12 @@ public sealed partial class CoopCommandDispatcher
         if (string.IsNullOrEmpty(gameDirectory))
         {
             Reply("save <name> needs the game folder (not known on this connection); plain save still works");
+            return;
+        }
+
+        if (name.Equals(CoopSaveSlot.SlotLabel, StringComparison.OrdinalIgnoreCase))
+        {
+            RequestDedicatedCoopSave(quiet: false);
             return;
         }
 

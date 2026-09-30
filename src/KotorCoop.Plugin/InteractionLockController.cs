@@ -165,6 +165,7 @@ internal sealed unsafe partial class InteractionLockController(SharedBlockView b
     /// to guard against with a one-shot flag.
     /// </summary>
     private uint _lastClosedContainerId;
+    private uint _seenCloseSerial;
 
     private uint _seenBlockedCount;
     private long _containerNoticeUntilMs;
@@ -356,6 +357,22 @@ internal sealed unsafe partial class InteractionLockController(SharedBlockView b
     private void PollLocalContainerUse()
     {
         uint attemptId = ContainerUseHook.LatestAttempt(out uint serial);
+        uint closedId = ContainerCloseHook.LatestLocalClose(out uint closeSerial, out uint closeAttemptSerial);
+        if (closeSerial != 0 && closeSerial != _seenCloseSerial)
+        {
+            _seenCloseSerial = closeSerial;
+            // Do not interpret a stale canonical reopen as completion of the
+            // older use attempt that the player already closed. A genuinely
+            // later local OpenInventory has a new attempt serial and proceeds.
+            if (_pendingContainerId == closedId && serial == closeAttemptSerial)
+                _pendingContainerId = 0;
+            if (_localContainerActive && _localContainerId == closedId && serial == closeAttemptSerial)
+            {
+                _lastClosedContainerId = closedId;
+                _localContainerActive = false;
+                _localContainerId = 0;
+            }
+        }
         if (serial != 0 && serial != _seenAttemptSerial)
         {
             _seenAttemptSerial = serial;
@@ -373,6 +390,7 @@ internal sealed unsafe partial class InteractionLockController(SharedBlockView b
             {
                 _localContainerId = _pendingContainerId;
                 _localContainerActive = true;
+                PlaceableLocalChanges.Record(_localContainerId, true);
                 _pendingContainerId = 0;
             }
             else if (--_pendingFramesLeft <= 0)

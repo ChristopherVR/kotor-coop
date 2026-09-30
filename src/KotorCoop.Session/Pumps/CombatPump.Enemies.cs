@@ -124,9 +124,9 @@ internal sealed partial class CombatPump
             // the plugin needs to hear about a module change BEFORE the first damage in the
             // new module rather than after — otherwise it would spend the new totals against
             // the old module's applied figures, which name different creatures.
-            bridge.TryPublishDamageOwed(
-                _peerDamage.Epoch,
-                _peerDamage.Merge(censusModule, session.GetEnemyDamage(censusModule)));
+            IReadOnlyList<EnemyDamageEntry> owed = _peerDamage.Merge(censusModule, session.GetEnemyDamage(censusModule));
+            bridge.TryPublishDamageOwed(_peerDamage.Epoch, owed);
+            bridge.TryPublishAttributedDamageOwed(_peerDamage.Epoch, _peerDamage.AttributedFor(owed));
 
             if (_peerDamage.RefusedRises != _refusedRisesLogged)
             {

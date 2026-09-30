@@ -222,6 +222,8 @@ public sealed partial class CoopClient : ICoopSession
     /// to judge whether <see cref="_lineageSeed"/> names this same reconnect.</summary>
     private uint _hostSessionId;
 
+    public uint HostSessionId => _hostSessionId;
+
     /// <summary>
     /// This client's own <see cref="SaveLineage"/> checkpoint right now, or null before any
     /// agreement (including a freshly seeded one that has not yet had <see cref="_hostSessionId"/>
@@ -250,6 +252,7 @@ public sealed partial class CoopClient : ICoopSession
         // so a relaunch reclaims the slot instead of joining as a stranger; 0 keeps the old
         // per-session behaviour. See PeerIdentity.
         _nonce = settings.PeerIdentity != 0 ? settings.PeerIdentity : PeerIdentity.Mint();
+        _itemContinuation = ItemContinuationFile.Read(settings.ItemContinuationPath);
         _handlers = new Dictionary<PacketType, PacketHandler>
         {
             [PacketType.Welcome] = HandleWelcome,

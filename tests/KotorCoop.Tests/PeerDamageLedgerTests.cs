@@ -537,6 +537,82 @@ public class PeerDamageLedgerTests
         Assert.Equal(1u, agent.RefusedRises);
     }
 
+    [Fact]
+    public void RetiredGenerationCannotReplayDamageOrAttributedThreat()
+    {
+        PeerDamageLedger ledger = new();
+        ledger.Merge(Here, [new(2, 1, 0xE, 10)]);
+        ledger.Merge(Here, [new(2, 2, 0xE, 3)]);
+        ledger.Merge(Here, [new(2, 1, 0xE, 10), new(2, 1, 0xF, 9)]);
+        ledger.Merge(Here, [new(2, 2, 0xE, 3)]);
+        Assert.Equal(13u, ledger.OwedFor(0xE));
+        Assert.Equal(0u, ledger.OwedFor(0xF));
+        Assert.Equal(13u, Assert.Single(ledger.AttributedFor([new(0xE, 13)])).CumulativeDamage);
+    }
+
+    [Fact]
+    public void FreshProcessGenerationNeedNotBeNumericallyNewer()
+    {
+        PeerDamageLedger ledger = new();
+        ledger.Merge(Here, [new(2, 9000, 0xE, 10, 100)]);
+        ledger.Merge(Here, [new(2, 500, 0xE, 3, 200)]);
+        ledger.Merge(Here, [new(2, 9000, 0xE, 10, 100)]);
+        ledger.Merge(Here, [new(2, 500, 0xE, 5, 200)]);
+        Assert.Equal(15u, ledger.OwedFor(0xE));
+    }
+
+    [Fact]
+    public void GenerationCounterWrapDoesNotReopenItsRetiredPredecessor()
+    {
+        PeerDamageLedger ledger = new();
+        ledger.Merge(Here, [new(2, uint.MaxValue, 0xE, 10)]);
+        ledger.Merge(Here, [new(2, 0, 0xE, 3)]);
+        ledger.Merge(Here, [new(2, uint.MaxValue, 0xE, 10)]);
+        Assert.Equal(13u, ledger.OwedFor(0xE));
+    }
+
+    [Fact]
+    public void FreshNativeGameRunDoesNotReuseItsPredecessorsGeneration()
+    {
+        DamageDealtTable first = new(4), restarted = new(4);
+        Assert.NotEqual(0u, first.Generation);
+        Assert.NotEqual(0u, restarted.Generation);
+        Assert.NotEqual(first.Incarnation, restarted.Incarnation);
+        first.Add(0xE, 10);
+        restarted.Add(0xE, 3);
+        PeerDamageLedger ledger = new();
+        ledger.Merge(Here, [new(2, first.Generation, 0xE, 10, first.Incarnation)]);
+        // A network reconnect retains the exact native run and cumulative baseline.
+        ledger.Merge(Here, [new(2, first.Generation, 0xE, 10, first.Incarnation)]);
+        ledger.Merge(Here, [new(2, restarted.Generation, 0xE, 3, restarted.Incarnation)]);
+        ledger.Merge(Here, [new(2, first.Generation, 0xE, 10, first.Incarnation)]);
+        Assert.Equal(13u, ledger.OwedFor(0xE));
+    }
+
+    [Fact]
+    public void NeverSeenOlderGenerationCannotBecomeFreshDamage()
+    {
+        PeerDamageLedger ledger = new();
+        ledger.Merge(Here, [new(2, 2, 0xE, 3, 100)]);
+        ledger.Merge(Here, [new(2, 1, 0xE, 10, 100), new(2, 1, 0xF, 9, 100)]);
+        ledger.Merge(Here, [new(2, 2, 0xE, 5, 100)]);
+        Assert.Equal(5u, ledger.OwedFor(0xE));
+        Assert.Equal(0u, ledger.OwedFor(0xF));
+    }
+
+    [Fact]
+    public void DataCannotDeclareANewIncarnationWithoutAdmission()
+    {
+        DamageGenerationWatch watch = new();
+        Assert.True(watch.Bind(2, 100));
+        Assert.True(watch.Observe(2, 100, 2));
+        Assert.False(watch.Observe(2, 100, 1));
+        Assert.False(watch.Observe(2, 200, 1));
+        Assert.True(watch.Bind(2, 200));
+        Assert.True(watch.Observe(2, 200, 1));
+        Assert.False(watch.Bind(2, 100));
+    }
+
     private static uint TotalFor(DamageDealtTable table, uint objectId)
     {
         for (int i = 0; i < table.Capacity; i++)

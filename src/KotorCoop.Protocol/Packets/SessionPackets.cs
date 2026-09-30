@@ -20,7 +20,7 @@ namespace KotorCoop.Protocol;
 public sealed record HelloPacket(
     string PlayerName, string Module, uint ClientNonce, ContentDigest Digest, uint PasswordHash,
     BehaviourDigest Behaviour = default, uint LineageHostSessionId = 0, uint LineageHostLoad = 0,
-    uint LineageClientLoad = 0);
+    uint LineageClientLoad = 0, uint DamageIncarnation = 0);
 
 public sealed record WelcomePacket(
     uint AssignedPeerId, uint SessionId, byte TickRate, byte MaxPeers, ContentDigest Digest,

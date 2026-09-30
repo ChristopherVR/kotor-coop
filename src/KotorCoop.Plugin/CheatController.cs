@@ -263,6 +263,14 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
                 OpenDoor(player, playerId);
                 break;
 
+            case SharedBlock.CheatKindCloseDoor:
+                CloseDoor(player);
+                break;
+
+            case SharedBlock.CheatKindSetLock:
+                SetLock();
+                break;
+
             case SharedBlock.CheatKindGiveLoot:
                 GiveLoot();
                 break;
@@ -441,6 +449,10 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
 
             case SharedBlock.CheatKindQuickSave:
                 QuickSave();
+                break;
+
+            case SharedBlock.CheatKindCoopSave:
+                CoopSave();
                 break;
 
             case SharedBlock.CheatKindGalaxyMapOpen:

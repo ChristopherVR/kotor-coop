@@ -12,18 +12,18 @@ namespace KotorCoop.Plugin;
 /// roster lives (see <see cref="SharedBlock.OffsetMinigameLockActive"/> for why the direction
 /// is agent -> plugin and not the other way round). This class is engine reads/writes only.
 ///
-/// ⚠ INPUT LOCK IS BEST-EFFORT, and deliberately the SAME two levers
-/// <see cref="SoloSegmentSpectateController"/> already stacks — not a third invention:
+/// Native action locking uses the same two levers as
+/// <see cref="SoloSegmentSpectateController"/>:
 ///   * <c>creature+0xE8</c> (<see cref="Odyssey.ObjCommandable"/>) set to 0, the flag
 ///     <c>ClaimCreature</c> flips off for a claimed enemy;
 ///   * <see cref="Odyssey.HoldCreatureStill"/>, reasserted every pass, which clears a queued
 ///     MOVE-class head action (a click-to-move in flight) without touching a fight action.
-/// Neither has been watched stop a physical WASD press live, because injected keystrokes never
-/// reach this game (docs/live-verification.md) — so that half stays NEEDS-LIVE here exactly as
-/// it does there. What IS verifiable, and what this feature actually turns on, is the pair of
-/// consequences that matter more than the keyboard: the follow-warp onto the single-seat track
-/// is refused agent-side (<c>MinigameModuleRule</c>), and the waiting player is TOLD what is
-/// happening instead of standing in an unexplained frozen world.
+/// The native commandable flag does not stop real keyboard movement (live 2026-09-30).
+/// DirectInputKeyboardHook therefore suppresses gameplay key presses while IsLocked,
+/// releases keys already delivered, and discards queued presses without replay on unlock.
+/// The mouse device also drops movement and button state. Menus, dialogue, Escape, console
+/// and chat remain usable. The follow-warp onto the single-seat track is refused agent-side
+/// (<c>MinigameModuleRule</c>), and the waiting player is told what is happening.
 ///
 /// Defers to a live conversation and to the down-spectate camera for the same reason
 /// <see cref="SoloSegmentSpectateController"/> does: those two own the player's screen already,
@@ -137,6 +137,7 @@ internal sealed unsafe class MinigameLockController(SharedBlockView block)
         {
             _locked = true;
             IsLocked = true;
+            DirectInputKeyboardHook.DiscardGameplayQueuedInput();
             PluginHost.Log("minigame lock: a peer is racing — this player is held until it ends");
         }
 

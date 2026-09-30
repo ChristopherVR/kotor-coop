@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+
 namespace KotorCoop.Plugin;
 
 /// <summary>
@@ -24,8 +26,19 @@ internal sealed class DamageDealtTable
     {
         _id = new uint[capacity];
         _total = new uint[capacity];
+        // The stable peer identity survives a full game-process restart. A fresh
+        // process must not reuse its predecessor's damage namespace and high-water mark.
+        // Seed once outside the damage hook; subsequent module resets remain allocation-free.
+        Span<byte> seed = stackalloc byte[sizeof(uint)];
+        do
+        {
+            RandomNumberGenerator.Fill(seed);
+            Incarnation = BitConverter.ToUInt32(seed);
+        } while (Incarnation == 0);
         Generation = 1;
     }
+
+    public uint Incarnation { get; }
 
     public int Capacity => _id.Length;
 
@@ -35,7 +48,7 @@ internal sealed class DamageDealtTable
     public uint Dropped { get; private set; }
 
     /// <summary>
-    /// Which run of ids these totals belong to. Bumped by <see cref="Clear"/>.
+    /// Which run of ids these totals belong to within the stable process Incarnation. Bumped by <see cref="Clear"/>.
     ///
     /// ⚠ The owner needs this to tell a RESET from a stale datagram. Totals only ever grow,
     /// so the owner ignores a number smaller than the last one it saw — and without a

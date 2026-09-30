@@ -777,6 +777,11 @@ public static class CheatKinds
     /// <summary>`runscript <resref> [0xid]` - see <c>SharedBlock.CheatKindRunScript</c>.</summary>
     public const uint RunScript = 107;
 
+    /// <summary>Write the dedicated Co-op slot directly; Amount is its allocated save number.</summary>
+    public const uint CoopSave = 108;
+    public const uint CloseDoor = 109;
+    public const uint SetLock = 110;
+
     /// <summary>
     /// <c>screenshot &lt;name&gt; [front]</c> / <c>screenshot status</c> — plugin-side GL
     /// screenshot for the isolated rig (docs/research/isolated-rig.md): PrintWindow is

@@ -18,6 +18,8 @@ param(
     [string]$Name2 = 'Malak',
     [string]$WorkDir = "$env:TEMP\kotorcoop-demo",
     [int]$Save = 1,
+    # A published agent lets source builds continue while this live rig is running.
+    [string]$AgentPath = '',
     [switch]$Stop,
     [switch]$SkipLaunch,
     [switch]$ClientNewCharacter,
@@ -55,7 +57,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
-$agent = Join-Path $repo 'src\KotorCoop.Agent\bin\Debug\net10.0-windows\KotorCoop.Agent.exe'
+$agent = $AgentPath ? $AgentPath : (Join-Path $repo 'src\KotorCoop.Agent\bin\Debug\net10.0-windows\KotorCoop.Agent.exe')
 
 # The two placements below (main-menu client parked at instance-2's slot, and the final
 # side-by-side layout) share this pair so -Isolated only has to be decided once.
@@ -349,7 +351,7 @@ function Start-AgentConsole {
     # window vanishing with the evidence in it. The pid is recorded so -Stop can close the
     # window too — otherwise every run leaves another pair of dead terminals behind.
     # -Isolated: start minimised so the rig never puts a window in front of the user.
-    $style = $Isolated ? 'Minimized' : 'Normal'
+    $style = $Isolated ? 'Hidden' : 'Normal'
     $console = Start-Process -FilePath 'pwsh' -ArgumentList '-NoExit', '-Command', $command -WindowStyle $style -PassThru
     Add-Content -Path (Join-Path $WorkDir 'consoles.txt') -Value $console.Id
 }
@@ -364,7 +366,9 @@ Start-AgentConsole -Title "coop agent 2 - $Name2 (join)" -LogPath (Join-Path $Wo
     -AgentArgs (@('run', '--pid', $pid2, '--kotor', '--join', "127.0.0.1:$Port", '--name', $Name2, '--drop-file', $drop2,
                  '--log', (Join-Path $WorkDir 'agent2.log')) + $Agent2ExtraArgs)
 
-Start-Sleep -Seconds 8
+. (Join-Path $PSScriptRoot 'Wait-CoopRigReady.ps1')
+"waiting for both native worlds and peer phantoms..."
+Wait-CoopRigReady -ProcessIds @($pid1, $pid2) | Write-Output
 
 ''
 'co-op is live. Each game should now hold a phantom of the other player.'

@@ -143,7 +143,15 @@ internal sealed unsafe class TravelController(SharedBlockView block)
         _lastFrameMs = nowMs;
 
         uint serial = block.TravelSerial;
-        if (serial == block.TravelApplied || serial == _staleCheckedSerial)
+        if (serial == block.TravelApplied)
+        {
+            return;
+        }
+
+        // A request seen just before a stall is stale too if it was never executed.
+        // Do not let the serial cache bypass the check at the execution boundary.
+        if (serial == _staleCheckedSerial
+            && !StalledRequestRule.ShouldRefuse(gapMs, block.TravelManualIntent))
         {
             return;
         }
@@ -164,6 +172,11 @@ internal sealed unsafe class TravelController(SharedBlockView block)
     /// </summary>
     public void Execute()
     {
+        // SwapBuffers can resume halfway through a frame after a movie or a suspended
+        // process, before the next MainLoop prelude gets to inspect a newly queued request.
+        // Check at the execution boundary too; refusing only in MenuFrame leaves that
+        // resume point able to publish a stale request as a fresh crossing.
+        OnFrame();
         uint serial = block.TravelSerial;
         if (serial == block.TravelApplied)
         {

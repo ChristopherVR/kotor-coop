@@ -15,6 +15,9 @@ public sealed class GroundItemStore
     private const int MaxRememberedOps = 4096;
 
     private readonly Dictionary<uint, GroundItem> _items = [];
+    // Item IDs are never reused within a host namespace. Unlike packet de-duplication,
+    // removal truth must survive arbitrary offline durations and operation-cache eviction.
+    private readonly HashSet<uint> _removedItemIds = [];
     private readonly HashSet<(uint Origin, uint Sequence)> _appliedOps = [];
     private readonly Queue<(uint Origin, uint Sequence)> _opHistory = new();
     private readonly Lock _gate = new();
@@ -90,6 +93,7 @@ public sealed class GroundItemStore
     {
         lock (_gate)
         {
+            if (_removedItemIds.Contains(item.ItemId)) return false;
             if (_items.TryGetValue(item.ItemId, out GroundItem? existing))
             {
                 if (!item.Identity.IsKnown || existing.Identity.IsKnown)
@@ -118,6 +122,9 @@ public sealed class GroundItemStore
     {
         lock (_gate)
         {
+            // Remember an absent item too: its original drop may arrive after pickup.
+            // No version bump is needed when the published ground set did not change.
+            if (itemId != 0) _removedItemIds.Add(itemId);
             if (!_items.ContainsKey(itemId))
             {
                 return false;
@@ -173,6 +180,9 @@ public sealed class GroundItemStore
 
             foreach (GroundItem item in items)
             {
+                // A snapshot can have been sent before our reliable pickup reached the host.
+                // Recreating that body locally would offer the same item for pickup twice.
+                if (_removedItemIds.Contains(item.ItemId)) continue;
                 GroundItem toStore = !item.Identity.IsKnown
                     && previous.TryGetValue(item.ItemId, out GroundItem? known)
                     && known.Identity.IsKnown
@@ -183,6 +193,21 @@ public sealed class GroundItemStore
             }
 
             Version = version;
+        }
+    }
+
+    /// <summary>A replacement host/peer namespace may reuse old numeric item IDs. A
+    /// reconnect to the same host is not a replacement and must retain removal truth.</summary>
+    public void ResetNamespace()
+    {
+        lock (_gate)
+        {
+            _items.Clear();
+            _removedItemIds.Clear();
+            _appliedOps.Clear();
+            _opHistory.Clear();
+            _digest = EntryDigest.Empty;
+            Version = 0;
         }
     }
 

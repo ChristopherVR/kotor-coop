@@ -26,12 +26,12 @@ public readonly record struct EnemyDamageEntry(uint ObjectId, uint CumulativeDam
 /// knows a smaller number is a RESET rather than a stale datagram.
 /// </summary>
 public sealed record EnemyDamagePacket(
-    uint PeerId, string Module, uint Generation, IReadOnlyList<EnemyDamageEntry> Damage);
+    uint PeerId, string Module, uint Generation, IReadOnlyList<EnemyDamageEntry> Damage, uint Incarnation = 0);
 
 /// <summary>One peer's cumulative damage against one enemy, as the owner sees it after
 /// freshness and module filtering.</summary>
 public readonly record struct PeerEnemyDamage(
-    uint PeerId, uint Generation, uint ObjectId, uint CumulativeDamage);
+    uint PeerId, uint Generation, uint ObjectId, uint CumulativeDamage, uint Incarnation = 0);
 
 /// <summary>
 /// Damage that landed on a peer's phantom in the sender's game, addressed to the player

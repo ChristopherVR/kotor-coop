@@ -2,6 +2,8 @@ using KotorCoop.Protocol;
 
 namespace KotorCoop.Session;
 
+internal sealed record ItemSenderState(uint NextSequence, ItemOpPacket[] Pending);
+
 /// <summary>
 /// Retransmit-until-ack for ground-item ops, the item twin of
 /// <see cref="ReliableFlagSender"/>. "A lightsaber is lying there" is world truth, not a
@@ -22,6 +24,21 @@ public sealed class ReliableItemSender(
     private readonly Dictionary<uint, Pending> _pending = [];
     private readonly Lock _gate = new();
     private uint _nextSequence = 1;
+    internal Action? Persist { get; set; }
+
+    internal ItemSenderState Capture()
+    {
+        lock (_gate) return new(_nextSequence, _pending.Values.Select(p => p.Packet).ToArray());
+    }
+
+    internal static ReliableItemSender Restore(ItemSenderState state)
+    {
+        ReliableItemSender sender = new();
+        sender._nextSequence = state.NextSequence;
+        foreach (ItemOpPacket packet in state.Pending)
+            sender._pending[packet.OpSequence] = new Pending { Packet = packet };
+        return sender;
+    }
 
     /// <summary>Latched so a sustained overload logs once, not once per refused op — see
     /// <see cref="ReliableFlagSender"/>'s twin field.</summary>
@@ -60,6 +77,8 @@ public sealed class ReliableItemSender(
     {
         lock (_gate)
         {
+            if (_nextSequence is 0 or uint.MaxValue)
+                throw new InvalidOperationException("ground-item operation ID space exhausted for this host session");
             if (_pending.Count >= maxPending)
             {
                 LogCapRefusal();
@@ -77,6 +96,10 @@ public sealed class ReliableItemSender(
                 Attempts = 1,
             };
 
+            // Commit the operation and counters before another thread can retransmit it.
+            try { Persist?.Invoke(); }
+            catch { _pending.Remove(sequence); throw; }
+
             return packet;
         }
     }
@@ -85,7 +108,11 @@ public sealed class ReliableItemSender(
     {
         lock (_gate)
         {
-            _pending.Remove(sequence);
+            if (_pending.Remove(sequence, out Pending? pending))
+            {
+                try { Persist?.Invoke(); }
+                catch { _pending[sequence] = pending; throw; }
+            }
         }
     }
 
@@ -131,6 +158,7 @@ public sealed class ReliableItemSender(
         lock (_gate)
         {
             _pending.Clear();
+            Persist?.Invoke();
         }
     }
 }

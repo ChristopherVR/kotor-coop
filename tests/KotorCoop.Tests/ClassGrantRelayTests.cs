@@ -291,6 +291,27 @@ public class ClassGrantRelayTests
         Assert.Null(JediChoiceRule.ClassForTerminalEntry(-1)); // no conversation
     }
 
+    [Theory]
+    [InlineData(true, true, 4, 3, 1, 0, true)]
+    [InlineData(true, true, 4, 3, 1, 2, true)]
+    [InlineData(false, true, 4, 3, 1, 2, false)] // stale owned dialog after UI closed
+    [InlineData(true, false, 4, 3, 1, 2, false)] // a participant does not own it
+    [InlineData(true, true, 5, 3, 1, 2, false)] // ordinary dialog with a similar node
+    [InlineData(true, true, 4, 2, 1, 2, false)]
+    [InlineData(true, true, 4, 3, 2, 2, false)]
+    [InlineData(true, true, 4, 3, 1, 4, false)]
+    [InlineData(true, true, 4, 3, 1, -1, false)]
+    public void PrivatePromptRequiresItsOwnActiveBoundedDialog(bool active, bool owns,
+        int entries, int replies, int starts, int node, bool expected)
+        => Assert.Equal(expected, JediChoiceRule.IsPrivatePromptLayout(active, owns, entries, replies, starts, node));
+
+    [Fact]
+    public void PrivatePromptFingerprintMatchesGeneratedDialogueContent()
+    {
+        string blueprintContent = System.Text.Encoding.UTF8.GetString(JediClassDialogueBlueprint.Build());
+        for (int entry = 0; entry < 4; entry++) Assert.Contains(JediChoiceRule.EntryText(entry), blueprintContent);
+    }
+
     /// <summary>The plugin cannot reference KotorCoop.Memory (see <c>JediChoiceRule</c>'s own
     /// remarks), so its dlg resref and terminal-entry indices are duplicated by hand from
     /// <c>JediClassDialogueBlueprint</c>. This is the cross-check that a hand-copy never drifts.</summary>

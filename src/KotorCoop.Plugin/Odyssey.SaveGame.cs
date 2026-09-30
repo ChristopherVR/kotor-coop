@@ -49,6 +49,33 @@ internal static unsafe partial class Odyssey
         return true;
     }
 
+    // Same message entry used by DoQuickSave, with an allocated dedicated slot instead of
+    // slot 0. Disassembly: 5F4B94..5F4BA5 pushes description, name, number then calls
+    // 5ED670 with ecx=[[7A39FC]+4]; its 5EEA90 thunk / 6774E0 body return with ret 0xC.
+    private static readonly delegate* unmanaged[Thiscall]<nint, int, nint, nint, int> SendSaveGameRequestFn =
+        (delegate* unmanaged[Thiscall]<nint, int, nint, nint, int>)0x005ED670;
+
+    public static bool RequestCoopSave(int number)
+    {
+        if (number < 2 || !TryGetQuickSaveReadiness(out _)) return false;
+        nint client = GetClient();
+        if (client == 0) return false;
+        byte* name = stackalloc byte[6] { (byte)'C', (byte)'o', (byte)'-', (byte)'o', (byte)'p', 0 };
+        byte* nameStorage = stackalloc byte[8];
+        byte* descriptionStorage = stackalloc byte[8];
+        CExoStringCtorFn(nameStorage, name);
+        CExoStringCtorFn(descriptionStorage, name);
+        try
+        {
+            return SendSaveGameRequestFn(client, number, (nint)nameStorage, (nint)descriptionStorage) != 0;
+        }
+        finally
+        {
+            CExoStringDtorFn(descriptionStorage);
+            CExoStringDtorFn(nameStorage);
+        }
+    }
+
     /// <summary>
     /// Checks the native preconditions needed by both a new quicksave request and a delayed
     /// save-flush reissue. The epoch alone is insufficient: the server can have a readable

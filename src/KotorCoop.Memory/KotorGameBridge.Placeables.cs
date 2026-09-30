@@ -33,6 +33,9 @@ public sealed partial class KotorGameBridge
     private const int BlockPlaceableCapacity = 32;
 
     private readonly Dictionary<uint, (byte Open, byte Locked, byte Trapped)> _placeableShadow = [];
+    private readonly Dictionary<uint, uint> _placeableApplyAcknowledgements = [];
+    private readonly Dictionary<uint, uint> _placeableLocalChangeGenerations = [];
+    private readonly Dictionary<uint, (byte Value, bool Published)> _placeablePendingLocalChanges = [];
     private readonly Dictionary<uint, byte> _placeableBaselineTrapped = [];
     private string _placeableModule = string.Empty;
     private uint _placeableModuleHash;
@@ -62,6 +65,9 @@ public sealed partial class KotorGameBridge
             _placeableModule = module;
             _placeableModuleHash = PlaceableFlags.HashModule(module);
             _placeableShadow.Clear();
+            _placeableApplyAcknowledgements.Clear();
+            _placeableLocalChangeGenerations.Clear();
+            _placeablePendingLocalChanges.Clear();
             _placeableBaselineTrapped.Clear();
             _placeableBaselined = false;
             _nextPlaceableScanTicks = 0;
@@ -75,11 +81,21 @@ public sealed partial class KotorGameBridge
         }
 
         _nextPlaceableScanTicks = now + 1000;
+        ConsumePlaceableApplyAcknowledgements();
+        ConsumeLocalPlaceableChanges();
+
+        if (!EngineGlobals.TryGetServerObjectArray(_memory, out nint objectArray))
+        {
+            return changed;
+        }
 
         foreach (nint address in CachedScan(PlaceableVtable, 512, ObjectScanCacheMs))
         {
             if (!_memory.TryReadUInt32(address + OffObjectId, out uint objectId)
                 || objectId is 0 or > 0xFFFF
+                // A scan also sees intact freed placeables from the previous world.
+                // Publishing their old locks can undo a real close/unlock immediately.
+                || !EngineGlobals.IsCurrentServerObject(_memory, objectArray, objectId, address)
                 || !_memory.TryReadInt32(address + PlaceableOpenField, out int openInt)
                 || !_memory.TryReadInt32(address + PlaceableLockedField, out int lockedInt)
                 || !_memory.TryReadInt32(address + PlaceableTrapField, out int trapInt))
@@ -94,6 +110,26 @@ public sealed partial class KotorGameBridge
             if (!_placeableBaselineTrapped.ContainsKey(objectId))
             {
                 _placeableBaselineTrapped[objectId] = trapped;
+            }
+
+            if (_placeablePendingLocalChanges.TryGetValue(objectId, out var local))
+            {
+                byte localOpen = (byte)(local.Value & 1);
+                _placeableShadow[objectId] = (localOpen, (byte)((local.Value & 2) == 0 ? 1 : 0), (byte)((local.Value & 4) != 0 ? 1 : 0));
+                if (!local.Published)
+                {
+                    bool disarmed = (local.Value & 4) == 0 && _placeableBaselineTrapped.GetValueOrDefault(objectId) != 0;
+                    changed.Add(new(PlaceableFlags.MakeKey(_placeableModuleHash, objectId),
+                        PlaceableFlags.MakeValue(localOpen != 0, (local.Value & 2) != 0, disarmed)));
+                    _placeablePendingLocalChanges[objectId] = (local.Value, true);
+                    continue;
+                }
+                // A delayed canonical open must not manufacture a new local open
+                // after the genuine close. Release protection only once both the
+                // native object and canonical desired state agree with the edge.
+                if (!PlaceableLocalChangeRule.MayRelease(local.Published, open,
+                    CanonicalPlaceableOpenMatches(objectId, localOpen), localOpen)) continue;
+                _placeablePendingLocalChanges.Remove(objectId);
             }
 
             if (_placeableShadow.TryGetValue(objectId, out (byte Open, byte Locked, byte Trapped) last)
@@ -123,6 +159,53 @@ public sealed partial class KotorGameBridge
 
         _placeableBaselined = true;
         return changed;
+    }
+
+    private void ConsumePlaceableApplyAcknowledgements()
+    {
+        if (_pluginBlock == 0) return;
+        for (int slot = 0; slot < BlockPlaceableCapacity; slot++)
+        {
+            nint row = _pluginBlock + 0xB800 + slot * 12;
+            if (!_memory.TryReadUInt32(row + 8, out uint generation) || generation == 0
+                || !_memory.TryReadUInt32(row, out uint id) || id is 0 or > 0xFFFF
+                || !_memory.TryReadUInt32(row + 4, out uint value) || value > 7
+                || !_memory.TryReadUInt32(row + 8, out uint afterGeneration) || generation != afterGeneration
+                || !_memory.TryReadUInt32(row, out uint afterId) || id != afterId
+                || (_placeableApplyAcknowledgements.TryGetValue(id, out uint previous) && previous == generation)) continue;
+            _placeableApplyAcknowledgements[id] = generation;
+            _placeableShadow[id] = ((byte)(value & 1), (byte)((value & 2) == 0 ? 1 : 0), (byte)((value & 4) != 0 ? 1 : 0));
+        }
+    }
+
+    private void ConsumeLocalPlaceableChanges()
+    {
+        if (_pluginBlock == 0) return;
+        for (int slot = 0; slot < BlockPlaceableCapacity; slot++)
+        {
+            nint row = _pluginBlock + 0xBA00 + slot * 12;
+            if (!_memory.TryReadUInt32(row + 8, out uint generation) || generation == 0
+                || !_memory.TryReadUInt32(row, out uint id) || id is 0 or > 0xFFFF
+                || !_memory.TryReadUInt32(row + 4, out uint value) || value > 7
+                || !_memory.TryReadUInt32(row + 8, out uint afterGeneration) || generation != afterGeneration
+                || !_memory.TryReadUInt32(row, out uint afterId) || id != afterId
+                || (_placeableLocalChangeGenerations.TryGetValue(id, out uint previous) && previous == generation)) continue;
+            _placeableLocalChangeGenerations[id] = generation;
+            _placeablePendingLocalChanges[id] = ((byte)value, false);
+        }
+    }
+
+    private bool CanonicalPlaceableOpenMatches(uint id, byte open)
+    {
+        if (!_memory.TryReadUInt32(_pluginBlock + BlockPlaceableCount, out uint count)) return false;
+        for (int slot = 0; slot < Math.Min(count, BlockPlaceableCapacity); slot++)
+        {
+            nint row = _pluginBlock + BlockPlaceableSlots + slot * BlockPlaceableStride;
+            if (_memory.TryReadUInt32(row, out uint desiredId) && desiredId == id
+                && _memory.TryRead(row + 7, out byte kind) && kind == 0
+                && _memory.TryRead(row + 4, out byte desiredOpen)) return desiredOpen == open;
+        }
+        return false;
     }
 
     /// <summary>

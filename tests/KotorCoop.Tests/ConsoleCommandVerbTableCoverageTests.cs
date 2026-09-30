@@ -64,6 +64,8 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.MoviePlay] = "movieplay 01c",
         [CoopCommandKind.DestroyObject] = "destroyobject 0x35",
         [CoopCommandKind.OpenDoor] = "opendoor",
+        [CoopCommandKind.CloseDoor] = "closedoor",
+        [CoopCommandKind.SetLock] = "setlock 0xC6 on",
         [CoopCommandKind.UsePlaceable] = "useplaceable",
         [CoopCommandKind.ClosePlaceable] = "closeplaceable",
         [CoopCommandKind.Leader] = "leader pc",

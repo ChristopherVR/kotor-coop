@@ -256,27 +256,41 @@ public static class PluginMenuLoader
     /// docs/research/session-save.md's dated entry on the <c>loadgame</c> verb.</param>
     public static bool TryRequestLoad(
         ProcessMemory memory, out nint block, out string diagnostic, bool adoptedWorld = false,
-        bool inSession = false, bool manualIntent = false)
-        => TryRequestLoad(memory, out block, out diagnostic, out _, adoptedWorld, inSession, manualIntent);
+        bool inSession = false, bool manualIntent = false, nint knownBlock = 0, string? stagedSaveDirectory = null)
+        => TryRequestLoad(memory, out block, out diagnostic, out _, adoptedWorld, inSession, manualIntent,
+            knownBlock, stagedSaveDirectory);
 
     public static bool TryRequestLoad(
         ProcessMemory memory, out nint block, out string diagnostic, out uint requestId,
-        bool adoptedWorld = false, bool inSession = false, bool manualIntent = false)
+        bool adoptedWorld = false, bool inSession = false, bool manualIntent = false,
+        nint knownBlock = 0, string? stagedSaveDirectory = null)
     {
         requestId = 0;
-        if (!TryFindBlock(memory, out block, out diagnostic))
+        block = 0;
+        if (manualIntent && knownBlock != 0)
+        {
+            // An already attached bridge established liveness before the movie/stall.
+            // Re-prove its exact layout and readability, without requiring the blocked
+            // game thread to pulse. A supplied stale address must never fall through to writes.
+            if (!TryValidateKnownBlock(memory, knownBlock, out diagnostic)) return false;
+            block = knownBlock;
+        }
+        else if (!TryFindBlock(memory, out block, out diagnostic))
         {
             return false;
         }
 
         // The module the staged save stands in; the engine's LoadModule needs the name.
-        string savesDirectory = string.Empty;
+        string savesDirectory = stagedSaveDirectory ?? string.Empty;
         try
         {
-            using var process = System.Diagnostics.Process.GetProcessById(memory.ProcessId);
-            savesDirectory = Path.Combine(
-                Path.GetDirectoryName(process.MainModule?.FileName) ?? string.Empty,
-                "saves", AutosaveSlot);
+            if (savesDirectory.Length == 0)
+            {
+                using var process = System.Diagnostics.Process.GetProcessById(memory.ProcessId);
+                savesDirectory = Path.Combine(
+                    Path.GetDirectoryName(process.MainModule?.FileName) ?? string.Empty,
+                    "saves", AutosaveSlot);
+            }
         }
         catch (Exception)
         {
@@ -331,6 +345,23 @@ public static class PluginMenuLoader
         diagnostic = $"load request {serial + 1} sent to the plugin (module {moduleName}"
             + (adoptedWorld ? ", carried character" : string.Empty)
             + (inSession ? ", mid-session)" : ")");
+        return true;
+    }
+
+    /// <summary>Validate a previously live attachment for an explicit request during a stall.
+    /// This is not discovery: callers without an established address must still prove a pulse.</summary>
+    public static bool TryValidateKnownBlock(ProcessMemory memory, nint block, out string diagnostic)
+    {
+        BytePattern signature = BytePattern.Parse(KotorGameBridge.PluginSignature);
+        Span<byte> header = stackalloc byte[16];
+        byte[] requestRegion = new byte[BlockMenuLoadManualIntent + sizeof(uint)];
+        if (block == 0 || !memory.TryRead(block, header) || !signature.MatchesAt(header, 0)
+            || !memory.TryRead(block, requestRegion))
+        {
+            diagnostic = "previously attached plugin block is unreadable or its version/guard no longer matches";
+            return false;
+        }
+        diagnostic = $"validated attached plugin block at 0x{block:X} (heartbeat may be stalled)";
         return true;
     }
 

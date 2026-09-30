@@ -146,6 +146,7 @@ internal sealed unsafe class SoloSegmentSpectateController(SharedBlockView block
             return;
         }
 
+        if (!IsSpectating) DirectInputKeyboardHook.DiscardGameplayQueuedInput();
         IsSpectating = true;
 
         if (_watching != ownerPhantomId)

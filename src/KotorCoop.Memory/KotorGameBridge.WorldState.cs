@@ -70,6 +70,7 @@ public sealed partial class KotorGameBridge
                     string? gameDirectory = Path.GetDirectoryName(process.MainModule?.FileName);
                     if (gameDirectory is not null)
                     {
+                        _loadGameDirectory = gameDirectory;
                         _saveDigests = new SaveDigestCache(gameDirectory);
                     }
                 }
@@ -163,6 +164,14 @@ public sealed partial class KotorGameBridge
     /// load against, for <see cref="TryGetAdoptedWorldLoadStatus"/> to poll. 0 until a request
     /// has been made this process.</summary>
     private nint _menuLoadBlock;
+    private string? _loadGameDirectory;
+
+    private string? ResolveLoadGameDirectory()
+    {
+        if (_loadGameDirectory is not null) return _loadGameDirectory;
+        using var process = System.Diagnostics.Process.GetProcessById(_memory.ProcessId);
+        return _loadGameDirectory = Path.GetDirectoryName(process.MainModule?.FileName);
+    }
 
     /// <summary>
     /// Roadmap item 14 phase 2's rejoin action: fires the SAME agent-side request
@@ -316,8 +325,7 @@ public sealed partial class KotorGameBridge
         string? gameDirectory;
         try
         {
-            using var process = System.Diagnostics.Process.GetProcessById(_memory.ProcessId);
-            gameDirectory = Path.GetDirectoryName(process.MainModule?.FileName);
+            gameDirectory = ResolveLoadGameDirectory();
         }
         catch (Exception ex)
         {
@@ -370,8 +378,7 @@ public sealed partial class KotorGameBridge
         string? gameDirectory;
         try
         {
-            using var process = System.Diagnostics.Process.GetProcessById(_memory.ProcessId);
-            gameDirectory = Path.GetDirectoryName(process.MainModule?.FileName);
+            gameDirectory = ResolveLoadGameDirectory();
         }
         catch (Exception ex)
         {
@@ -398,7 +405,10 @@ public sealed partial class KotorGameBridge
     {
         requestId = 0;
         bool ok = PluginMenuLoader.TryRequestLoad(
-            _memory, out nint block, out string request, out requestId, adoptedWorld: false, inSession: true, manualIntent: manualIntent);
+            _memory, out nint block, out string request, out requestId, adoptedWorld: false, inSession: true,
+            manualIntent: manualIntent, knownBlock: manualIntent ? _pluginBlock : 0,
+            stagedSaveDirectory: _loadGameDirectory is not null
+                ? Path.Combine(_loadGameDirectory, "saves", PluginMenuLoader.AutosaveSlot) : null);
         if (ok)
         {
             _menuLoadBlock = block;

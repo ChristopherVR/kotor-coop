@@ -59,6 +59,25 @@ public sealed partial class CoopCommandDispatcher
         SendCheat(new CheatRequest(CheatKinds.OpenDoor, Text: token));
     }
 
+    private void CloseDoor(string token)
+    {
+        if (ConsoleCommand.TryParseObjectId(token, out uint objectId) && objectId != 0)
+        {
+            SendCheat(new CheatRequest(CheatKinds.CloseDoor, Target: objectId));
+            return;
+        }
+
+        SendCheat(new CheatRequest(CheatKinds.CloseDoor, Text: token));
+    }
+
+    private void SetLock(string token, bool locked)
+    {
+        if (ConsoleCommand.TryParseObjectId(token, out uint objectId) && objectId != 0)
+        {
+            SendCheat(new CheatRequest(CheatKinds.SetLock, Target: objectId, Amount: locked ? 1 : 0));
+        }
+    }
+
     /// <summary>The container-sync live-test primitive: the same dispatch shape as
     /// <see cref="OpenDoor"/>, for a placeable. See <c>CoopCommandKind.UsePlaceable</c> and
     /// docs/research/container-sync.md.</summary>

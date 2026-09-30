@@ -89,6 +89,25 @@ public static partial class ConsoleCommand
         return new CoopCommand(CoopCommandKind.OpenDoor, Address: rest[0]);
     }
 
+    private static CoopCommand ParseCloseDoor(string[] rest)
+    {
+        CoopCommand parsed = ParseOpenDoor(rest);
+        return parsed.Kind == CoopCommandKind.Invalid
+            ? parsed with { Error = parsed.Error.Replace("opendoor", "closedoor", StringComparison.Ordinal) }
+            : parsed with { Kind = CoopCommandKind.CloseDoor };
+    }
+
+    private static CoopCommand ParseSetLock(string[] rest)
+    {
+        if (rest.Length != 2 || !TryParseObjectId(rest[0], out uint id) || id is 0 or uint.MaxValue
+            || !(rest[1].Equals("on", StringComparison.OrdinalIgnoreCase) || rest[1].Equals("off", StringComparison.OrdinalIgnoreCase)))
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: "setlock needs a real object id and on|off, e.g. setlock 0xC6 on");
+        }
+
+        return new CoopCommand(CoopCommandKind.SetLock, Address: rest[0], Amount: rest[1].Equals("on", StringComparison.OrdinalIgnoreCase) ? 1 : 0);
+    }
+
     // CONTAINER-SYNC STAGING VERB: the same shape as opendoor, for a placeable — see
     // CoopCommandKind.UsePlaceable.
     private static CoopCommand ParseUsePlaceable(string[] rest)

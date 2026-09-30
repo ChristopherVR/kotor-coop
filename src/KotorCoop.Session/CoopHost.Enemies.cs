@@ -44,9 +44,10 @@ public sealed partial class CoopHost
 
     /// <summary>Latest damage report per client, so a client's hits become real here.</summary>
     private sealed record EnemyDamageReport(
-        string Module, uint Generation, IReadOnlyList<EnemyDamageEntry> Damage, long ReceivedMs);
+        string Module, uint Generation, IReadOnlyList<EnemyDamageEntry> Damage, long ReceivedMs, uint Incarnation);
 
     private readonly Dictionary<uint, EnemyDamageReport> _enemyDamage = [];
+    private readonly DamageGenerationWatch _enemyDamageGenerations = new();
 
     /// <summary>Reports older than this are stale — the client left, or changed module
     /// and its ids name strangers now.</summary>
@@ -68,7 +69,8 @@ public sealed partial class CoopHost
             {
                 EnemyDamageReport report = entry.Value;
 
-                if (now - report.ReceivedMs > EnemyReportFreshMs
+                if (!_enemyDamageGenerations.IsBound(entry.Key, report.Incarnation)
+                    || now - report.ReceivedMs > EnemyReportFreshMs
                     || !string.Equals(report.Module, module, StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
@@ -77,7 +79,7 @@ public sealed partial class CoopHost
                 foreach (EnemyDamageEntry damage in report.Damage)
                 {
                     merged.Add(new PeerEnemyDamage(
-                        entry.Key, report.Generation, damage.ObjectId, damage.CumulativeDamage));
+                        entry.Key, report.Generation, damage.ObjectId, damage.CumulativeDamage, report.Incarnation));
                 }
             }
         }
@@ -136,13 +138,16 @@ public sealed partial class CoopHost
 
         lock (_gate)
         {
-            if (!_peers.ContainsKey(report.PeerId))
+            if (!_peers.TryGetValue(report.PeerId, out PeerConnection? peer)
+                || !peer.EndPoint.Equals(from)
+                || peer.DamageIncarnation != report.Incarnation
+                || !_enemyDamageGenerations.Observe(report.PeerId, report.Incarnation, report.Generation))
             {
                 return;
             }
 
             _enemyDamage[report.PeerId] =
-                new EnemyDamageReport(report.Module, report.Generation, report.Damage, now);
+                new EnemyDamageReport(report.Module, report.Generation, report.Damage, now, report.Incarnation);
         }
     }
 }

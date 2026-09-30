@@ -36,6 +36,7 @@ param(
     [string]$Name3 = 'Bastila',
     [string]$WorkDir = "$env:TEMP\kotorcoop-demo3",
     [int]$Save = 1,
+    [string]$AgentPath = '',
     [switch]$Stop,
     [switch]$CreateGame3,
     [switch]$NoAgents,
@@ -50,7 +51,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
-$agent = Join-Path $repo 'src\KotorCoop.Agent\bin\Debug\net10.0-windows\KotorCoop.Agent.exe'
+$agent = $AgentPath ? $AgentPath : (Join-Path $repo 'src\KotorCoop.Agent\bin\Debug\net10.0-windows\KotorCoop.Agent.exe')
 $movewin = Join-Path $PSScriptRoot 'movewin.ps1'
 $inputalive = Join-Path $PSScriptRoot 'inputalive.ps1'
 
@@ -395,7 +396,9 @@ Start-Process -FilePath $agent -ArgumentList `
     -RedirectStandardError  (Join-Path $WorkDir 'agent3.err') `
     -WindowStyle $agentWindowStyle
 
-Start-Sleep -Seconds 10
+. (Join-Path $PSScriptRoot 'Wait-CoopRigReady.ps1')
+"waiting for all three native worlds and peer phantoms..."
+Wait-CoopRigReady -ProcessIds @($pid1, $pid2, $pid3) | Write-Output
 
 ''
 'three-player co-op is live. Each game should hold TWO phantoms.'

@@ -23,11 +23,19 @@ param(
     [switch]$IncludeTransitionCheck,
     [string]$TransitionModule = 'end_m01ab',
 
+    # A deliberately spawned hostile body on the host. Automatic selection requires a
+    # creature already fighting; the presence census also includes friendly story actors.
+    [uint32]$CombatTargetHostId = 0,
+
     # The CLIENT agent's drop file (demo.ps1 starts it with --drop-file). This is the only
     # lever that makes a real, session-owned ground item exist: see section 15 for why the
     # shared block cannot be used to stage one.
     [string]$ClientDropFile = "$env:TEMP\kotorcoop-demo\drop2.txt"
 )
+
+# A failed conversion or staging write invalidates the battery; it must never fall
+# through to a PASS inferred from unchanged engine state.
+$ErrorActionPreference = 'Stop'
 
 # Pids are optional: with a demo session up, the two swkotor processes in start order are
 # the host and the client, which is how demo.ps1 launches them.
@@ -55,47 +63,29 @@ public class VF {
   public static bool W32(IntPtr h, long a, int v){ int w; return WriteProcessMemory(h,new IntPtr(a),BitConverter.GetBytes(v),4,out w); }
   public static bool W16(IntPtr h, long a, short v){ int w; return WriteProcessMemory(h,new IntPtr(a),BitConverter.GetBytes(v),2,out w); }
   public static string Str(IntPtr h, long a, int n){ var b=R(h,a,n); if(b==null) return ""; int e=Array.IndexOf(b,(byte)0); if(e<0)e=n; return System.Text.Encoding.ASCII.GetString(b,0,e); }
-  // Every creature is a 4-byte CSWSCreature vtable; the object id follows it.
-  public static long FindCreature(IntPtr h, uint objId){
-    long addr=0; int sz=Marshal.SizeOf(typeof(MBI));
-    while(addr<0x7FFFFFFF){ MBI m; if(VirtualQueryEx(h,new IntPtr(addr),out m,sz)==0) break;
-      long size=(long)m.RegionSize; if(size<=0) break;
-      if(m.State==0x1000&&m.Type==0x20000&&(m.Protect&0x101)==0&&size<=64L*1024*1024){
-        var buf=R(h,(long)m.BaseAddress,(int)size);
-        if(buf!=null) for(int i=0;i+8<=buf.Length;i+=4)
-          if(BitConverter.ToUInt32(buf,i)==0x007470C8 && BitConverter.ToUInt32(buf,i+4)==objId)
-            return (long)m.BaseAddress+i; }
-      long next=(long)m.BaseAddress+size; if(next<=addr) break; addr=next; }
-    return 0; }
-  // Same technique as FindCreature, different vtable (CSWSDoor 0x007498B0 — see
-  // src/KotorCoop.Plugin/CreatureFinder.cs's own DoorVtable). Door open-state is a byte at
-  // door+0x2CC (Odyssey.GetDoorOpenState / DoorOpenState).
-  public static long FindDoor(IntPtr h, uint objId){
-    long addr=0; int sz=Marshal.SizeOf(typeof(MBI));
-    while(addr<0x7FFFFFFF){ MBI m; if(VirtualQueryEx(h,new IntPtr(addr),out m,sz)==0) break;
-      long size=(long)m.RegionSize; if(size<=0) break;
-      if(m.State==0x1000&&m.Type==0x20000&&(m.Protect&0x101)==0&&size<=64L*1024*1024){
-        var buf=R(h,(long)m.BaseAddress,(int)size);
-        if(buf!=null) for(int i=0;i+8<=buf.Length;i+=4)
-          if(BitConverter.ToUInt32(buf,i)==0x007498B0 && BitConverter.ToUInt32(buf,i+4)==objId)
-            return (long)m.BaseAddress+i; }
-      long next=(long)m.BaseAddress+size; if(next<=addr) break; addr=next; }
-    return 0; }
-  // Same technique again, CSWSPlaceable vtable (0x007494D0 —
-  // src/KotorCoop.Plugin/CreatureFinder.cs's own PlaceableVtable). The container-sync
-  // live-detector field is an int-wide "GUI open now" flag at placeable+0x338
-  // (docs/research/container-sync.md §1.2, VERIFIED live 2026-08-22).
-  public static long FindPlaceable(IntPtr h, uint objId){
-    long addr=0; int sz=Marshal.SizeOf(typeof(MBI));
-    while(addr<0x7FFFFFFF){ MBI m; if(VirtualQueryEx(h,new IntPtr(addr),out m,sz)==0) break;
-      long size=(long)m.RegionSize; if(size<=0) break;
-      if(m.State==0x1000&&m.Type==0x20000&&(m.Protect&0x101)==0&&size<=64L*1024*1024){
-        var buf=R(h,(long)m.BaseAddress,(int)size);
-        if(buf!=null) for(int i=0;i+8<=buf.Length;i+=4)
-          if(BitConverter.ToUInt32(buf,i)==0x007494D0 && BitConverter.ToUInt32(buf,i+4)==objId)
-            return (long)m.BaseAddress+i; }
-      long next=(long)m.BaseAddress+size; if(next<=addr) break; addr=next; }
-    return 0; }
+  // Resolve the engine's current body, rather than the first matching heap scan.
+  // Freed bodies retain vtable/id after an adopted save and can report obsolete locks.
+  public static long ResolveObject(IntPtr h, uint objId){
+    uint app=U32(h,0x007A39FC); if(app==0)return 0;
+    uint server=U32(h,app+8); if(server==0)return 0;
+    uint internalPtr=U32(h,server+4); if(internalPtr==0)return 0;
+    uint array=U32(h,internalPtr+0x1005C); if(array==0)return 0;
+    uint tree=U32(h,array); if(tree==0)return 0;
+    uint bucket=(((objId>>31)&1)<<12)|(objId&0xFFF);
+    uint entry=U32(h,tree+bucket*4);
+    for(int i=0;entry!=0&&i<64;i++){
+      if(U32(h,entry)==(objId&0x7FFFFFFF))return U32(h,entry+4);
+      entry=U32(h,entry+8);
+    }
+    return 0;
+  }
+  public static long FindTypedObject(IntPtr h, uint objId, uint vtable){
+    long address=ResolveObject(h,objId);
+    return address!=0&&U32(h,address)==vtable&&U32(h,address+4)==objId?address:0;
+  }
+  public static long FindCreature(IntPtr h, uint objId){return FindTypedObject(h,objId,0x007470C8);}
+  public static long FindDoor(IntPtr h, uint objId){return FindTypedObject(h,objId,0x007498B0);}
+  public static long FindPlaceable(IntPtr h, uint objId){return FindTypedObject(h,objId,0x007494D0);}
   public static long FindBlock(IntPtr h){
     byte[] sig = { 0x4B,0x4F,0x43,0x4F,0x4F,0x50,0x30,0x31, 0,0,0,0, 0x01,0xEE,0xFF,0xC0 };
     long addr=0; int sz=Marshal.SizeOf(typeof(MBI));
@@ -119,6 +109,38 @@ function Check($name, $ok, $detail) {
 function SkipCheck($name, $detail) {
     $results[$name] = [pscustomobject]@{ Pass = $false; Skipped = $true; Detail = $detail }
     "{0,-34} SKIP  {1}" -f $name, $detail
+}
+function AsI32([long]$value) {
+    [BitConverter]::ToInt32([BitConverter]::GetBytes([uint32]($value -band 4294967295L)), 0)
+}
+function RequireWrite32($handle, [long]$address, [long]$value) {
+    if (-not [VF]::W32($handle, $address, (AsI32 $value))) {
+        throw ('verification staging write failed at 0x{0:X}; results are incomplete' -f $address)
+    }
+}
+function PlayerAddress($handle, [long]$block) {
+    # Engine-published identity is authoritative after a carried-character adoption;
+    # the PC can legitimately be 0x7FFFFFFE rather than the stock 0x7FFFFFFF.
+    $address = [VF]::U32($handle, $block + 0x2260)
+    $objectId = [VF]::U32($handle, $block + 0x2264)
+    if ($address -ne 0 -and $objectId -ne 0 -and
+        [VF]::U32($handle, $address) -eq 0x007470C8 -and [VF]::U32($handle, $address + 4) -eq $objectId) {
+        return [long]$address
+    }
+    return 0
+}
+function PlayerId($handle, [long]$block) {
+    $address = PlayerAddress $handle $block
+    if ($address -eq 0) { return 0 }
+    return [VF]::U32($handle, $address + 4)
+}
+function PhantomAddress($handle, [long]$block) {
+    $objectId = [VF]::U32($handle, $block + 0x264)
+    if ($objectId -eq 0) { return 0 }
+    $address = [VF]::FindCreature($handle, $objectId)
+    if ($address -ne 0 -and [VF]::U32($handle, $address + 0xA74) -ne 0 -and
+        [VF]::U32($handle, $block + 0x264) -eq $objectId) { return $address }
+    return 0
 }
 function Tail($path, $n = 40) { if (Test-Path $path) { Get-Content $path -Tail $n } else { @() } }
 
@@ -161,12 +183,76 @@ function WaitForLog($path, $pattern, [int]$since, [int]$seconds) {
 # the next one lands.
 function SendConsole($h, $b, [string]$cmdText) {
     $before = [VF]::U32($h, $b + 0xA58)
+    $cheatBefore = [VF]::U32($h, $b + 0x3328)
+    $verb = ($cmdText -split '\s+', 2)[0].ToLowerInvariant()
+    $nativeKinds = @{ tp = 5; opendoor = 17; useplaceable = 18; closeplaceable = 19; closedoor = 109; setlock = 110; input = 103; attack = 98 }
     $bytes = [byte[]]::new(96)
     $ascii = [Text.Encoding]::ASCII.GetBytes($cmdText)
     [Array]::Copy($ascii, $bytes, [Math]::Min($ascii.Length, 95))
     for ($i = 0; $i -lt 96; $i += 4) { [VF]::W32($h, $b + 0x9F8 + $i, [BitConverter]::ToInt32($bytes, $i)) | Out-Null }
     [VF]::W32($h, $b + 0x9F4, [int]([VF]::U32($h, $b + 0x9F4) + 1)) | Out-Null
+    if ($nativeKinds.ContainsKey($verb)) {
+        $expectedKind = $nativeKinds[$verb]
+        $completed = WaitFor2 {
+            $serial = [VF]::U32($h, $b + 0x3328)
+            $serial -ne $cheatBefore -and [VF]::U32($h, $b + 0x332C) -eq $expectedKind `
+                -and [VF]::U32($h, $b + 0x3364) -eq $serial
+        } 10
+        $detail = [VF]::Str($h, $b + 0x336C, 96)
+        $status = [VF]::U32($h, $b + 0x3368)
+        if (-not $completed -or $status -ne 1) {
+            Write-Warning "native '$cmdText' did not apply: completed=$completed status=$status detail='$detail'"
+        }
+        return $completed -and $status -eq 1
+    }
     return WaitFor2 { ([VF]::U32($h, $b + 0xA58)) -ne $before } 10
+}
+
+function ReadObjectLock($handle, [uint32]$objectId, [int]$lockOffset, [bool]$wideLock) {
+    $address = if ($wideLock) { [VF]::FindPlaceable($handle, $objectId) } else { [VF]::FindDoor($handle, $objectId) }
+    if ($address -eq 0) { return $null }
+    $bytes = [VF]::R($handle, $address + $lockOffset, $(if ($wideLock) { 4 } else { 1 }))
+    if ($null -eq $bytes) { return $null }
+    return $(if ($wideLock) { [BitConverter]::ToUInt32($bytes, 0) } else { $bytes[0] })
+}
+
+function BothObjectLocksAre($readHost, $readClient, [bool]$locked) {
+    $hostLock = & $readHost
+    $clientLock = & $readClient
+    return $null -ne $hostLock -and $null -ne $clientLock `
+        -and ($hostLock -ne 0) -eq $locked -and ($clientLock -ne 0) -eq $locked
+}
+
+function CheckObjectRelock([string]$kind, [uint32]$objectId, [long]$hostAddress, [long]$clientAddress, [int]$lockOffset, [bool]$wideLock) {
+    if ($objectId -eq 0 -or $hostAddress -eq 0 -or $clientAddress -eq 0) {
+        Check "$kind re-lock reaches the other instance" $false 'both live object copies are required'
+        return
+    }
+    # Resolve every sample again: a same-world adoption may replace the body while a
+    # wait is running, and unreadable memory must never count as an unlocked object.
+    $readHost = { ReadObjectLock $h1 $objectId $lockOffset $wideLock }
+    $readClient = { ReadObjectLock $h2 $objectId $lockOffset $wideLock }
+    $originalClientLock = & $readClient
+    if ($null -eq $originalClientLock) { throw "$kind lock precondition became unreadable; results are incomplete" }
+    $originallyLocked = $originalClientLock -ne 0
+    $unlockedBoth = $false
+    $lockedBoth = $false
+    try {
+        $unlockReply = SendConsole $h2 $b2 ("setlock 0x{0:X} off" -f $objectId)
+        $unlockedBoth = $unlockReply -and (WaitFor2 { BothObjectLocksAre $readHost $readClient $false } 20)
+        if ($unlockedBoth) {
+            $lockReply = SendConsole $h2 $b2 ("setlock 0x{0:X} on" -f $objectId)
+            $lockedBoth = $lockReply -and (WaitFor2 { BothObjectLocksAre $readHost $readClient $true } 20)
+        }
+        Check "$kind re-lock reaches the other instance" ($unlockedBoth -and $lockedBoth) `
+            ("object 0x{0:X}, unlocked both {1}, re-locked both {2}" -f $objectId, $unlockedBoth, $lockedBoth)
+    }
+    finally {
+        $restoreState = if ($originallyLocked) { 'on' } else { 'off' }
+        SendConsole $h2 $b2 ("setlock 0x{0:X} {1}" -f $objectId, $restoreState) | Out-Null
+        $restored = WaitFor2 { BothObjectLocksAre $readHost $readClient $originallyLocked } 20
+        if (-not $restored) { throw "$kind lock restoration failed; results are incomplete" }
+    }
 }
 
 # Groups every log line since a mark by (whole second, message text) and returns the worst
@@ -194,9 +280,114 @@ function WorstSpam($path, [int]$since) {
 # start a conversation, and the dialogue checks run after the fight the animation check stages.
 # (attacker set, target zero) is the plugin's "break off" order.
 function BreakOffCombat($h, $b) {
-    [VF]::W32($h, $b + 0x1DA0, [int]0x7FFFFFFF) | Out-Null   # this instance's own PC
+    $localPlayerId = PlayerId $h $b
+    if ($localPlayerId -eq 0) { return }
+    RequireWrite32 $h ($b + 0x1DA0) $localPlayerId
     [VF]::W32($h, $b + 0x1DA4, 0) | Out-Null                 # no target = stop
     [VF]::W32($h, $b + 0x1DA8, [int]([VF]::U32($h, $b + 0x1DA8) + 1)) | Out-Null
+}
+
+function BreakOffAllCombat($h, $b) {
+    BreakOffCombat $h $b
+    $actors = [Collections.Generic.HashSet[uint32]]::new()
+    $app = [VF]::U32($h, 0x7A39FC)
+    $server = if ($app) { [VF]::U32($h, $app + 8) } else { 0 }
+    $internal = if ($server) { [VF]::U32($h, $server + 4) } else { 0 }
+    if ($internal) {
+        for ($partySlot = 0; $partySlot -lt 9; $partySlot++) {
+            $partyId = [VF]::U32($h, $internal + 0x1B770 + 0x0C + $partySlot * 4)
+            $partyBody = [VF]::FindCreature($h, $partyId)
+            if ($partyBody -eq 0 -or -not $actors.Add($partyId)) { continue }
+            RequireWrite32 $h ($b + 0x1DA0) $partyId
+            RequireWrite32 $h ($b + 0x1DA4) 0
+            RequireWrite32 $h ($b + 0x1DA8) ([VF]::U32($h, $b + 0x1DA8) + 1)
+            Start-Sleep -Milliseconds 100
+        }
+    }
+    $count = [Math]::Min([VF]::U32($h, $b + 0x1400), 128)
+    for ($slot = 0; $slot -lt $count; $slot++) {
+        $id = [VF]::U32($h, $b + 0x6800 + $slot * 0x28)
+        $body = if ($id) { [VF]::FindCreature($h, $id) } else { 0 }
+        if ($body -eq 0 -or [VF]::U32($h, $body + 0x138) -eq 0 -or -not $actors.Add($id)) { continue }
+        RequireWrite32 $h ($b + 0x1DA0) $id
+        RequireWrite32 $h ($b + 0x1DA4) 0
+        RequireWrite32 $h ($b + 0x1DA8) ([VF]::U32($h, $b + 0x1DA8) + 1)
+        # Let the real frame-hook drain each mailbox request before offering another.
+        Start-Sleep -Milliseconds 100
+    }
+}
+
+function IsKnownFriendlyFixture($h, $id) {
+    $body = [VF]::FindCreature($h, $id)
+    if ($body -eq 0) { return $true }
+    $tagPtr = [VF]::U32($h, $body + 0x18)
+    $tagLength = [VF]::U32($h, $body + 0x1C)
+    $tag = if ($tagPtr -and $tagLength -gt 0 -and $tagLength -le 64) { [VF]::Str($h, $tagPtr, $tagLength) } else { '' }
+    return $tag -in @('end_trask', 'carth', 'end_carth', 'coop_phantom')
+}
+
+function IsCombatFixture($h, $b, $id) {
+    $body = [VF]::FindCreature($h, $id)
+    if (-not $body -or $id -eq (PlayerId $h $b) -or (IsKnownFriendlyFixture $h $id)) { return $false }
+    # The engine's in-party word excludes companion bodies even before census ownership settles.
+    if ([VF]::U32($h, $body + 0xA88) -ne 0) { return $false }
+    if ($CombatTargetHostId) { return $id -eq $CombatTargetHostId }
+    return [VF]::U32($h, $body + 0x138) -ne 0
+}
+
+function PlayerPosition($h, $b) {
+    $body = PlayerAddress $h $b
+    if (-not $body) { throw 'cannot read the current native player position' }
+    $bytes = [VF]::R($h, $body + 0x90, 12)
+    if ($null -eq $bytes) { throw 'native player position read failed' }
+    $position = @(0, 4, 8 | ForEach-Object { [BitConverter]::ToSingle($bytes, $_) })
+    if (@($position | Where-Object { -not [single]::IsFinite($_) }).Count) { throw 'native player position is not finite' }
+    return $position
+}
+
+function ClientCombatTarget([uint32]$ownerId) {
+    $mapped = $false
+    for ($slot = 0; $slot -lt 128; $slot++) {
+        if ([VF]::U32($h2, $b2 + 0x7C00 + $slot * 4) -eq $ownerId) { $mapped = $true; break }
+    }
+    $localId = $ownerId
+    if ($mapped) {
+        # Materialised enemies have engine IDs independent of their owner's IDs.
+        # The native materialisation log supplies the mapping; validate its live body
+        # against the authority's appearance and the current phantom slots below.
+        $pattern = 'materialise: owner 0x' + $ownerId.ToString('X') + ' -> local 0x([0-9A-F]+)\b'
+        $entry = @(Get-Content -LiteralPath $Log2 | Select-String -Pattern $pattern | Select-Object -Last 1)
+        if (!$entry.Count) { throw "No native materialisation mapping for owner $ownerId" }
+        $localId = [Convert]::ToUInt32($entry[0].Matches[0].Groups[1].Value, 16)
+    }
+    for ($slot = 0; $slot -lt 7; $slot++) {
+        if ([VF]::U32($h2, $b2 + 0x1F80 + $slot * 4) -eq $localId) { throw "Combat target $localId is a peer phantom, not owner $ownerId" }
+    }
+    $hostBody = [VF]::FindCreature($h1, $ownerId)
+    $localBody = [VF]::FindCreature($h2, $localId)
+    if (!$hostBody -or !$localBody -or $localId -eq (PlayerId $h2 $b2) `
+        -or [VF]::I16($h1, $hostBody + 0xA60) -ne [VF]::I16($h2, $localBody + 0xA60)) {
+        throw "Combat owner $ownerId does not resolve to a matching live client creature ($localId)"
+    }
+    return $localId
+}
+
+function PlayerModule($h) {
+    $app = [VF]::U32($h, 0x7A39FC)
+    $server = if ($app) { [VF]::U32($h, $app + 8) } else { 0 }
+    $internal = if ($server) { [VF]::U32($h, $server + 4) } else { 0 }
+    if (-not $internal -or [VF]::U32($h, $internal + 0x100B4) -ne 0 -or [VF]::I16($h, $internal + 0x10008) -ne 2) { return '' }
+    $info = [VF]::U32($h, $internal + 0x10004)
+    if (-not $info) { return '' }
+    $text = [VF]::U32($h, $info + 0xFC)
+    $length = [VF]::U32($h, $info + 0x100)
+    if (-not $text -or $length -lt 1 -or $length -gt 32) { return '' }
+    return [VF]::Str($h, $text, $length)
+}
+
+function RestorePosition($h, $b, $position) {
+    $command = 'tp {0} {1} {2}' -f $position[0].ToString('R', [Globalization.CultureInfo]::InvariantCulture), $position[1].ToString('R', [Globalization.CultureInfo]::InvariantCulture), $position[2].ToString('R', [Globalization.CultureInfo]::InvariantCulture)
+    if (-not (SendConsole $h $b $command)) { throw 'native fixture position restoration did not apply' }
 }
 
 function CloseConversations($h, $b) {
@@ -215,11 +406,14 @@ if ($h1 -eq [IntPtr]::Zero -or $h2 -eq [IntPtr]::Zero -or $b1 -eq 0 -or $b2 -eq 
     [VF]::CloseHandle($h2) | Out-Null
     throw 'both processes must have a readable co-op shared block before verification'
 }
+. (Join-Path $PSScriptRoot 'Wait-CoopRigReady.ps1')
+'waiting for both native worlds and peer phantoms before measuring...'
+Wait-CoopRigReady -ProcessIds @($Host1, $Client2) | Write-Output
 $runStarted = Get-Date
-$startModule1 = [VF]::Str($h1, $b1 + 0x20, 32)
-$startModule2 = [VF]::Str($h2, $b2 + 0x20, 32)
-$startPosition1 = @(0x10, 0x14, 0x18 | ForEach-Object { [VF]::F32($h1, $b1 + $_) })
-$startPosition2 = @(0x10, 0x14, 0x18 | ForEach-Object { [VF]::F32($h2, $b2 + $_) })
+$startModule1 = PlayerModule $h1
+$startModule2 = PlayerModule $h2
+$startPosition1 = PlayerPosition $h1 $b1
+$startPosition2 = PlayerPosition $h2 $b2
 
 "host  pid $Host1  block 0x{0:X}  version {1}" -f $b1, [VF]::U32($h1, $b1 + 8)
 "client pid $Client2  block 0x{0:X}  version {1}" -f $b2, [VF]::U32($h2, $b2 + 8)
@@ -371,6 +565,7 @@ Check 'enemy presence mirrored on the client' (($e2 -ge 5) -and ($enemyCount2 -g
     "presence $e2, census $enemyCount2"
 
 # --- 9. combat participation ------------------------------------------------------------
+$c1 = PhantomAddress $h1 $b1
 # The phantom must be a real target (faction 0 = PLAYER, same as a PC) yet still unkillable
 # locally (min1hp), which is the pair that made this safe rather than an aggro sink.
 if ($c1) {
@@ -387,8 +582,32 @@ if ($c1) {
 # Start from a KNOWN health, not from whatever the last run left behind. Restoring the
 # previous value afterwards was not enough: three points a run walked the player down to 1
 # and every later check then measured a nearly-dead body (conversations included).
-$pcAddr = [VF]::FindCreature($h2, 0x7FFFFFFF)
+$pcAddr = PlayerAddress $h2 $b2
 $damageHpSaved = if ($pcAddr) { [VF]::I16($h2, $pcAddr + 0xDC) } else { 0 }
+$damagePositionSaved = PlayerPosition $h2 $b2
+$damageMoved = $false
+try {
+    # A proximity revive can erase the forwarded HP loss before a half-second sample.
+    # Move the receiving player well beyond DeathPump's real 3.5-unit revive radius.
+    $hostPosition = PlayerPosition $h1 $b1
+    # This Endar Spire locker point is exercised by the native container check below.
+    if ((PlayerModule $h2) -ine 'end_m01aa') {
+        throw 'damage staging requires the Endar Spire baseline with its proven walkable locker position'
+    }
+    $damageX = 10.8
+    $damageY = 21.87
+    $damageZ = $damagePositionSaved[2]
+    $damageDistance = [Math]::Sqrt([Math]::Pow($damageX - $hostPosition[0], 2) + [Math]::Pow($damageY - $hostPosition[1], 2))
+    if ($damageDistance -le 3.5) { throw 'host must be more than 3.5 units from the Endar locker damage fixture' }
+    $damageTp = 'tp {0} {1} {2}' -f $damageX.ToString('R', [Globalization.CultureInfo]::InvariantCulture), $damageY.ToString('R', [Globalization.CultureInfo]::InvariantCulture), $damageZ.ToString('R', [Globalization.CultureInfo]::InvariantCulture)
+    if (-not (SendConsole $h2 $b2 $damageTp)) { throw 'damage staging teleport did not apply' }
+    $damageMoved = $true
+    $landed = PlayerPosition $h2 $b2
+    if ([Math]::Sqrt([Math]::Pow($landed[0] - $hostPosition[0], 2) + [Math]::Pow($landed[1] - $hostPosition[1], 2)) -le 3.5) {
+        throw 'damage fixture did not land beyond the proximity revive radius'
+    }
+    BreakOffCombat $h1 $b1
+    BreakOffCombat $h2 $b2
 if ($pcAddr) {
     $maxHp = [VF]::I16($h2, $pcAddr + 0xE0)
     $target = if ($maxHp -ge 12) { $maxHp } else { 20 }
@@ -405,7 +624,7 @@ if ($pcAddr) {
     Start-Sleep -Milliseconds 800
     # The phantom's vitals arrive over the wire. Do not hit a stale downed stand-in
     # just because the client's own health write has completed.
-    WaitFor2 { $c1 -ne 0 -and [VF]::I16($h1, $c1 + 0xDC) -gt 3 } 10 | Out-Null
+    WaitFor2 { $script:c1 = PhantomAddress $h1 $b1; $script:c1 -ne 0 -and [VF]::I16($h1, $script:c1 + 0xDC) -gt 3 } 10 | Out-Null
 }
 
 $pcBefore = [VF]::I16($h2, $pcAddr + 0xDC)
@@ -428,7 +647,7 @@ else {
 WaitFor2 { ([VF]::U32($h2, $b2 + 0x1D50) - $owedBefore) -eq 3 } 20 | Out-Null
 WaitFor2 { [VF]::U32($h2, $b2 + 0x1D58) -eq [VF]::U32($h2, $b2 + 0x1D50) } 20 | Out-Null
 $owedAfter = [VF]::U32($h2, $b2 + 0x1D50)
-$pcAfter = [VF]::I16($h2, ([VF]::FindCreature($h2, 0x7FFFFFFF)) + 0xDC)
+$pcAfter = [VF]::I16($h2, (PlayerAddress $h2 $b2) + 0xDC)
 Check 'a hit on a phantom reaches the peer' (($owedAfter - $owedBefore) -eq 3) `
     "owed $owedBefore -> $owedAfter"
 # At LEAST the forwarded 3: enemy damage is scaled by player count (115% for two) and the same
@@ -440,6 +659,10 @@ Check 'the peer really loses those hit points' ((($pcBefore - $pcAfter) -ge 3) -
 
 # Put the health back so the session is left as it was found.
 if ($pcAddr -and $damageHpSaved -gt 0) { [VF]::W16($h2, $pcAddr + 0xDC, [int16]$damageHpSaved) | Out-Null }
+} finally {
+    $damageReturn = 'tp {0} {1} {2}' -f $damagePositionSaved[0].ToString('R', [Globalization.CultureInfo]::InvariantCulture), $damagePositionSaved[1].ToString('R', [Globalization.CultureInfo]::InvariantCulture), $damagePositionSaved[2].ToString('R', [Globalization.CultureInfo]::InvariantCulture)
+    if ($damageMoved -and -not (SendConsole $h2 $b2 $damageReturn)) { throw 'damage staging position restoration failed; results are incomplete' }
+}
 
 # --- 10. animation replication ----------------------------------------------------------
 # One-shots (swings, draws, flourishes) are captured by hooking the engine's dispatch, not
@@ -452,22 +675,23 @@ $oneShotBefore = [VF]::U32($h2, $b2 + 0x1064)        # remote one-shot serial, s
 # walking and never swung, so the check failed on a fresh session while passing on one
 # where an earlier run had already banked a swing. Presence slots carry positions, and
 # enemy ids are identical in both games, so the closest one is cheap to find here.
-$px = [VF]::F32($h1, $b1 + 0x10)
-$py = [VF]::F32($h1, $b1 + 0x14)
+$combatPosition = PlayerPosition $h1 $b1
+$px = $combatPosition[0]
+$py = $combatPosition[1]
 $enemyId = 0
 $bestDist = [double]::MaxValue
 $presenceCount = [VF]::U32($h2, $b2 + 0x1400)
 for ($i = 0; $i -lt [Math]::Min($presenceCount, 32); $i++) {
     $slot = $b2 + 0x6800 + ($i * 0x28)
     $id = [VF]::U32($h2, $slot)
-    if ($id -eq 0) { continue }
+    if ($id -eq 0 -or -not (IsCombatFixture $h1 $b1 $id)) { continue }
     $ex = [VF]::F32($h2, $slot + 4)
     $ey = [VF]::F32($h2, $slot + 8)
     $d = [math]::Sqrt([math]::Pow($ex - $px, 2) + [math]::Pow($ey - $py, 2))
     if ($d -lt $bestDist) { $bestDist = $d; $enemyId = $id }
 }
 if ($enemyId -ne 0) {
-    [VF]::W32($h1, $b1 + 0x1DA0, [int]0x7FFFFFFF) | Out-Null   # attacker: the host's PC
+    RequireWrite32 $h1 ($b1 + 0x1DA0) (PlayerId $h1 $b1)
     [VF]::W32($h1, $b1 + 0x1DA4, [int]$enemyId) | Out-Null     # target: a real enemy
     [VF]::W32($h1, $b1 + 0x1DA8, [int]([VF]::U32($h1, $b1 + 0x1DA8) + 1)) | Out-Null
     # A combat round takes a few seconds: the PC closes to melee range and swings.
@@ -484,8 +708,10 @@ else {
 # in combat; a creature in combat cannot open a conversation, so "the peer follows the same
 # conversation" failed on any session that had already fought — which read as a spectate
 # regression more than once and was never a dialogue defect at all.
-BreakOffCombat $h1 $b1
-BreakOffCombat $h2 $b2
+BreakOffAllCombat $h1 $b1
+BreakOffAllCombat $h2 $b2
+RestorePosition $h1 $b1 $startPosition1
+RestorePosition $h2 $b2 $startPosition2
 Start-Sleep -Seconds 4
 
 # --- 11. dialogue exclusivity -------------------------------------------------------------
@@ -600,22 +826,23 @@ Start-Sleep -Seconds 3
 # So the oracle is the host's engine, not either side's bookkeeping: find the enemy nearest
 # the CLIENT, read its hit points out of the HOST's creature, make the client attack it, and
 # read them again.
-$cx = [VF]::F32($h2, $b2 + 0x10)
-$cy = [VF]::F32($h2, $b2 + 0x14)
+$combatPosition = PlayerPosition $h2 $b2
+$cx = $combatPosition[0]
+$cy = $combatPosition[1]
 $dmgId = 0
 $dmgDist = [double]::MaxValue
 $presence2 = [VF]::U32($h2, $b2 + 0x1400)
 for ($i = 0; $i -lt [Math]::Min($presence2, 32); $i++) {
     $slot = $b2 + 0x6800 + ($i * 0x28)
     $id = [VF]::U32($h2, $slot)
-    if ($id -eq 0) { continue }
+    if ($id -eq 0 -or -not (IsCombatFixture $h1 $b1 $id)) { continue }
     # ⚠ SKIP AN ENEMY THAT IS ALREADY DOWN TO 1. The check asks whether a client's hit costs
     # the enemy hit points, and a creature sitting at 1 cannot answer it — an earlier run of
     # this same battery leaves bodies behind, and picking one gave "hp 1 -> 1", which looks
     # like a broken channel and is nothing of the kind. Judge on the HOST's creature, which
     # is the authority.
     $cand = [VF]::FindCreature($h1, $id)
-    if ($cand -eq 0 -or [VF]::I16($h1, $cand + 0xDC) -le 1) { continue }
+    if ($cand -eq 0 -or ([VF]::I16($h1, $cand + 0xDC) + (AsI32 ([VF]::U32($h1, $cand + 0xE4)))) -le 1) { continue }
 
     # ⚠ ROUND 58: the census slot position ($h2, $slot+4/+8) is a mirrored SNAPSHOT and can go
     # stale — measured picking a target the census placed 57 units away while its real, live
@@ -637,15 +864,20 @@ if ($dmgId -ne 0) {
         Check 'a client hit costs the enemy real hit points' $false ("enemy 0x{0:X} not found in the host" -f $dmgId)
     }
     else {
-        $hpBefore = [VF]::I16($h1, $hostEnemy + 0xDC)
-        [VF]::W32($h2, $b2 + 0x1DA0, [int]0x7FFFFFFF) | Out-Null   # attacker: the CLIENT's PC
-        [VF]::W32($h2, $b2 + 0x1DA4, [int]$dmgId) | Out-Null
-        [VF]::W32($h2, $b2 + 0x1DA8, [int]([VF]::U32($h2, $b2 + 0x1DA8) + 1)) | Out-Null
+        # Native damage can be absorbed by a genuine temporary-hit-point effect.
+        # Measure both pools so a durable combat fixture does not hide real delivery.
+        $hpBefore = [VF]::I16($h1, $hostEnemy + 0xDC) + (AsI32 ([VF]::U32($h1, $hostEnemy + 0xE4)))
+        $clientTarget = ClientCombatTarget $dmgId
+        # The real client attack route also closes to melee range. A raw VM order
+        # using the owner's ID can attack a completely unrelated local phantom.
+        if (-not (SendConsole $h2 $b2 ('attack 0x{0:X}' -f $clientTarget))) {
+            throw "Native client attack of local $clientTarget (owner $dmgId) was refused"
+        }
 
         # The client has to close to melee range and land a swing, then the ledger has to
         # reach the host and be spent. Generous, and judged on the host's creature.
-        WaitFor2 { [VF]::I16($h1, $hostEnemy + 0xDC) -lt $hpBefore } 45 | Out-Null
-        $hpAfter = [VF]::I16($h1, $hostEnemy + 0xDC)
+        WaitFor2 { ([VF]::I16($h1, $hostEnemy + 0xDC) + (AsI32 ([VF]::U32($h1, $hostEnemy + 0xE4)))) -lt $hpBefore } 45 | Out-Null
+        $hpAfter = [VF]::I16($h1, $hostEnemy + 0xDC) + (AsI32 ([VF]::U32($h1, $hostEnemy + 0xE4)))
         Check 'a client hit costs the enemy real hit points' ($hpAfter -lt $hpBefore) `
             ("enemy 0x{0:X} at {1:F0} units: hp {2} -> {3}" -f $dmgId, $dmgDist, $hpBefore, $hpAfter)
     }
@@ -655,6 +887,11 @@ else {
 }
 
 # --- 14. shared progression (party gold and PC experience) -------------------------------
+BreakOffAllCombat $h1 $b1
+BreakOffAllCombat $h2 $b2
+RestorePosition $h1 $b1 $startPosition1
+RestorePosition $h2 $b2 $startPosition2
+Start-Sleep -Seconds 3
 # Host-authoritative, and — unlike almost everything else in this battery — carried entirely
 # OUTSIDE the shared block: the agent reads the host's wallet and experience straight out of
 # the host's engine and writes them into the client's (CoopAgent.PumpProgression ->
@@ -667,7 +904,7 @@ else {
 #
 # Pointer chains, both from docs/research/progression-sync.md and both VERIFIED there:
 #   appMgr 0x7A39FC -> serverApp +8 -> internal +4 -> partyTable +0x1B770, gold at +0xFC
-#   PC (object id 0x7FFFFFFF)      -> stats +0xA74                      -> experience +0x68
+#   engine-published local PC    -> stats +0xA74                      -> experience +0x68
 # The first three hops are the same ones PauseMask already walks in section 4.
 function PartyTable($h) {
     $am = [VF]::U32($h, 0x7A39FC)
@@ -681,8 +918,8 @@ function PartyTable($h) {
 
 $partyTable1 = PartyTable $h1
 $partyTable2 = PartyTable $h2
-$pcHost = [VF]::FindCreature($h1, 0x7FFFFFFF)
-$pcPeer = [VF]::FindCreature($h2, 0x7FFFFFFF)
+$pcHost = PlayerAddress $h1 $b1
+$pcPeer = PlayerAddress $h2 $b2
 $statsHost = if ($pcHost) { [VF]::U32($h1, $pcHost + 0xA74) } else { 0 }
 $statsPeer = if ($pcPeer) { [VF]::U32($h2, $pcPeer + 0xA74) } else { 0 }
 
@@ -691,6 +928,7 @@ if ($partyTable1 -and $partyTable2 -and $statsHost -and $statsPeer) {
     $clientGoldBefore = [VF]::U32($h2, $partyTable2 + 0xFC)
     $xpBefore = [VF]::U32($h1, $statsHost + 0x68)
     $clientXpBefore = [VF]::U32($h2, $statsPeer + 0x68)
+    $xpBaseline = [Math]::Max([long](AsI32 $xpBefore), [long](AsI32 $clientXpBefore))
 
     # Move both by a small offset from what the host already has, rather than to a fixed
     # marker number. Two reasons: the session can be restored exactly afterwards, and the
@@ -709,17 +947,16 @@ if ($partyTable1 -and $partyTable2 -and $statsHost -and $statsPeer) {
     # own check: the client must REFUSE to be pulled backwards.
     # The memory reader exposes the raw unsigned bits. Reinterpret them for W32 rather
     # than using a throwing PowerShell numeric cast; the progression merge uses signed XP.
-    function AsI32([uint64]$v) { [BitConverter]::ToInt32([BitConverter]::GetBytes([uint32]($v -band 0xFFFFFFFF)), 0) }
     $goldTarget = $goldBefore + 137
-    $xpTarget = ([uint64]$xpBefore + 5) -band 0xFFFFFFFF   # small: crossing a level threshold lights a modal prompt
+    $xpTarget = [uint32](($xpBaseline + 5) -band 4294967295L)   # small: crossing a level threshold lights a modal prompt
 
-    [VF]::W32($h1, $partyTable1 + 0xFC, [int]$goldTarget) | Out-Null
-    [VF]::W32($h1, $statsHost + 0x68, (AsI32 $xpTarget)) | Out-Null
+    RequireWrite32 $h1 ($partyTable1 + 0xFC) $goldTarget
+    RequireWrite32 $h1 ($statsHost + 0x68) $xpTarget
 
     # One heavy pump a second on each side plus a wire hop; 25 s is many times over, and
     # both fields travel in the same snapshot so one wait covers them.
     WaitFor2 {
-        ([VF]::U32($h2, $statsPeer + 0x68) -eq $xpTarget)
+        (AsI32 ([VF]::U32($h2, $statsPeer + 0x68))) -ge (AsI32 $xpTarget)
     } 25 | Out-Null
 
     $goldSeen = [VF]::U32($h2, $partyTable2 + 0xFC)
@@ -740,36 +977,48 @@ if ($partyTable1 -and $partyTable2 -and $statsHost -and $statsPeer) {
         Check "party gold stays personal (credits_mode default)" ($goldSeen -ne $goldTarget) `
             "host $goldBefore -> $goldTarget, client's engine reads $goldSeen"
     }
-    Check 'PC experience rises on the other instance' ($xpSeen -eq $xpTarget) `
+    Check 'PC experience rises on the other instance' ((AsI32 $xpSeen) -ge (AsI32 $xpTarget)) `
         "host $xpBefore -> $xpTarget, client's engine reads $xpSeen"
 
     # The guard, and the whole reason the channel changed: a client that has earned XP the
     # host has not — plot XP from a conversation only it is having — must not have it stamped
     # back down. Drop the host well below and give it longer than a merge would need.
-    [VF]::W32($h1, $statsHost + 0x68, (AsI32 ($xpBefore + 0xFFFFFFEC))) | Out-Null
+    $xpDrop = $xpBaseline - 20
+    $xpClientBeforeDrop = AsI32 ([VF]::U32($h2, $statsPeer + 0x68))
+    RequireWrite32 $h1 ($statsHost + 0x68) $xpDrop
     Start-Sleep -Seconds 6
     $xpAfterDrop = [VF]::U32($h2, $statsPeer + 0x68)
     $xpHostHealed = [VF]::U32($h1, $statsHost + 0x68)
 
-    Check "a client's experience cannot be pulled backwards" ($xpAfterDrop -eq $xpTarget) `
-        "host dropped to $($xpBefore - 20), client's engine still reads $xpAfterDrop"
+    Check "a client's experience cannot be pulled backwards" ((AsI32 $xpAfterDrop) -ge $xpClientBeforeDrop) `
+        "host dropped to $xpDrop, client's engine still reads $xpAfterDrop"
 
     # ...and the merge runs the other way too: the client keeps reporting its absolute, so
     # the host climbs back to it rather than the pair settling at the lower number.
-    Check 'the host adopts the higher experience back' ($xpHostHealed -eq $xpTarget) `
-        "host wrote $($xpBefore - 20), reads back $xpHostHealed"
+    Check 'the host adopts the higher experience back' ((AsI32 $xpHostHealed) -ge $xpClientBeforeDrop) `
+        "host wrote $xpDrop, reads back $xpHostHealed"
 
     # Put the numbers back. ⚠ BOTH SIDES, BY HAND: a max-merged value cannot be restored
     # downward through the channel — writing only the host would have the client's higher
     # figure pull it straight back up, which is the behaviour two checks above just proved.
-    [VF]::W32($h1, $partyTable1 + 0xFC, [int]$goldBefore) | Out-Null
-    [VF]::W32($h1, $statsHost + 0x68, (AsI32 $xpBefore)) | Out-Null
-    [VF]::W32($h2, $statsPeer + 0x68, (AsI32 $clientXpBefore)) | Out-Null
+    RequireWrite32 $h1 ($partyTable1 + 0xFC) $goldBefore
+    # A single paired write can be overwritten by a cached higher peer report. Hold
+    # both real engine fields across multiple one-second pumps so fresh lower reports
+    # replace those snapshots. Unequal starting XP naturally merges to the higher one.
+    for ($restoreTick = 0; $restoreTick -lt 30; $restoreTick++) {
+        RequireWrite32 $h1 ($statsHost + 0x68) $xpBaseline
+        RequireWrite32 $h2 ($statsPeer + 0x68) $xpBaseline
+        Start-Sleep -Milliseconds 100
+    }
+    $xpRestoreBits = [uint32]($xpBaseline -band 4294967295L)
+    if (-not (WaitFor2 {
+        [VF]::U32($h1, $statsHost + 0x68) -eq $xpRestoreBits -and [VF]::U32($h2, $statsPeer + 0x68) -eq $xpRestoreBits
+    } 5)) { throw 'XP restoration did not settle; results are incomplete' }
     if ($creditsShared) {
         WaitFor2 { [VF]::U32($h2, $partyTable2 + 0xFC) -eq $goldBefore } 20 | Out-Null
     }
     else {
-        [VF]::W32($h2, $partyTable2 + 0xFC, (AsI32 $clientGoldBefore)) | Out-Null
+        RequireWrite32 $h2 ($partyTable2 + 0xFC) $clientGoldBefore
     }
 }
 else {
@@ -890,6 +1139,22 @@ Check 'a dropped item is created in the peer''s game' (($newItemId -ne 0) -and (
       else { "the request was taken but no new item body appeared in the host within 30s" })
 
 if (($newItemId -ne 0) -and ($clientSlot -ge 0)) {
+    $pickupPositionSaved = PlayerPosition $h2 $b2
+    $pickupMoved = $false
+    try {
+    BreakOffAllCombat $h1 $b1
+    BreakOffAllCombat $h2 $b2
+    CloseConversations $h1 $b1
+    CloseConversations $h2 $b2
+    $pickupObjectId = ItemBody $h2 $b2 $clientSlot
+    $pickupBody = [VF]::ResolveObject($h2, $pickupObjectId)
+    if (-not $pickupBody -or [VF]::U32($h2, $pickupBody + 4) -ne $pickupObjectId) {
+        throw 'pickup fixture has no current native item body'
+    }
+    $pickupPosition = @(0x90, 0x94, 0x98 | ForEach-Object { [VF]::F32($h2, $pickupBody + $_) })
+    $pickupTp = 'tp {0} {1} {2}' -f $pickupPosition[0].ToString('R', [Globalization.CultureInfo]::InvariantCulture), $pickupPosition[1].ToString('R', [Globalization.CultureInfo]::InvariantCulture), $pickupPosition[2].ToString('R', [Globalization.CultureInfo]::InvariantCulture)
+    if (-not (SendConsole $h2 $b2 $pickupTp)) { throw 'native pickup position staging did not apply' }
+    $pickupMoved = $true
     $issuedBefore = [VF]::U32($h2, $b2 + 0x284)
 
     # The pickup TEST HOOK: the 1-based slot index of an item the local player should walk
@@ -930,6 +1195,12 @@ if (($newItemId -ne 0) -and ($clientSlot -ge 0)) {
     # complete leaves this item on both floors for the next run. That is why the check above
     # snapshots the host's existing items first: a leftover is ignored rather than mistaken
     # for the new drop. It does cost one of the eight item slots per failed run.
+    } finally {
+        if ($pickupMoved) {
+            $pickupReturn = 'tp {0} {1} {2}' -f $pickupPositionSaved[0].ToString('R', [Globalization.CultureInfo]::InvariantCulture), $pickupPositionSaved[1].ToString('R', [Globalization.CultureInfo]::InvariantCulture), $pickupPositionSaved[2].ToString('R', [Globalization.CultureInfo]::InvariantCulture)
+            if (-not (SendConsole $h2 $b2 $pickupReturn)) { throw 'native pickup position restoration failed' }
+        }
+    }
 }
 else {
     Check 'an item picked up here vanishes on the peer' $false `
@@ -960,7 +1231,7 @@ Check 'death suppressions armed the right way round' `
     (($suppressOverHost -ne 0) -and ($suppressOverPeer -ne 0) -and ($suppressSwapHost -eq 0) -and ($suppressSwapPeer -ne 0)) `
     "game-over host $suppressOverHost client $suppressOverPeer, swap host $suppressSwapHost client $suppressSwapPeer"
 
-if ($pcPeer -eq 0) { $pcPeer = [VF]::FindCreature($h2, 0x7FFFFFFF) }
+$pcPeer = PlayerAddress $h2 $b2
 
 if ($pcPeer -eq 0) {
     Check 'a downed player is reported to the agent' $false 'client PC not found'
@@ -1020,8 +1291,9 @@ else {
     # either way — and if the agent's own rescue fires first, that is the same path arriving
     # by the other door, so it cannot make this pass falsely.
     $reviveHp = if ($hpSaved -gt 0) { $hpSaved } elseif ($maxPeer -ge 20) { 20 } else { [Math]::Max($maxPeer, 1) }
-    [VF]::W32($h2, $b2 + 0x1040, [int]$reviveHp) | Out-Null
-    [VF]::W32($h2, $b2 + 0x1034, [int]([VF]::U32($h2, $b2 + 0x1034) + 1)) | Out-Null
+    RequireWrite32 $h2 ($b2 + 0x1040) $reviveHp
+    $reviveRequested = ([Math]::Max([long][VF]::U32($h2, $b2 + 0x1034), [long][VF]::U32($h2, $b2 + 0x1038)) + 1) -band 4294967295L
+    RequireWrite32 $h2 ($b2 + 0x1034) $reviveRequested
 
     # ⚠ Judged on the ENGINE's hit points AND on the plugin's applied/status pair together.
     # Hit points alone would also be satisfied by the engine's five-second auto-revive, which
@@ -1029,7 +1301,7 @@ else {
     # the co-op revive ran, and a failed revive still echoes the serial (with a non-zero
     # status), so the status has to be read too.
     WaitFor2 {
-        ([VF]::U32($h2, $b2 + 0x1038) -ne $reviveAppliedBefore) -and ([VF]::I16($h2, $pcPeer + 0xDC) -gt 0)
+        ([VF]::U32($h2, $b2 + 0x1038) -eq $reviveRequested) -and ([VF]::I16($h2, $pcPeer + 0xDC) -gt 0)
     } 25 | Out-Null
 
     $reviveApplied = [VF]::U32($h2, $b2 + 0x1038)
@@ -1037,7 +1309,7 @@ else {
     $hpAfterRevive = [VF]::I16($h2, $pcPeer + 0xDC)
     $downedNow = [VF]::U32($h2, $b2 + 0x1020)
     Check 'the co-op revive stands the player back up' `
-        (($reviveApplied -ne $reviveAppliedBefore) -and ($reviveStatus -eq 0) -and ($hpAfterRevive -gt 0) -and ($downedNow -eq 0)) `
+        (($reviveApplied -eq $reviveRequested) -and ($reviveStatus -eq 0) -and ($hpAfterRevive -gt 0) -and ($downedNow -eq 0)) `
         ("applied {0} -> {1}, status {2}, hp {3}, downed {4}" -f `
             $reviveAppliedBefore, $reviveApplied, $reviveStatus, $hpAfterRevive, $downedNow)
 
@@ -1137,8 +1409,24 @@ Check 'the host still controls its companions' `
 # usedoor refuses by design"): blank picks the nearest door, so no tag needs to be known ahead
 # of time. The oracle is the HOST's own live door-open-state byte (door+0x2CC), read off the
 # host's engine directly, not either side's bookkeeping.
+$doorCloseMark = LogLines $Log2
+$doorCloseReplied = SendConsole $h2 $b2 'closedoor'
+Start-Sleep -Seconds 1
+$doorCloseLine = @(NewLogLines $Log2 $doorCloseMark | Where-Object { $_ -match 'door: closed 0x([0-9A-Fa-f]+) \(state (\d+) -> (\d+)\)' } | Select-Object -First 1)
+$stagedDoorId = 0
+if ($doorCloseLine.Count -gt 0 -and $doorCloseLine[0] -match 'door: closed 0x([0-9A-Fa-f]+) \(state (\d+) -> (\d+)\)') {
+    $stagedDoorId = [Convert]::ToUInt32($matches[1], 16)
+}
+$closedHostAddr = if ($stagedDoorId -ne 0) { [VF]::FindDoor($h1, $stagedDoorId) } else { 0 }
+$closedClientAddr = if ($stagedDoorId -ne 0) { [VF]::FindDoor($h2, $stagedDoorId) } else { 0 }
+$closedBoth = $closedHostAddr -ne 0 -and $closedClientAddr -ne 0 -and (WaitFor2 {
+    [VF]::U8($h1, $closedHostAddr + 0x2CC) -eq 0 -and [VF]::U8($h2, $closedClientAddr + 0x2CC) -eq 0
+} 20)
+Check 'door closed before an opening test' ($doorCloseReplied -and $closedBoth) `
+    ("native closedoor replied {0}, door 0x{1:X}, both engines closed {2}" -f $doorCloseReplied, $stagedDoorId, $closedBoth)
+
 $doorMark = LogLines $Log2
-$doorReplied = SendConsole $h2 $b2 'opendoor'
+$doorReplied = $closedBoth -and (SendConsole $h2 $b2 ("opendoor 0x{0:X}" -f $stagedDoorId))
 Start-Sleep -Seconds 1
 $doorLine = @(NewLogLines $Log2 $doorMark | Where-Object { $_ -match 'door: opened 0x([0-9A-Fa-f]+) \(state (\d+) -> (\d+)\)' } | Select-Object -First 1)
 $doorId = 0
@@ -1170,22 +1458,20 @@ if ($doorId -ne 0 -and $doorOpenedOnClient) {
 $hostDoorDist = -1.0
 if ($hostDoorAddr -ne 0) {
     $hx = [VF]::F32($h1, $hostDoorAddr + 0x90); $hy = [VF]::F32($h1, $hostDoorAddr + 0x94)
-    $hpx = [VF]::F32($h1, $b1 + 0x10); $hpy = [VF]::F32($h1, $b1 + 0x14)
+    $doorPosition = PlayerPosition $h1 $b1
+    $hpx = $doorPosition[0]; $hpy = $doorPosition[1]
     $hostDoorDist = [math]::Sqrt([math]::Pow($hx - $hpx, 2) + [math]::Pow($hy - $hpy, 2))
 }
-if ($doorId -ne 0 -and $doorStateBefore -gt 0 -and -not $doorOpenedOnClient) {
-    SkipCheck 'a door opened on the client opens on the host' ("door 0x{0:X} was already open; load a fresh baseline to measure a new opening" -f $doorId)
-}
-else {
 Check 'a door opened on the client opens on the host' `
     (($doorId -ne 0) -and $doorOpenedOnClient -and ($hostDoorAddr -ne 0) -and ($hostDoorState -gt 0)) `
-    $(if (-not $doorReplied) { 'the opendoor console command got no reply within 10s' }
+    $(if (-not $closedBoth) { 'native door-close staging failed; the opening test was not exercised' }
+      elseif (-not $doorReplied) { 'the opendoor console command got no reply within 10s' }
       elseif ($doorId -eq 0) { "no 'door: opened' line seen on the client (sweep may have found no door nearby)" }
       elseif (-not $doorOpenedOnClient) { "door 0x{0:X} did not change state on the client" -f $doorId }
       elseif ($hostDoorAddr -eq 0) { "door 0x{0:X} not found in the host's engine" -f $doorId }
       elseif ($hostDoorState -eq 0) { "door 0x{0:X}: client opened it, host STILL reads open-state 0 after 20s (host is {1:F0} units from the door — see this check's own comment on the deferred-commit/distance gap)" -f $doorId, $hostDoorDist }
       else { "door 0x{0:X}: client opened it, host reads open-state {1} ({2:F0} units from the door)" -f $doorId, $hostDoorState, $hostDoorDist })
-}
+CheckObjectRelock 'door' $stagedDoorId $closedHostAddr $closedClientAddr 0x2C4 $false
 
 # --- 20b. a container opened on the client is held and shown open on the host ---------------
 # docs/research/container-sync.md §5 (live-verified 2026-08-22, protocol 37): the same
@@ -1278,7 +1564,17 @@ Check 'a container opened on the client is held and shown open on the host' `
 # Leave the world closed rather than open, so the next run does not inherit a held container —
 # closeplaceable is idempotent (a no-op, cleanly refused, on an already-closed target).
 if ($containerId -ne 0) {
-    SendConsole $h2 $b2 ("closeplaceable 0x{0:X}" -f $containerId) | Out-Null
+    $containerCloseReplied = SendConsole $h2 $b2 ("closeplaceable 0x{0:X}" -f $containerId)
+    $containerClosedBoth = $clientPlaceableAddr -ne 0 -and $hostPlaceableAddr -ne 0 -and (WaitFor2 {
+        [VF]::U32($h2, $clientPlaceableAddr + 0x338) -eq 0 -and [VF]::U32($h1, $hostPlaceableAddr + 0x338) -eq 0
+    } 20)
+    Check 'container close reaches the other instance' ($containerCloseReplied -and $containerClosedBoth) `
+        ("container 0x{0:X}, native close replied {1}, both engines closed {2}" -f $containerId, $containerCloseReplied, $containerClosedBoth)
+    CheckObjectRelock 'container' $containerId $hostPlaceableAddr $clientPlaceableAddr 0x260 $true
+}
+else {
+    Check 'container close reaches the other instance' $false 'no container was opened'
+    Check 'container re-lock reaches the other instance' $false 'no live container was resolved'
 }
 
 # --- 21. the client's party roster survives a transition ------------------------------------
@@ -1291,7 +1587,7 @@ if ($containerId -ne 0) {
 # Use a disposable session: module scripts can run and followers can travel with the client.
 $hostRosterBefore = [VF]::U32($h2, $b2 + 0x3304)
 $validBefore = ($hostRosterBefore -band 0x80000000) -ne 0
-$moduleBefore = [VF]::Str($h2, $b2 + 0x20, 32)
+$moduleBefore = PlayerModule $h2
 if (-not $IncludeTransitionCheck) {
     SkipCheck 'the client party roster survives a transition' 'opt in with -IncludeTransitionCheck on a disposable session; reload resets phantom damage counters'
 }
@@ -1304,18 +1600,18 @@ elseif ($validBefore -and $moduleBefore.Length -gt 0) {
     $outbound = WaitFor2 {
         [VF]::U32($h2, $b2 + 0x964) -ne $travelAppliedBefore -and
         [VF]::U32($h2, $b2 + 0x968) -eq 0 -and
-        [VF]::Str($h2, $b2 + 0x20, 32) -eq $TransitionModule
+        (PlayerModule $h2) -eq $TransitionModule
     } 40
     $reloaded = $false
     $returnReplied = $false
     # Return even if the outward wait timed out after the module did change.
-    if ([VF]::Str($h2, $b2 + 0x20, 32) -eq $TransitionModule) {
+    if ((PlayerModule $h2) -eq $TransitionModule) {
         $travelAppliedAway = [VF]::U32($h2, $b2 + 0x964)
         $returnReplied = SendConsole $h2 $b2 "warp $moduleBefore"
         $reloaded = WaitFor2 {
             [VF]::U32($h2, $b2 + 0x964) -ne $travelAppliedAway -and
             [VF]::U32($h2, $b2 + 0x968) -eq 0 -and
-            [VF]::Str($h2, $b2 + 0x20, 32) -eq $moduleBefore
+            (PlayerModule $h2) -eq $moduleBefore
         } 40
     }
     $rosterRestored = WaitFor2 { ([VF]::U32($h2, $b2 + 0x3304) -band 0x80000000) -ne 0 } 10
@@ -1361,10 +1657,10 @@ BreakOffCombat $h1 $b1
 BreakOffCombat $h2 $b2
 # Combat and the container check move the players. Restore their starting positions
 # only if they are still in the same module; a teleport across modules is meaningless.
-if ([VF]::Str($h1, $b1 + 0x20, 32) -eq $startModule1) {
+if ((PlayerModule $h1) -eq $startModule1) {
     SendConsole $h1 $b1 ('tp {0} {1} {2}' -f $startPosition1[0].ToString('R', [Globalization.CultureInfo]::InvariantCulture), $startPosition1[1].ToString('R', [Globalization.CultureInfo]::InvariantCulture), $startPosition1[2].ToString('R', [Globalization.CultureInfo]::InvariantCulture)) | Out-Null
 }
-if ([VF]::Str($h2, $b2 + 0x20, 32) -eq $startModule2) {
+if ((PlayerModule $h2) -eq $startModule2) {
     SendConsole $h2 $b2 ('tp {0} {1} {2}' -f $startPosition2[0].ToString('R', [Globalization.CultureInfo]::InvariantCulture), $startPosition2[1].ToString('R', [Globalization.CultureInfo]::InvariantCulture), $startPosition2[2].ToString('R', [Globalization.CultureInfo]::InvariantCulture)) | Out-Null
 }
 

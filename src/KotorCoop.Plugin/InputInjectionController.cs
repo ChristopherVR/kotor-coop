@@ -40,12 +40,13 @@ internal static class InputInjectionController
             {
                 "status" => Status(),
                 "move" => Move(parts),
+                "delta" => Delta(parts),
                 "click" => Click(parts),
                 "key" => Key(parts),
                 "text" => Text(arguments),
                 "char" => Char(parts),
                 _ => "input: usage input click <x> <y> [left|right] | input move <x> <y> | "
-                    + "input key <dik hex/dec> [down|up|tap] | input text <chars> | input char back|enter | input status",
+                    + "input delta <dx> <dy> | input key <dik hex/dec> [down|up|tap] | input text <chars> | input char back|enter | input status",
             };
         }
         catch (Exception ex)
@@ -63,10 +64,23 @@ internal static class InputInjectionController
         string line = $"input: window 0x{window:X}, foreground {NativeMethods.IsForeground()}, "
             + $"engine input {(Odyssey.IsInputActive ? "active" : "inactive")}, cursor {cursor}, "
             + $"DI keyboard {(DirectInputKeyboardHook.IsKeyboardWrapped ? "wrapped" : "not wrapped")}, "
-            + $"DI mouse {(DirectInputMouseHook.IsWrapped ? "wrapped" : "not wrapped")}, "
+            + $"DI mouse {(DirectInputMouseHook.IsWrapped ? "wrapped" : "not wrapped")} ({DirectInputMouseHook.PendingDeltas} deltas pending), "
             + $"isolate real input {(DirectInputKeyboardHook.IsolateRealInput ? "ON" : "off")}";
         PluginHost.Log(line);
         return line;
+    }
+
+    private static string Delta(string[] parts)
+    {
+        if (parts.Length != 3 || !int.TryParse(parts[1], out int x) || !int.TryParse(parts[2], out int y)
+            || x is < -SyntheticMouseDeltaQueue.MaximumDelta or > SyntheticMouseDeltaQueue.MaximumDelta
+            || y is < -SyntheticMouseDeltaQueue.MaximumDelta or > SyntheticMouseDeltaQueue.MaximumDelta)
+            return "input delta: usage input delta <dx> <dy> (each -2048..2048, relative mouse units)";
+        if (!DirectInputMouseHook.IsWrapped) return "input delta: mouse device is not proxied yet";
+        EnsureUnfocusedDelivery();
+        return DirectInputMouseHook.QueueDelta(x, y)
+            ? $"input: queued relative mouse delta {x},{y}"
+            : "input delta: queue full; motion refused";
     }
 
     private static string Move(string[] parts)

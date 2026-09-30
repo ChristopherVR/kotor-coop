@@ -230,6 +230,17 @@ internal sealed unsafe partial class SharedBlockView(byte* baseAddress)
             ? *U32(SharedBlock.OffsetPhantomIdTable + (index * 4))
             : 0;
 
+    /// <summary>Find the current body for one stable session identity, independent of slot order.</summary>
+    public uint RemotePhantomIdFor(uint peerId)
+    {
+        for (int i = 0; i < SharedBlock.SlotCapacity; i++)
+        {
+            RemoteView peer = GetRemote(i);
+            if (peer.Active && peer.PeerId == peerId) return GetPhantomId(i);
+        }
+        return 0;
+    }
+
     /// <summary>
     /// The single unambiguous remote-peer phantom id — 0 unless exactly one phantom slot is
     /// occupied. Used for <c>damage_creator_attribution</c> (docs/research/peer-damage-ledger.md

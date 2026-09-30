@@ -34,6 +34,7 @@ internal sealed class PlaceableController(SharedBlockView block)
     /// <see cref="PlaceableDesiredStateTracker"/>'s remarks for why this replaces the old
     /// <c>ContainerCloseHook.WasEverClosed</c> permanent latch.</summary>
     private readonly PlaceableDesiredStateTracker _desired = new();
+    private readonly Dictionary<uint, uint> _applyGenerations = [];
 
     /// <summary>Forgets everything on a module change; ids now name different placeables.</summary>
     public void Invalidate()
@@ -41,10 +42,15 @@ internal sealed class PlaceableController(SharedBlockView block)
         block.PlaceableCount = 0;
         _mines.Invalidate();
         _desired.Clear();
+        block.ClearPlaceableAcknowledgements();
+        PlaceableLocalChanges.Clear(block);
     }
 
     public void OnFrame()
     {
+        // Capture confirmed genuine interaction edges before a stale mirror can
+        // overwrite them; the external collector runs only once per second.
+        PlaceableLocalChanges.PublishConfirmed(block);
         if (_countdown > 0)
         {
             _countdown--;
@@ -68,11 +74,11 @@ internal sealed class PlaceableController(SharedBlockView block)
                 continue;
             }
 
-            Apply(block.GetPlaceable(i));
+            Apply(i, block.GetPlaceable(i));
         }
     }
 
-    private void Apply(PlaceableView desired)
+    private void Apply(int index, PlaceableView desired)
     {
         if (desired.ObjectId == 0 || desired.ObjectId == Odyssey.ObjectInvalid)
         {
@@ -117,23 +123,26 @@ internal sealed class PlaceableController(SharedBlockView block)
         _desired.Applied(desired.ObjectId, desired.Open, desired.Unlocked);
 
         bool currentlyOpen = Odyssey.IsPlaceableOpen(placeable);
-        if (desired.Open == currentlyOpen)
-        {
-            return;
-        }
-
-        if (desired.Open)
+        if (desired.Open && !currentlyOpen)
         {
             OdysseyPlaceables.PlayContainerOpenAnimation(placeable);
             Odyssey.SetPlaceableOpen(placeable);
             LogFew($"placeable 0x{desired.ObjectId:X}: opened on the session's authority");
         }
-        else
+        else if (!desired.Open && currentlyOpen)
         {
             OdysseyPlaceables.PlayContainerCloseAnimation(placeable);
             OdysseyPlaceables.ClearPlaceableOpenFlag(placeable);
             LogFew($"placeable 0x{desired.ObjectId:X}: closed on the session's authority");
         }
+
+        uint generation = _applyGenerations.GetValueOrDefault(desired.ObjectId) + 1;
+        if (generation == 0) generation = 1;
+        _applyGenerations[desired.ObjectId] = generation;
+        byte actual = (byte)((Odyssey.IsPlaceableOpen(placeable) ? 1 : 0)
+            | (Odyssey.IsPlaceableLocked(placeable) ? 0 : 2)
+            | (Odyssey.IsPlaceableTrapped(placeable) ? 4 : 0));
+        block.AcknowledgePlaceable(index, desired.ObjectId, actual, generation);
     }
 
     private void LogFew(string message)

@@ -30,6 +30,9 @@ internal sealed class KeyIndex
 
     public int EntryCount => _entries.Count;
 
+    /// <summary>The actual archive paths named by the engine index, including mod-added archives.</summary>
+    public IReadOnlyList<string> BifNames => _bifNames;
+
     /// <summary>Parses chitin.key. Throws <see cref="InvalidDataException"/> on a wrong
     /// magic or truncation — the caller (GameFiles) turns that into IsUsable=false.</summary>
     public static KeyIndex Load(string path) => new(path);

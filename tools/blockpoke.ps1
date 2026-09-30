@@ -3,7 +3,7 @@
 # Exists for scripted verification: the interesting inputs (a travel request, a journal
 # request, the remote-pause flag) are agent->plugin fields, so writing them directly
 # exercises the plugin's half of a feature without needing a peer, and reading the
-# plugin->agent halves confirms the result. Offsets mirror SharedBlock.cs version 7.
+# plugin->agent halves confirms the result. Offsets mirror the current SharedBlock.cs layout.
 #
 #   pwsh tools\blockpoke.ps1 -ProcId 1234 state
 #   pwsh tools\blockpoke.ps1 -ProcId 1234 travel end_m01aa
@@ -34,7 +34,7 @@
 param(
     [string]$ProcessName = 'swkotor',
     [int]$ProcId = 0,
-    [Parameter(Position = 0)][ValidateSet('state', 'travel', 'journal', 'pause', 'browser', 'death', 'hitphantom', 'combat', 'ledger', 'threat', 'talk', 'walk', 'dialogue', 'attack', 'encounters', 'triggers', 'cheat', 'console', 'item', 'chargen', 'menuload')]
+    [Parameter(Position = 0)][ValidateSet('state', 'travel', 'announce', 'journal', 'pause', 'browser', 'death', 'hitphantom', 'combat', 'ledger', 'threat', 'talk', 'walk', 'dialogue', 'attack', 'encounters', 'triggers', 'cheat', 'console', 'item', 'chargen', 'menuload')]
     [string]$Command = 'state',
     [Parameter(Position = 1)][string]$Arg1 = '',
     [Parameter(Position = 2)][int]$Arg2 = 0
@@ -125,15 +125,26 @@ switch ($Command) {
     'menuload' {
         if ($Arg1 -ne 'read') {
             WU32 0x3F24 1
+            # Raw probes model automatic requests; never inherit an earlier typed load.
+            WU32 0x8634 0
             WU32 0x9A4 ((U32 0x9A4) + 1)
             "mid-session load request filed: serial $(U32 0x9A4)"
         }
         "  menuload: serial {0}  applied {1}  status {2}" -f (U32 0x9A4), (U32 0x9A8), (U32 0x9AC)
     }
+    'announce' {
+        # Isolated metadata probe: announces a destination without moving this game.
+        if ($Arg1.Length -eq 0) { Write-Error 'announce needs a module name'; exit 1 }
+        WAscii 0x38E8 $Arg1 32
+        WAscii 0x3908 '' 32
+        WU32 0x38E4 ((U32 0x38E4) + 1)
+        "transition metadata announced: module '$Arg1' serial $(U32 0x38E4)"
+    }
     'travel' {
         if ($Arg1.Length -eq 0) { Write-Error 'travel needs a module name'; exit 1 }
         WAscii 0x924 $Arg1 32
         WAscii 0x944 '' 32
+        WU32 0x8630 0
         WU32 0x920 ((U32 0x920) + 1)
         "travel request queued: module '$Arg1' serial $(U32 0x920)"
     }
@@ -352,20 +363,44 @@ switch ($Command) {
         }
     }
     'ledger' {
+        "  local player: 0x{0:X}" -f (U32 0x2264)
+        for ($slot = 0; $slot -lt 8; $slot++) {
+            $remote = 0x50 + ($slot * 0x40)
+            if ((U32 $remote) -ne 0) {
+                "  remote slot {0}: peer {1} phantom 0x{2:X} hp {3}" -f $slot, (U32 ($remote + 4)), (U32 (0x1F80 + ($slot * 4))), (U32 ($remote + 0x18))
+            }
+        }
+        if ((U32 8) -ge 83) {
+            $snapshot = $null
+            for ($attempt = 0; $attempt -lt 4; $attempt++) {
+                $sequence = U32 0x8700
+                if (($sequence -band 1) -ne 0) { continue }
+                $candidate = [BP]::Read($h, ($block + 0x8700), 0x3010)
+                if ($candidate -and (U32 0x8700) -eq $sequence) { $snapshot = $candidate; break }
+            }
+            if ($snapshot) {
+                $count = [Math]::Min([BitConverter]::ToUInt32($snapshot, 8), 1024)
+                "  attributed: count {0} epoch 0x{1:X8} world serial {2}" -f $count, [BitConverter]::ToUInt32($snapshot, 4), [BitConverter]::ToUInt32($snapshot, 12)
+                for ($i = 0; $i -lt [Math]::Min($count, 16); $i++) {
+                    $row = 16 + ($i * 12)
+                    "    attributed[{0}]: peer {1} enemy 0x{2:X} total {3}" -f $i, [BitConverter]::ToUInt32($snapshot, $row), [BitConverter]::ToUInt32($snapshot, $row + 4), [BitConverter]::ToUInt32($snapshot, $row + 8)
+                }
+            } else { '  attributed: publication changing; retry' }
+        }
         # The peer-damage ledger, both directions (SharedBlock.Combat.cs): what THIS instance
         # has dealt to other people's enemies (plugin -> agent, cumulative per enemy id) and
         # what the peers owe this instance's own enemies (agent -> plugin). Cumulative totals,
         # so a row that jumps by more than any weapon can deal is a corrupt read, not a hit.
         "  dealt: count {0}  dropped {1}  generation {2}  enabled {3}" -f (U32 0x2000), (U32 0x2004), (U32 0x2008), (U32 0x2118)
-        $n = [Math]::Min([int](U32 0x2000), 32)
+        $n = [Math]::Min([int](U32 0x2000), 128)
         for ($i = 0; $i -lt $n; $i++) {
-            $base = 0x1E60 + ($i * 8)
+            $base = 0x7E00 + ($i * 8)
             "    dealt[{0}]: id 0x{1:X}  total {2}" -f $i, (U32 $base), (U32 ($base + 4))
         }
         "  owed: count {0}  epoch 0x{1:X8}  applied {2}" -f (U32 0x2010), (U32 0x200C), (U32 0x2014)
-        $n = [Math]::Min([int](U32 0x2010), 32)
+        $n = [Math]::Min([int](U32 0x2010), 128)
         for ($i = 0; $i -lt $n; $i++) {
-            $base = 0x2018 + ($i * 8)
+            $base = 0x8200 + ($i * 8)
             "    owed[{0}]: id 0x{1:X}  total {2}" -f $i, (U32 $base), (U32 ($base + 4))
         }
     }

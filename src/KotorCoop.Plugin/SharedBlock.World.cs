@@ -17,7 +17,8 @@ internal partial struct SharedBlock
     /// <summary>Agent -&gt; plugin. How many door entries are valid.</summary>
     public const int OffsetDoorCount = 0x690;
 
-    /// <summary>Agent -&gt; plugin. objectId u32 @0, openState u8 @4, unlocked u8 @5.</summary>
+    /// <summary>Agent -&gt; plugin: objectId u32 @0, openState u8 @4, unlocked u8 @5.
+    /// Plugin -&gt; agent (v84): applied tuple u8 @6, nonzero apply sequence u8 @7.</summary>
     public const int OffsetDoorSlots = 0x698;
 
     public const int DoorSlotStride = 0x08;

@@ -39,6 +39,7 @@ public enum RejoinTrigger
 
     /// <summary>The joiner explicitly requested the host's latest saved world.</summary>
     ManualWorldRefresh,
+    ScriptWorldRefresh,
 }
 
 /// <summary>Where a rejoin attempt is: <see cref="Idle"/> (nothing running, a new trigger is

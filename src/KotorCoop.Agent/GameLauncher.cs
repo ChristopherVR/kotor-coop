@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using KotorCoop.Memory;
 
@@ -202,7 +203,23 @@ public static class GameLauncher
 
         if (game.HasExited)
         {
-            diagnostic = $"instance {instance} exited immediately with code {game.ExitCode}.";
+            // InstanceLauncher uses native CreateProcess then GetProcessById. After an
+            // early exit this observer may know HasExited without retaining a handle
+            // from which ExitCode can be recovered. A missing code must not hide the
+            // actual launch failure behind "Process was not started by this object".
+            diagnostic = $"instance {instance} exited immediately; mutex 'kcoop{instance}' may already be in use.";
+            try
+            {
+                diagnostic = $"instance {instance} exited immediately with code {game.ExitCode}; mutex 'kcoop{instance}' may already be in use.";
+            }
+            catch (InvalidOperationException)
+            {
+                // The process observer no longer has an exit-code handle.
+            }
+            catch (Win32Exception)
+            {
+                // Its exit code is inaccessible; the early-exit verdict still holds.
+            }
             game.Dispose();
             game = null;
             return false;

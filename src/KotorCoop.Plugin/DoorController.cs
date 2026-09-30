@@ -32,16 +32,20 @@ internal sealed class DoorController(SharedBlockView block)
     /// <summary>Door ids we have commanded a swing on, and how long we have waited.</summary>
     private readonly uint[] _commandedIds = new uint[SharedBlock.DoorCapacity];
     private readonly int[] _commandedWait = new int[SharedBlock.DoorCapacity];
+    private readonly byte[] _commandedOpen = new byte[SharedBlock.DoorCapacity];
     private int _countdown;
     private int _logged;
     private readonly DoorDesiredStateTracker _desired = new();
+    private readonly Dictionary<uint, byte> _ackSequence = [];
 
     /// <summary>Forgets everything on a module change; ids now name different doors.</summary>
     public void Invalidate()
     {
         Array.Clear(_commandedIds);
         Array.Clear(_commandedWait);
+        Array.Clear(_commandedOpen);
         _desired.Clear();
+        block.ClearDoorAcknowledgements();
         block.DoorCount = 0;
     }
 
@@ -86,19 +90,42 @@ internal sealed class DoorController(SharedBlockView block)
 
         if (_commandedIds[slot] == desired.ObjectId)
         {
+            // A newer canonical close/relock can interrupt an outstanding swing once.
+            // Never finish the old request merely because the two native bytes agree.
+            if (_desired.IsNew(desired.ObjectId, desired.OpenState, desired.Unlocked))
+            {
+                Odyssey.SetDoorLocked(door, !desired.Unlocked);
+                _desired.Applied(desired.ObjectId, desired.OpenState, desired.Unlocked);
+                if (_commandedOpen[slot] != desired.OpenState)
+                {
+                    _commandedOpen[slot] = desired.OpenState;
+                    _commandedWait[slot] = 0;
+                    Odyssey.SetDoorOpenState(door, desired.OpenState);
+                }
+                current = Odyssey.GetDoorOpenState(door);
+                pending = Odyssey.GetDoorPendingOpenState(door);
+            }
             // We already commanded this swing. If the engine committed it, done; if not,
             // give the animation time and then commit state + walkmesh ourselves.
-            if (current == pending)
+            if (DoorApplyCompletionRule.IsComplete(_commandedOpen[slot], current, pending))
             {
+                AcknowledgeActual(slot, door, desired.ObjectId);
                 _commandedIds[slot] = 0;
                 _commandedWait[slot] = 0;
             }
             else if (++_commandedWait[slot] >= CommitFallbackPasses)
             {
+                if (pending != _commandedOpen[slot])
+                    Odyssey.SetDoorOpenState(door, _commandedOpen[slot]);
                 Odyssey.CommitDoorOpenState(door);
-                LogFew($"door 0x{desired.ObjectId:X}: commit forced after the swing never landed");
-                _commandedIds[slot] = 0;
                 _commandedWait[slot] = 0;
+                if (DoorApplyCompletionRule.IsComplete(_commandedOpen[slot],
+                        Odyssey.GetDoorOpenState(door), Odyssey.GetDoorPendingOpenState(door)))
+                {
+                    AcknowledgeActual(slot, door, desired.ObjectId);
+                    LogFew($"door 0x{desired.ObjectId:X}: commit forced after the swing never landed");
+                    _commandedIds[slot] = 0;
+                }
             }
 
             return;
@@ -115,12 +142,30 @@ internal sealed class DoorController(SharedBlockView block)
 
         Odyssey.SetDoorLocked(door, !desired.Unlocked);
         _desired.Applied(desired.ObjectId, desired.OpenState, desired.Unlocked);
-        if (desired.OpenState == current) return;
+        if (desired.OpenState == current)
+        {
+            AcknowledgeActual(slot, door, desired.ObjectId);
+            return;
+        }
 
         Odyssey.SetDoorOpenState(door, desired.OpenState);
         _commandedIds[slot] = desired.ObjectId;
+        _commandedOpen[slot] = desired.OpenState;
         _commandedWait[slot] = 0;
         LogFew($"door 0x{desired.ObjectId:X}: swinging {current} -> {desired.OpenState} on the session's authority");
+    }
+
+    private void AcknowledgeActual(int slot, nint door, uint id)
+    {
+        byte actualOpen = Odyssey.GetDoorOpenState(door);
+        if (actualOpen != Odyssey.GetDoorPendingOpenState(door)) return;
+        _ackSequence.TryGetValue(id, out byte previousSequence);
+        byte sequence = unchecked((byte)(previousSequence + 1));
+        if (sequence == 0) sequence = 1;
+        _ackSequence[id] = sequence;
+        // A native apply can be locally undone before the agent's next one-second scan.
+        // Tell the agent what really applied, so its old shadow cannot swallow that edge.
+        block.AcknowledgeDoor(slot, (byte)(actualOpen | (Odyssey.IsDoorLocked(door) ? 0 : 4)), sequence);
     }
 
     private void LogFew(string message)

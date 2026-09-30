@@ -47,6 +47,44 @@ public class LiveObjectGateTests
 
     private const nint TreeBase = 0x0100_0000;
 
+    [Theory]
+    [InlineData(0x47u, 0x2C4)] // door locked byte
+    [InlineData(0xC6u, 0x260)] // placeable locked field
+    public void WorldFlagCollectorIgnoresFreedLockedBodyAfterLiveBodyUnlocks(uint id, int lockOffset)
+    {
+        FakeMemory memory = new() { Tree = TreeBase };
+        nint current = 0x0300_0000;
+        nint freed = 0x0400_0000;
+        memory.AddEntry(id & 0xFFF, 0x0200_0000, id, (uint)current, 0);
+        // Both scanned bodies retain the same id, but the old world still says locked.
+        memory.Write(current + 4, id);
+        memory.Write(freed + 4, id);
+        memory.Write(current + lockOffset, 0);
+        memory.Write(freed + lockOffset, 1);
+
+        // Exercise the production collector's exact gate with the stale candidate last,
+        // the order that previously overwrote the shadow with a spurious re-lock.
+        Dictionary<uint, uint> observed = [];
+        foreach (nint candidate in new[] { current, freed })
+        {
+            uint scannedId = memory.Read(candidate + 4)!.Value;
+            if (EngineGlobals.IsCurrentServerObject(memory.Read, TreeBase, scannedId, candidate))
+                observed[scannedId] = memory.Read(candidate + lockOffset)!.Value;
+        }
+
+        Assert.Single(observed);
+        Assert.Equal(0u, observed[id]);
+        Assert.False(EngineGlobals.IsCurrentServerObject(memory.Read, TreeBase, id, freed));
+    }
+
+    [Fact]
+    public void WorldFlagCollectorDoesNotPublishGhostsWhileObjectArrayIsUnavailable()
+    {
+        FakeMemory memory = new() { Tree = TreeBase };
+        Assert.False(EngineGlobals.IsCurrentServerObject(memory.Read, TreeBase, 0x47, 0x0300_0000));
+        Assert.False(EngineGlobals.IsCurrentServerObject(memory.Read, 0, 0x47, 0x0300_0000));
+    }
+
     [Fact]
     public void ResolvesAnIdFromItsOwnBucket()
     {

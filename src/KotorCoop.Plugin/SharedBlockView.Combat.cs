@@ -5,6 +5,34 @@ namespace KotorCoop.Plugin;
 // one-shot animations. See SharedBlockView.cs for the class declaration and shared helpers.
 internal sealed unsafe partial class SharedBlockView
 {
+    public void InvalidateAttributedDamage()
+    {
+        // A publication from the world just torn down cannot name bodies in the new world.
+        *U32(SharedBlock.OffsetAttributedDamageSequence) = 0;
+        *U32(SharedBlock.OffsetAttributedDamageCount) = 0;
+    }
+
+    public bool TryReadAttributedDamage(Span<AttributedDamageRow> rows, out uint epoch, out int count)
+    {
+        epoch = 0;
+        count = 0;
+        ref uint sequence = ref *U32(SharedBlock.OffsetAttributedDamageSequence);
+        uint before = System.Threading.Volatile.Read(ref sequence);
+        if (before == 0 || (before & 1u) != 0) return false;
+        uint publishedCount = *U32(SharedBlock.OffsetAttributedDamageCount);
+        if (publishedCount > rows.Length) return false;
+        uint worldSerial = *U32(SharedBlock.OffsetAttributedDamageWorldSerial);
+        epoch = *U32(SharedBlock.OffsetAttributedDamageEpoch);
+        count = (int)publishedCount;
+        for (int i = 0; i < count; i++)
+        {
+            uint* slot = U32(SharedBlock.OffsetAttributedDamageSlots + i * SharedBlock.AttributedDamageStride);
+            rows[i] = new(slot[0], slot[1], slot[2]);
+        }
+        System.Threading.Thread.MemoryBarrier();
+        return before == System.Threading.Volatile.Read(ref sequence) && worldSerial == WorldLoadSerial;
+    }
+
     // ---- enemies ----------------------------------------------------------------
 
     /// <summary>

@@ -52,7 +52,8 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
 
     private const int PartyNpcSlots = 9;
 
-    private readonly DamageOwedLedger _owed = new(SharedBlock.DamageLedgerCapacity);
+    private readonly AttributedDamageOwedLedger _owed = new(SharedBlock.DamageLedgerCapacity);
+    private readonly AttributedDamageRow[] _attributedDamage = new AttributedDamageRow[SharedBlock.AttributedDamageCapacity];
 
     /// <summary>THREAT_RETARGET's own per-creature threat bookkeeping — see that class's own
     /// doc comment for what it does and does not track. Only ever touched when
@@ -171,6 +172,7 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
         _owed.Clear();
         ForgetResolutionHistory();
         block.DamageOwedCount = 0;
+        block.InvalidateAttributedDamage();
         block.DamageDealtCount = 0;
 
         // Object ids are per module load; a threat row keyed by a creature or attacker id from
@@ -348,11 +350,11 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
     /// <summary>Turns what the peers have dealt into damage our own engine delivers.</summary>
     private void ApplyOwed()
     {
-        uint count = Math.Min(block.DamageOwedCount, (uint)SharedBlock.DamageLedgerCapacity);
-        uint epoch = block.DamageOwedEpoch;
+        if (!block.TryReadAttributedDamage(_attributedDamage, out uint epoch, out int count)) return;
 
         if (_owed.AdoptEpoch(epoch))
         {
+            _threat.Clear();
             // Both histories are keyed by object id, and a new epoch reassigns every id — so
             // "it resolved here earlier" would be a claim about a different creature.
             ForgetResolutionHistory();
@@ -375,29 +377,18 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
             return;
         }
 
-        // ⚠ ATTRIBUTION (coop.ini damage_creator_attribution, docs/research/peer-damage-ledger.md
-        // §8). This ledger is keyed by ENEMY, merged across every contributing peer's rise
-        // before it ever reaches this instance (§3.1 "bank each peer's rise") — so there is no
-        // per-row peer identity left to pick from once more than one peer is connected. Correct
-        // (and unambiguous) for the two-player topology this codebase tests against: with
-        // exactly one remote peer, ITS phantom is the only body that could have dealt this. A
-        // 3+-peer session simply falls back to no attribution (0) rather than guess wrong.
-        // Computed once per pass, not per row: it does not vary within a pass.
-        uint creatorId = Odyssey.DamageCreatorAttributionEnabled ? block.SoleRemotePhantomId() : 0;
-
-        // THREAT_RETARGET (coop.ini threat_retarget, docs/research/peer-damage-ledger.md §9).
-        // Independent of damage_creator_attribution above — this only needs the peer's phantom
-        // id to bank ThreatTable rows, not to pass through EffectDamage's creator slot, so it
-        // is resolved on its own rather than reusing creatorId (which stays 0 whenever
-        // damage_creator_attribution itself is off). Same SoleRemotePhantomId() limit as §8.6:
-        // unambiguous only with exactly one remote peer connected.
-        uint threatAttackerId = Odyssey.ThreatRetargetEnabled ? block.SoleRemotePhantomId() : 0;
+        // Each accepted peer contribution retains its identity through publication. Resolve
+        // the current phantom by peer id, never by the number/order of connected players.
         double threatNowSeconds = Odyssey.ThreatRetargetEnabled ? Environment.TickCount64 / 1000.0 : 0;
         int threatDebugRows = 0;
 
         for (int i = 0; i < count; i++)
         {
-            block.GetDamageOwed(i, out uint objectId, out uint owed);
+            AttributedDamageRow row = _attributedDamage[i];
+            uint objectId = row.Enemy, owed = row.Total;
+            uint phantomId = block.RemotePhantomIdFor(row.Peer);
+            uint creatorId = Odyssey.DamageCreatorAttributionEnabled ? phantomId : 0;
+            uint threatAttackerId = Odyssey.ThreatRetargetEnabled ? phantomId : 0;
             if (objectId is 0 or Odyssey.ObjectInvalid)
             {
                 continue;
@@ -413,7 +404,7 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
                 continue;
             }
 
-            int amount = _owed.Pending(objectId, owed);
+            int amount = _owed.Pending(row.Peer, objectId, owed);
             if (amount <= 0)
             {
                 continue;
@@ -466,7 +457,7 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
 
             if (Odyssey.ApplyDamageEffect(objectId, amount, creatorId, out int failure))
             {
-                _owed.Commit(objectId, amount);
+                _owed.Commit(row.Peer, objectId, amount);
                 block.DamageOwedApplied += 1;
 
                 if (_logged < 20)
@@ -576,6 +567,12 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
         return debugRows;
     }
 
+    private static bool IsLiveThreatAttacker(uint id)
+    {
+        nint body = Odyssey.ResolveServerObject(id);
+        return body != 0 && !Odyssey.IsDowned(body);
+    }
+
     /// <summary>
     /// THREAT_RETARGET (coop.ini <c>threat_retarget</c>, docs/research/peer-damage-ledger.md
     /// §9): if <paramref name="creatureId"/>'s current attack target clearly no longer
@@ -605,7 +602,7 @@ internal sealed unsafe class PeerDamageController(SharedBlockView block)
         // still shows an idle creature's tracked threat.
         uint currentTargetId = Odyssey.GetCurrentAttackTargetId(creature);
 
-        if (!_threat.TryGetTopAttacker(creatureId, nowSeconds, out uint topAttackerId, out double topThreat))
+        if (!_threat.TryGetTopAttacker(creatureId, nowSeconds, out uint topAttackerId, out double topThreat, IsLiveThreatAttacker))
         {
             return debugRows;
         }

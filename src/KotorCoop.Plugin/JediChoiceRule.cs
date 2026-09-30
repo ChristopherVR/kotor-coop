@@ -42,6 +42,20 @@ internal static class JediChoiceRule
     /// <c>KotorCoop.Memory.GameFiles.JediClassDialogueBlueprint.ResRef</c> byte for byte.</summary>
     public const string DialogResRef = "k_coop_jediclass";
 
+    // Exact private-dialogue fingerprint, cross-checked against the generated blueprint.
+    public static string EntryText(int entry) => entry switch
+    {
+        0 => "The Force is strong in you. Choose the training you will pursue.",
+        1 => "You feel the Force flow through you as a Guardian.",
+        2 => "You feel the Force flow through you as a Consular.",
+        3 => "You feel the Force flow through you as a Sentinel.",
+        _ => string.Empty,
+    };
+
+    public static bool IsPrivatePromptLayout(bool conversationActive, bool localPlayerOwnsDialog,
+        int entries, int replies, int starts, int node) => conversationActive && localPlayerOwnsDialog
+        && entries == 4 && replies == 3 && starts == 1 && node is >= 0 and < 4;
+
     /// <summary><c>EntryList</c> index of the popup's terminal Guardian line. MUST match
     /// <c>JediClassDialogueBlueprint.TerminalEntryGuardian</c>.</summary>
     public const int TerminalEntryGuardian = 1;

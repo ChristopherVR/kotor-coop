@@ -12,6 +12,7 @@ public static partial class PacketCodec
         w.WriteUInt32(packet.PeerId);
         w.WriteString(packet.Module, ProtocolConstants.MaxModuleLength);
         w.WriteUInt32(packet.Generation);
+        w.WriteUInt32(packet.Incarnation);
 
         int count = Math.Min(packet.Damage.Count, ProtocolConstants.MaxEnemyDamageEntries);
         w.WriteUInt8((byte)count);
@@ -37,6 +38,7 @@ public static partial class PacketCodec
         uint peerId = r.ReadUInt32();
         string module = r.ReadString();
         uint generation = r.ReadUInt32();
+        uint incarnation = r.ReadUInt32();
         byte count = r.ReadUInt8();
 
         if (r.Failed || count > ProtocolConstants.MaxEnemyDamageEntries)
@@ -58,7 +60,7 @@ public static partial class PacketCodec
             damage.Add(new EnemyDamageEntry(objectId, cumulative));
         }
 
-        return new EnemyDamagePacket(peerId, module, generation, damage);
+        return new EnemyDamagePacket(peerId, module, generation, damage, incarnation);
     }
 
     public static int Write(Span<byte> buffer, PhantomDamagePacket packet)

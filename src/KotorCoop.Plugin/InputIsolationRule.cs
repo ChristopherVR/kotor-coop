@@ -36,9 +36,8 @@ internal static class InputIsolationRule
     /// only consumer of this device, <c>CExoInputInternal::UpdateMouseDelta</c>, turns lX/lY
     /// straight into the camera look axes (docs/research/mouse-cursor-input.md's answer sheet),
     /// so an all-neutral state means "the real mouse did not move and no button is down" — the
-    /// isolated rig's whole point. A size other than the plain <c>DIMOUSESTATE</c> the engine
-    /// actually requests is left alone (nothing here recognises it, so nothing here should touch
-    /// it).
+    /// isolated rig's whole point. <c>DIMOUSESTATE2</c> (0x14, eight button bytes) uses the
+    /// same three LONG axes and is recognized too. Other formats are left alone.
     /// </summary>
-    public static bool ShouldNeutralizeMouseState(bool isolate, uint size) => isolate && size == 0x10;
+    public static bool ShouldNeutralizeMouseState(bool isolate, uint size) => isolate && size is 0x10 or 0x14;
 }

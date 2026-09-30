@@ -50,6 +50,8 @@ public interface IEnemyBridge
     /// object ids were last assigned, plus the ledger generation those totals belong to.
     /// Cumulative and monotonic within a generation; empty when no plugin is attached.
     /// </summary>
+    uint ReadDamageDealtIncarnation() => 0;
+
     (uint Generation, List<EnemyDamageEntry> Damage) ReadDamageDealt() => (0, []);
 
     /// <summary>
@@ -61,6 +63,9 @@ public interface IEnemyBridge
     /// other death.
     /// </summary>
     bool TryPublishDamageOwed(uint epoch, IReadOnlyList<EnemyDamageEntry> owed) => false;
+
+    /// <summary>Per-peer accepted cumulative totals, preserving damage and threat ownership.</summary>
+    bool TryPublishAttributedDamageOwed(uint epoch, IReadOnlyList<PeerEnemyDamage> owed) => false;
 
     // ---- client-cast enemy effects (docs/research/enemy-effects.md, shared block 0x4C60) ----
 

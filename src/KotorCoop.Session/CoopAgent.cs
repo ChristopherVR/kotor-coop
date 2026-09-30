@@ -145,6 +145,9 @@ public sealed partial class CoopAgent
     /// the dispatcher's status line.</summary>
     public PlayerCountScaling Scaling => _scaling;
 
+    /// <summary>The actual running class-choice pump setting, including intentional disabling.</summary>
+    public bool ClassGrantSyncEnabled => _settings.ClassGrantSync;
+
     public CoopAgent(IGameBridge bridge, ICoopSession session, AgentSettings settings)
     {
         _bridge = bridge;

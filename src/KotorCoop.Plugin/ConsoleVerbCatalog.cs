@@ -92,6 +92,8 @@ internal static class ConsoleVerbCatalog
         // shadow a retail verb (checked the same way every staging cheat above was).
         ("crossdoor", "crossdoor [tag|id]  (blank = nearest module transition door; posts the crossing event, no walk)"),
         ("opendoor", "opendoor [tag|id]  (blank = nearest door; unlike usedoor, no transition needed)"),
+        ("closedoor", "closedoor [tag|id]  (dev: close a door through the engine; blank = nearest door)"),
+        ("setlock", "setlock <id> on|off  (dev: change a real door/container lock)"),
 
         // The container-sync live-test primitive: use a chest/corpse/switch through the
         // engine's own use-object input, exactly like a real click. See
@@ -163,7 +165,7 @@ internal static class ConsoleVerbCatalog
         ("gamepad", "gamepad [status|on|off|cursor|sim <lx= ly= rx= ry= lt= rt= a b x y lb rb start back ls rs up down left right>|sim off]"),
         ("firetrigger", "firetrigger <tag|0xid>  (fire a trigger's OnEnter for you, as if you walked in; dev)"),
         ("stealth", "stealth on|off  (the local player's engine stealth mode; a live-test primitive)"),
-        ("input", "input click <x> <y> [left|right] | input move <x> <y> | input key <dik hex/dec> [down|up|tap] | input status  (isolated-rig synthetic mouse/keyboard, no real cursor movement)"),
+        ("input", "input click <x> <y> [left|right] | input move <x> <y> | input delta <dx> <dy> | input key <dik hex/dec> [down|up|tap] | input status  (isolated-rig synthetic mouse/keyboard, no real cursor movement)"),
         ("screenshot", "screenshot <name> [front] | screenshot status  (plugin-side GL screenshot for the isolated rig; writes <gamedir>\\kotorcoop-shots\\<name>.bmp - PrintWindow is unreliable for this OpenGL game)"),
 
         // The live-cast primitive (2026-09-24, docs/research/effect-sync.md §14): a real

@@ -15,20 +15,8 @@ namespace KotorCoop.Plugin;
 /// reason about and to unit test with fixed clock ticks, and the choice of curve only affects
 /// how quickly an attacker who stops swinging loses priority — not whether the feature works.
 ///
-/// ⚠ WHAT THIS DOES NOT TRACK. Only damage this instance can attribute to a specific attacker
-/// id feeds the table — in practice, a peer's forwarded damage via
-/// <see cref="SharedBlockView.SoleRemotePhantomId"/> (unambiguous only with exactly one remote
-/// peer connected, the same limit <c>damage_creator_attribution</c> already documents — see
-/// peer-damage-ledger.md §8.6/§8.9). The HOST's own local PC/party damage to the same
-/// creature is NOT recorded here: no cheap existing ground-truth read for "how much did the
-/// local player just deal to this specific enemy" was found on the host side (
-/// <c>PhantomHitHook.Dealt</c> is only ever populated while <c>block.DamageDealtEnabled</c> is
-/// true, which is precisely the signal that THIS instance is NOT the fight's owner — see
-/// <c>PeerDamageController.RefreshAttackers</c>'s own remarks). So the current target's own
-/// threat reads 0 unless it happens to also be a tracked peer attacker id, which in practice
-/// means the retarget decision reduces to "does the top peer attacker clear the absolute
-/// minimum", not a true margin over the incumbent's own contribution. Documented rather than
-/// guessed at — see peer-damage-ledger.md §9 for the write-up.
+/// Both the host's own PC/party hits and every peer's accepted damage feed this table.
+/// Peer identities survive the agent merge and resolve to their current phantom body.
 /// </summary>
 internal sealed class ThreatTable(double windowSeconds = ThreatTable.DefaultWindowSeconds)
 {
@@ -128,7 +116,7 @@ internal sealed class ThreatTable(double windowSeconds = ThreatTable.DefaultWind
     /// <summary>The attacker with the highest CURRENT (decayed) threat against a creature.
     /// False when the creature has no tracked attacker at all, or every one has decayed to
     /// zero.</summary>
-    public bool TryGetTopAttacker(uint creatureId, double nowSeconds, out uint attackerId, out double threat)
+    public bool TryGetTopAttacker(uint creatureId, double nowSeconds, out uint attackerId, out double threat, Func<uint, bool>? eligible = null)
     {
         attackerId = 0;
         threat = 0;
@@ -140,6 +128,7 @@ internal sealed class ThreatTable(double windowSeconds = ThreatTable.DefaultWind
 
         foreach ((uint id, AttackerEntry entry) in byAttacker)
         {
+            if (eligible is not null && !eligible(id)) continue;
             double t = Decayed(entry.Threat, entry.LastSeconds, nowSeconds);
             if (t > threat)
             {

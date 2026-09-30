@@ -277,6 +277,7 @@ internal static class AgentComposition
             RequireIdenticalSave = options.RequireIdenticalSave,
             Password = sessionPassword.Length > 0 ? sessionPassword : fallbackPassword,
             PeerIdentity = peerIdentity,
+            ItemContinuationPath = installDirectory is null ? null : Path.Combine(installDirectory, "coop.items.json"),
             ConnectTimeoutMs = config is { ConnectTimeoutMs: > 0 }
                 ? config.ConnectTimeoutMs
                 : ProtocolConstants.DefaultConnectTimeoutMs,

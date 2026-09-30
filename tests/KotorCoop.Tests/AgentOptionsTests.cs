@@ -59,4 +59,16 @@ public class AgentOptionsTests
         Assert.Equal(9999, options.HostEndPoint!.Port);
         Assert.False(options.PortExplicit);
     }
+    [Theory]
+    [InlineData("10", 10)]
+    [InlineData("99", 99)]
+    [InlineData("100", 99)]
+    [InlineData("0", 1)]
+    public void InstanceNamesFitTheSevenByteNativeMutexReplacement(string requested, int expected)
+    {
+        AgentOptions options = AgentOptions.Parse(["launch", "--instance", requested]);
+
+        Assert.Equal(expected, options.Instance);
+        Assert.True($"kcoop{options.Instance}".Length <= "swkotor".Length);
+    }
 }

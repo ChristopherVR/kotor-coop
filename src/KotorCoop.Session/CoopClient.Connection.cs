@@ -66,7 +66,7 @@ public sealed partial class CoopClient
                 _settings.PlayerName, module, _nonce, _settings.Digest,
                 SessionPassword.Hash(_settings.Password), _settings.Behaviour,
                 _lineageSeed?.HostSessionId ?? 0, _lineageSeed?.HostLoadAtAgreement ?? 0,
-                _lineageSeed?.LocalLoadAtAgreement ?? 0));
+                _lineageSeed?.LocalLoadAtAgreement ?? 0, _settings.DamageIncarnation));
         if (length > 0)
         {
             // DEBUG/TEST-ONLY (coop.ini debug_hello_version, default 0/off — see
@@ -110,6 +110,7 @@ public sealed partial class CoopClient
 
         if (_localPeerId == 0)
         {
+            RestoreItemContinuation(welcome.SessionId, welcome.AssignedPeerId);
             _localPeerId = welcome.AssignedPeerId;
             _sessionPeerId = welcome.AssignedPeerId;
             _hostSessionId = welcome.SessionId;

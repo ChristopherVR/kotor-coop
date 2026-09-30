@@ -57,6 +57,9 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
     /// really can put a different world under the same host session id).
     /// </summary>
     private LineageSeed? _lineageSeed;
+    // Item and reliable-operation IDs belong to the retained host/peer identity, rather
+    // than a particular UDP connection. Retain unacknowledged operations as well.
+    private ItemContinuation? _itemContinuation;
 
     /// <summary>The identity of the world this install last adopted from a host — handed to
     /// the next <see cref="CoopClient"/> for <see cref="ModuleGitLineage"/>. Process-lifetime,
@@ -241,6 +244,9 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
 
         DisconnectCore();
 
+        if (bridge.ReadDamageDealtIncarnation() is uint incarnation && incarnation != 0)
+            settings = settings with { DamageIncarnation = incarnation };
+
         _lastHost = host;
         _lastEndpoint = endpoint;
         _lastSettings = settings;
@@ -249,6 +255,10 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
         try
         {
             session = host ? new CoopHost(settings) : new CoopClient(settings, endpoint!, _lineageSeed, _adoptedSaveIdentity);
+            if (session is CoopClient itemClient)
+            {
+                itemClient.SeedItemContinuation(_itemContinuation);
+            }
         }
         catch (PortInUseException ex)
         {
@@ -363,6 +373,10 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
         }
         finally
         {
+            if (session is CoopClient itemClient)
+            {
+                _itemContinuation = itemClient.CaptureItemContinuation();
+            }
             session?.Dispose();
             cts.Dispose();
             bridge.ClearCoopState();

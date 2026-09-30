@@ -19,6 +19,7 @@ public static partial class PacketCodec
         w.WriteUInt32(packet.LineageHostSessionId);
         w.WriteUInt32(packet.LineageHostLoad);
         w.WriteUInt32(packet.LineageClientLoad);
+        w.WriteUInt32(packet.DamageIncarnation);
         return w.Failed ? 0 : w.Position;
     }
 
@@ -39,11 +40,12 @@ public static partial class PacketCodec
         uint lineageHostSessionId = r.ReadUInt32();
         uint lineageHostLoad = r.ReadUInt32();
         uint lineageClientLoad = r.ReadUInt32();
+        uint damageIncarnation = r.ReadUInt32();
         return r.Failed
             ? null
             : new HelloPacket(
                 name, module, nonce, digest, passwordHash, behaviour,
-                lineageHostSessionId, lineageHostLoad, lineageClientLoad);
+                lineageHostSessionId, lineageHostLoad, lineageClientLoad, damageIncarnation);
     }
 
     public static int Write(Span<byte> buffer, WelcomePacket packet)
@@ -295,6 +297,8 @@ public static partial class PacketCodec
         // The live GUI setting is sampled locally and compared as a warning only. A distinct
         // protocol version prevents old readers from treating the trailing byte as padding.
         w.WriteUInt8(packet.Digest.DifficultyLevel ?? WorldDigest.UnknownDifficulty);
+        w.WriteUInt32(packet.Digest.ScriptRefreshRevision);
+        w.WriteUInt32(packet.Digest.ScriptRefreshSaveIdentity);
         return w.Failed ? 0 : w.Position;
     }
 
@@ -314,9 +318,12 @@ public static partial class PacketCodec
         uint loadSerial = r.ReadUInt32();
         byte rawDifficultyLevel = r.ReadUInt8();
         byte? difficultyLevel = rawDifficultyLevel <= 2 ? rawDifficultyLevel : null;
+        uint scriptRefreshRevision = r.ReadUInt32();
+        uint scriptRefreshIdentity = r.ReadUInt32();
         return r.Failed
             ? null
             : new WorldDigestPacket(peerId,
-                new WorldDigest(globals, saveIdentity, module, moduleGit, loadSerial, difficultyLevel));
+                new WorldDigest(globals, saveIdentity, module, moduleGit, loadSerial, difficultyLevel,
+                    scriptRefreshRevision, scriptRefreshIdentity));
     }
 }

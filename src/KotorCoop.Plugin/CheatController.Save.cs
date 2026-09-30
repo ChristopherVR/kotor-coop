@@ -3,6 +3,18 @@ namespace KotorCoop.Plugin;
 // The `save` verb: ask the game to write a save through its own quicksave path.
 internal sealed unsafe partial class CheatController
 {
+    private void CoopSave()
+    {
+        int number = block.CheatAmount;
+        if (number < 2 || ReadCheatText() != "Co-op" || !Odyssey.RequestCoopSave(number))
+        {
+            Answer(SharedBlock.CheatStatusEngineRefused, "dedicated Co-op save refused; world or slot not ready");
+            return;
+        }
+        PluginHost.Log($"save: dedicated Co-op save #{number} requested through SendSaveGameRequest");
+        Answer(SharedBlock.CheatStatusApplied, "Co-op save requested (wait for the archive to finish)");
+    }
+
     /// <summary>
     /// Saves the game the way the retail quicksave key does —
     /// <see cref="Odyssey.RequestQuickSave"/>.

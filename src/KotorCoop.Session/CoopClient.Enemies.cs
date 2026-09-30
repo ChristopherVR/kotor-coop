@@ -90,7 +90,7 @@ public sealed partial class CoopClient
         // baseline to whatever it is told, so the next honest report was read as a fresh rise
         // and the same fight was banked a second time.
         SendFromCaller(
-            new EnemyDamagePacket(_localPeerId, module, generation, damage),
+            new EnemyDamagePacket(_localPeerId, module, generation, damage, _settings.DamageIncarnation),
             static (buffer, packet) => PacketCodec.Write(buffer, packet));
     }
 

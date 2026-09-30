@@ -6,6 +6,8 @@ namespace KotorCoop.Session;
 
 public sealed record SessionSettings
 {
+    public uint DamageIncarnation { get; init; }
+
     public string PlayerName { get; init; } = "player";
 
     /// <summary>
@@ -134,6 +136,10 @@ public sealed record SessionSettings
     /// Ignored by a host, which is peer 1 by definition and never dials anyone.
     /// </summary>
     public uint PeerIdentity { get; init; }
+
+    /// <summary>Optional per-install durable ground-item counters and unacknowledged ops.
+    /// Scoped to the welcomed host session, peer slot and persisted peer identity.</summary>
+    public string? ItemContinuationPath { get; init; }
 
     /// <summary>
     /// How long a CLIENT'S connect attempt may sit silent before <see cref="SessionManager"/>

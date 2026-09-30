@@ -14,6 +14,25 @@ public sealed partial class CoopHost
     private WorldDigest _localWorld = WorldDigest.Empty;
     private bool _hasPublishedLocalWorldDigest;
     private bool _hasObservedHostLoad;
+    private uint _scriptRefreshRevision;
+    private uint _scriptRefreshSaveIdentity;
+
+    /// <summary>Announce only after the authoritative post-script archive finished writing.</summary>
+    public void PublishScriptWorldRefresh(uint saveIdentity)
+    {
+        if (saveIdentity == 0) return;
+        lock (_gate)
+        {
+            _scriptRefreshRevision++;
+            if (_scriptRefreshRevision == 0) _scriptRefreshRevision++;
+            _scriptRefreshSaveIdentity = saveIdentity;
+            _localWorld = _localWorld with
+            {
+                ScriptRefreshRevision = _scriptRefreshRevision,
+                ScriptRefreshSaveIdentity = saveIdentity,
+            };
+        }
+    }
 
     /// <summary>The behaviour-flag comparison against the most recently seen Hello — see
     /// <see cref="ICapabilitySession.BehaviourWarnings"/>. A host never adopts anything
@@ -35,7 +54,11 @@ public sealed partial class CoopHost
                 BeginHostWorldLoadEdgeLocked();
             }
 
-            _localWorld = digest;
+            _localWorld = digest with
+            {
+                ScriptRefreshRevision = _scriptRefreshSaveIdentity == 0 ? 0 : _scriptRefreshRevision,
+                ScriptRefreshSaveIdentity = _scriptRefreshSaveIdentity,
+            };
             _hasPublishedLocalWorldDigest = true;
         }
 
@@ -79,6 +102,8 @@ public sealed partial class CoopHost
 
     private void BeginHostWorldLoadEdgeLocked()
     {
+        _scriptRefreshSaveIdentity = 0;
+        _localWorld = _localWorld with { ScriptRefreshRevision = 0, ScriptRefreshSaveIdentity = 0 };
         _hasObservedHostLoad = true;
         foreach (PeerConnection peer in _peers.Values)
         {

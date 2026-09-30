@@ -47,6 +47,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\NativeMemoryAccess.cs" Link="Plugin\NativeMemoryAccess.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\JournalMemoryGuard.cs" Link="Plugin\JournalMemoryGuard.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\DamageDealtTable.cs" Link="Plugin\DamageDealtTable.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\AttributedDamageOwedLedger.cs" Link="Plugin\AttributedDamageOwedLedger.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\DamageOwedLedger.cs" Link="Plugin\DamageOwedLedger.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\CompanionHealSampleRule.cs" Link="Plugin\CompanionHealSampleRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\MirrorHealthRule.cs" Link="Plugin\MirrorHealthRule.cs" />
@@ -74,7 +75,9 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\ControlPcRecoveryRule.cs" Link="Plugin\ControlPcRecoveryRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\DoorUse.cs" Link="Plugin\DoorUse.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\DoorDesiredStateTracker.cs" Link="Plugin\DoorDesiredStateTracker.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\DoorApplyCompletionRule.cs" Link="Plugin\DoorApplyCompletionRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PlaceableDesiredStateTracker.cs" Link="Plugin\PlaceableDesiredStateTracker.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\PlaceableLocalChangeTracker.cs" Link="Plugin\PlaceableLocalChangeTracker.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SpawnDrainRule.cs" Link="Plugin\SpawnDrainRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\LogRotation.cs" Link="Plugin\LogRotation.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\CrashRecord.cs" Link="Plugin\CrashRecord.cs" />
@@ -127,6 +130,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.LoadProvenance.cs" Link="Plugin\SharedBlock.LoadProvenance.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.Dialogue.cs" Link="Plugin\SharedBlock.Dialogue.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.World.cs" Link="Plugin\SharedBlock.World.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.PlaceableAcknowledgements.cs" Link="Plugin\SharedBlock.PlaceableAcknowledgements.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.Browser.cs" Link="Plugin\SharedBlock.Browser.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.Cheats.cs" Link="Plugin\SharedBlock.Cheats.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.ItemTemplateSpawns.cs" Link="Plugin\SharedBlock.ItemTemplateSpawns.cs" />
@@ -189,6 +193,8 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\RetainedEnemyHandoff.cs" Link="Plugin\RetainedEnemyHandoff.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\RetainedEnemyHandoffProof.cs" Link="Plugin\RetainedEnemyHandoffProof.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\InputIsolationRule.cs" Link="Plugin\InputIsolationRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\GameplayKeyboardLock.cs" Link="Plugin\GameplayKeyboardLock.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SyntheticMouseDeltaQueue.cs" Link="Plugin\SyntheticMouseDeltaQueue.cs" />
   </ItemGroup>
 
   <ItemGroup>

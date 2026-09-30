@@ -111,6 +111,19 @@ internal static unsafe class DirectInputKeyboardHook
     /// </summary>
     public static bool IsolateRealInput { get; set; }
 
+    private static readonly GameplayKeyboardLock GameplayLock = new();
+    internal static bool GameplayLocked =>
+        (MinigameLockController.IsLocked || SoloSegmentSpectateController.IsSpectating)
+        && !Odyssey.IsConversationActive && !Odyssey.IsFullScreenGuiUp && !Odyssey.IsConsoleOpen;
+
+    internal static void DiscardGameplayQueuedInput()
+    {
+        _queueCount = GameplayKeyboardLock.PurgeQueued(Pending, _queueHead, _queueCount);
+        for (int i = 0; i < Held.Length; i++)
+            if (!GameplayKeyboardLock.Allows((byte)i)) Held[i] = 0;
+        DirectInputMouseHook.ClearQueuedDeltas();
+    }
+
     public static (uint ObjectSize, uint Flags, uint Capacity, bool HasBuffer) LastReadShape { get; private set; }
 
     public static string? LastDiagnostic { get; private set; }
@@ -168,6 +181,11 @@ internal static unsafe class DirectInputKeyboardHook
     /// <summary>Queues one key transition for the engine's next keyboard read.</summary>
     public static bool Enqueue(byte dik, bool down)
     {
+        if (down && GameplayLocked && !GameplayKeyboardLock.Allows(dik))
+        {
+            Held[dik] = 0;
+            return true;
+        }
         if (_queueCount >= QueueCapacity)
         {
             DroppedEvents++;
@@ -279,9 +297,12 @@ internal static unsafe class DirectInputKeyboardHook
         if (hr >= 0 && size == KeyboardStateSize && data != 0)
         {
             byte* state = (byte*)data;
+            bool locked = GameplayLocked;
             for (int i = 0; i < 256; i++)
             {
-                state[i] = InputIsolationRule.MaskKeyboardStateByte(IsolateRealInput, state[i], Held[i]);
+                if (locked && !GameplayKeyboardLock.Allows((byte)i)) Held[i] = 0;
+                state[i] = locked && !GameplayKeyboardLock.Allows((byte)i) ? (byte)0
+                    : InputIsolationRule.MaskKeyboardStateByte(IsolateRealInput, state[i], Held[i]);
             }
         }
 
@@ -301,6 +322,8 @@ internal static unsafe class DirectInputKeyboardHook
         RealReads++;
         LastReadHr = hr;
         LastReadShape = (objectSize, flags, capacity, data != 0);
+        bool locked = GameplayLocked;
+        if (locked) DiscardGameplayQueuedInput();
 
         // Append only to a real, consuming read into a real buffer: a null buffer is a
         // "how many are waiting" / flush query, PEEK would hand our events out twice, and a
@@ -314,11 +337,14 @@ internal static unsafe class DirectInputKeyboardHook
         {
             return hr;
         }
+        // Do not introduce managed exceptions at this unmanaged entry point for a
+        // malformed count. Retail reads are small; an unsupported buffer passes through.
+        if (capacity > 4096 || !NativeMethods.IsWritable(data, (nuint)capacity * ObjectDataSize)) return hr;
 
         uint count;
         if (hr < 0)
         {
-            if (!DeliverWhileUnacquired || _queueCount == 0)
+            if (!locked && (!DeliverWhileUnacquired || _queueCount == 0))
             {
                 return hr;
             }
@@ -333,7 +359,7 @@ internal static unsafe class DirectInputKeyboardHook
             // stray background-eligible read, could still hand some back) - hide them by
             // reporting zero of them, exactly as the synthetic-append loop below expects, so it
             // overwrites buffer[0..) with the plugin's own queued events instead.
-            count = InputIsolationRule.VisibleRealEventCount(IsolateRealInput, *inOut);
+            count = Math.Min(capacity, InputIsolationRule.VisibleRealEventCount(IsolateRealInput, *inOut));
         }
         byte* buffer = (byte*)data;
         uint timestamp = (uint)Environment.TickCount;
@@ -353,6 +379,8 @@ internal static unsafe class DirectInputKeyboardHook
             InjectedEvents++;
         }
 
+        count = (uint)GameplayLock.Apply(new Span<uint>((void*)data, (int)capacity * 5),
+            (int)count, locked, timestamp);
         *inOut = count;
         return hr;
     }

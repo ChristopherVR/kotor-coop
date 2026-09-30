@@ -26,6 +26,7 @@ public sealed partial class KotorGameBridge
 
     /// <summary>Last observed (open, locked) per door id, in the current module.</summary>
     private readonly Dictionary<uint, (byte Open, byte Locked)> _doorShadow = [];
+    private readonly Dictionary<uint, byte> _doorApplyAcknowledgements = [];
 
     private string _doorModule = string.Empty;
     private uint _doorModuleHash;
@@ -56,6 +57,7 @@ public sealed partial class KotorGameBridge
             _doorModule = module;
             _doorModuleHash = DoorFlags.HashModule(module);
             _doorShadow.Clear();
+            _doorApplyAcknowledgements.Clear();
             _doorBaselined = false;
             _nextDoorScanTicks = 0;
         }
@@ -68,10 +70,21 @@ public sealed partial class KotorGameBridge
 
         _nextDoorScanTicks = now + 1000;
 
+        ConsumeDoorApplyAcknowledgements();
+
+        if (!EngineGlobals.TryGetServerObjectArray(_memory, out nint objectArray))
+        {
+            return changed;
+        }
+
         foreach (nint address in CachedScan(DoorVtable, 256, ObjectScanCacheMs))
         {
             if (!_memory.TryReadUInt32(address + OffObjectId, out uint objectId)
                 || objectId is 0 or > 0xFFFF
+                // Freed objects retain their vtable/id after a same-module adoption.
+                // Only the engine's current id-to-pointer mapping can distinguish them
+                // from the live door; otherwise stale lock bytes outrank a real unlock.
+                || !EngineGlobals.IsCurrentServerObject(_memory, objectArray, objectId, address)
                 || !_memory.TryRead(address + DoorOpenState, out byte open)
                 || !_memory.TryRead(address + DoorPendingOpenState, out byte pending)
                 || pending != open
@@ -105,6 +118,24 @@ public sealed partial class KotorGameBridge
         return changed;
     }
 
+    private void ConsumeDoorApplyAcknowledgements()
+    {
+        if (_pluginBlock == 0 || !_memory.TryReadUInt32(_pluginBlock + BlockDoorCount, out uint count)) return;
+        for (int slot = 0; slot < Math.Min(count, (uint)BlockDoorCapacity); slot++)
+        {
+            nint address = _pluginBlock + BlockDoorSlots + slot * BlockDoorStride;
+            if (!_memory.TryRead(address + 7, out byte sequence) || sequence == 0
+                || !_memory.TryReadUInt32(address, out uint id) || id is 0 or > 0xFFFF
+                || !_memory.TryRead(address + 6, out byte value) || value > 7
+                || !_memory.TryRead(address + 7, out byte afterSequence) || sequence != afterSequence
+                || !_memory.TryReadUInt32(address, out uint afterId) || id != afterId
+                || (_doorApplyAcknowledgements.TryGetValue(id, out byte previous) && previous == sequence)) continue;
+
+            _doorApplyAcknowledgements[id] = sequence;
+            _doorShadow[id] = (DoorFlags.OpenStateOf((sbyte)value), DoorFlags.UnlockedOf((sbyte)value) ? (byte)0 : (byte)1);
+        }
+    }
+
     /// <summary>
     /// Publishes the session's door truth for the LOCAL module into the plugin, which
     /// applies it through the engine's own door paths. Door flags for other modules are
@@ -135,12 +166,15 @@ public sealed partial class KotorGameBridge
             }
 
             nint address = _pluginBlock + BlockDoorSlots + (slot * BlockDoorStride);
+            uint id = DoorFlags.ObjectIdOf(flag.Key);
+            if (!_memory.TryReadUInt32(address, out uint oldId) || oldId != id)
+                ok &= _memory.TryWrite(address + 7, (byte)0);
             ok &= _memory.TryWrite(address + 0x04, DoorFlags.OpenStateOf(flag.Value));
             ok &= _memory.TryWrite(address + 0x05, DoorFlags.UnlockedOf(flag.Value) ? (byte)1 : (byte)0);
 
             // Object id last, so the plugin never reads a slot whose id and payload
             // belong to different doors.
-            ok &= _memory.TryWrite(address + 0x00, DoorFlags.ObjectIdOf(flag.Key));
+            ok &= _memory.TryWrite(address + 0x00, id);
             slot++;
         }
 

@@ -45,10 +45,11 @@ namespace KotorCoop.Plugin;
 /// answers every <c>GetDeviceState</c> with an all-neutral state regardless of what the real
 /// hardware or the real acquisition state actually is.
 ///
-/// Off (coop.ini <c>isolate_real_input</c> = 0, the default): a byte-for-byte passthrough for
+/// Off (coop.ini <c>isolate_real_input</c> = 0, the default), with no queued synthetic delta: a byte-for-byte passthrough for
 /// every real player — this proxy exists at all only because DirectInput must be handed a valid
 /// object of ITS OWN choosing (see above), not a copy; nothing about wrapping changes behaviour
-/// until <see cref="DirectInputKeyboardHook.IsolateRealInput"/> is turned on.
+/// until <see cref="DirectInputKeyboardHook.IsolateRealInput"/> is turned on or an explicit
+/// <c>input delta</c> request adds relative motion to the next valid mouse poll.
 /// </summary>
 internal static unsafe class DirectInputMouseHook
 {
@@ -62,10 +63,23 @@ internal static unsafe class DirectInputMouseHook
 
     private static nint _deviceTable;
     private static nint _mouseProxy;
+    private static readonly SyntheticMouseDeltaQueue Synthetic = new();
 
     public static bool IsWrapped => _mouseProxy != 0;
     public static long RealReads { get; private set; }
     public static string? LastDiagnostic { get; private set; }
+    public static int PendingDeltas => Synthetic.Pending;
+    internal static void ClearQueuedDeltas() => Synthetic.Clear();
+    public static bool QueueDelta(int x, int y)
+    {
+        if (DirectInputKeyboardHook.GameplayLocked)
+        {
+            Synthetic.Clear();
+            return x is >= -SyntheticMouseDeltaQueue.MaximumDelta and <= SyntheticMouseDeltaQueue.MaximumDelta
+                && y is >= -SyntheticMouseDeltaQueue.MaximumDelta and <= SyntheticMouseDeltaQueue.MaximumDelta;
+        }
+        return Synthetic.Enqueue(x, y, Environment.TickCount64);
+    }
 
     /// <summary>GUID_SysMouse {6F1D2B60-D5A0-11CF-BFC7-444553540000} — one byte off
     /// GUID_SysKeyboard's Data1 (…61 for the keyboard, …60 for the mouse); see
@@ -136,17 +150,20 @@ internal static unsafe class DirectInputMouseHook
         int hr = getDeviceState(real, size, data);
         RealReads++;
 
-        if (hr >= 0 && data != 0
-            && InputIsolationRule.ShouldNeutralizeMouseState(DirectInputKeyboardHook.IsolateRealInput, size))
+        if (size is 16 or 20 && data != 0 && NativeMethods.IsWritable(data, size))
         {
-            // DIMOUSESTATE: LONG lX, lY, lZ; BYTE rgbButtons[4] - zero every field. This device
-            // is polled for nothing else (see the class doc comment), so an all-neutral state
-            // means exactly "the real mouse did not move and no button is down".
-            byte* p = (byte*)data;
-            for (uint i = 0; i < size; i++)
+            // DIMOUSESTATE/2: three LONG axes then four/eight buttons. Isolation removes
+            // physical input before adding synthetic relative motion. An unacquired real
+            // device supplies no trustworthy bytes, but queued motion can still be delivered.
+            if (DirectInputKeyboardHook.GameplayLocked)
             {
-                p[i] = 0;
+                Synthetic.Clear();
+                new Span<byte>((void*)data, (int)size).Clear();
+                return 0;
             }
+            bool delivered = Synthetic.Apply(new Span<byte>((void*)data, (int)size), hr >= 0,
+                DirectInputKeyboardHook.IsolateRealInput, Environment.TickCount64);
+            if (delivered) return 0; // DI_OK for this synthetic poll only
         }
 
         return hr;

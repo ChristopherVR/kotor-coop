@@ -254,4 +254,53 @@ public class GroundItemStoreTests
 
         Assert.Equal(direct.Digest, store.Digest);
     }
+    [Fact]
+    public void PickedUpItemCannotBeResurrectedAfterOperationCacheEviction()
+    {
+        GroundItemStore store = new();
+        ItemOpPacket oldDrop = new(2, 1, ItemOpKind.Drop, Item(0x20001));
+        Assert.True(store.ApplyOp(oldDrop));
+        Assert.True(store.ApplyOp(new(3, 1, ItemOpKind.Remove, Item(0x20001))));
+        // Evict the old drop's de-duplication key without dropping any real item again.
+        for (uint sequence=2; sequence<4100; sequence++)
+            store.ApplyOp(new(4, sequence, ItemOpKind.Remove, Item(0x40000 + sequence)));
+        uint before = store.Version;
+        Assert.False(store.ApplyOp(oldDrop));
+        Assert.False(store.TryGet(oldDrop.Item.ItemId, out _));
+        Assert.Equal(before, store.Version);
+        Assert.True(store.ApplyOp(new(2, 2, ItemOpKind.Drop, Item(0x20002))));
+    }
+
+    [Fact]
+    public void PickupArrivingBeforeItsOriginalDropStillWins()
+    {
+        GroundItemStore store = new();
+        Assert.False(store.ApplyOp(new(3, 1, ItemOpKind.Remove, Item(0x20001))));
+        Assert.False(store.ApplyOp(new(2, 1, ItemOpKind.Drop, Item(0x20001))));
+        Assert.Empty(store.Snapshot());
+    }
+
+    [Fact]
+    public void StaleSnapshotCannotRecreateLocallyPickedUpItem()
+    {
+        GroundItemStore store = new();
+        Assert.True(store.Drop(Item(0x20001)));
+        Assert.True(store.Remove(0x20001));
+        store.ReplaceAll([Item(0x20001), Item(0x20002)], 10);
+        Assert.False(store.TryGet(0x20001, out _));
+        Assert.True(store.TryGet(0x20002, out _));
+    }
+
+    [Fact]
+    public void ReplacementHostNamespaceCanReuseIdsAndOperations()
+    {
+        GroundItemStore store = new();
+        ItemOpPacket drop = new(2, 1, ItemOpKind.Drop, Item(0x20001));
+        Assert.True(store.ApplyOp(drop));
+        Assert.True(store.Remove(0x20001));
+        store.ResetNamespace();
+        Assert.Equal(0u, store.Version);
+        Assert.True(store.ApplyOp(drop));
+        Assert.True(store.TryGet(0x20001, out _));
+    }
 }

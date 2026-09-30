@@ -11,7 +11,7 @@ public static class ModsCommand
         string directory = DirectoryFor(options.GamePath);
         ModContentManifest local = ModContentManifest.Compute(directory);
         Console.WriteLine($"mod audit: {directory}");
-        Console.WriteLine($"{local.Files.Count} override/module/profile files; {local.Files.Count(file => file.Gameplay)} gameplay files; full SHA-256 hashes");
+        Console.WriteLine($"{local.Files.Count} resource/archive/media/profile files; {local.Files.Count(file => file.Gameplay)} gameplay files; full SHA-256 hashes");
         using GameFiles files = new(directory);
         bool valid = local.Complete && files.IsUsable;
         if (!files.IsUsable) Console.WriteLine("missing or invalid chitin.key; game resources cannot be checked");

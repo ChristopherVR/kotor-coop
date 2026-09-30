@@ -131,12 +131,26 @@ public class PacketCodecTests
     }
 
     [Fact]
+    public void HelloBindsDamageIncarnationAndTruncatedBindingIsRejected()
+    {
+        byte[] buffer = new byte[ProtocolConstants.MaxPacketSize];
+        HelloPacket packet = new("raw", "end_m01aa", 123, default, 0, DamageIncarnation: 0x87654321);
+        int length = PacketCodec.Write(buffer, packet);
+        HelloPacket decoded = Assert.IsType<HelloPacket>(PacketCodec.ReadHello(buffer.AsSpan(0, length)));
+        Assert.Equal(packet.DamageIncarnation, decoded.DamageIncarnation);
+        Assert.Equal(packet.ClientNonce, decoded.ClientNonce);
+        Assert.Equal(packet.PlayerName, decoded.PlayerName);
+        Assert.Equal(packet.Module, decoded.Module);
+        Assert.Null(PacketCodec.ReadHello(buffer.AsSpan(0, length - 4)));
+    }
+
+    [Fact]
     public void EnemyDamageRoundTrips()
     {
         Span<byte> buffer = stackalloc byte[ProtocolConstants.MaxPacketSize];
 
         EnemyDamagePacket original = new(2, "end_m01aa", 4,
-            [new EnemyDamageEntry(0x14, 27), new EnemyDamageEntry(0x17, 3)]);
+            [new EnemyDamageEntry(0x14, 27), new EnemyDamageEntry(0x17, 3)], Incarnation: 0x12345678);
 
         int length = PacketCodec.Write(buffer, original);
         EnemyDamagePacket? decoded = PacketCodec.ReadEnemyDamage(buffer[..length]);
@@ -145,6 +159,7 @@ public class PacketCodecTests
         Assert.Equal(2u, decoded.PeerId);
         Assert.Equal("end_m01aa", decoded.Module);
         Assert.Equal(4u, decoded.Generation);
+        Assert.Equal(0x12345678u, decoded.Incarnation);
         Assert.Equal(original.Damage, decoded.Damage);
     }
 

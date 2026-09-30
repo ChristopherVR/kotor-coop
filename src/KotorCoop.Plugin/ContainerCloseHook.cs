@@ -179,6 +179,16 @@ internal static unsafe class ContainerCloseHook
                                       //  placeables TOTAL in Endar Spire's first module.
     private static readonly uint[] _closedIds = new uint[Capacity];
     private static int _count;
+    private static uint _latestCloseId;
+    private static uint _latestCloseSerial;
+    private static uint _latestCloseAttemptSerial;
+
+    public static uint LatestLocalClose(out uint serial, out uint attemptSerial)
+    {
+        serial = _latestCloseSerial;
+        attemptSerial = _latestCloseAttemptSerial;
+        return _latestCloseId;
+    }
 
     /// <summary>CSWSPlaceable + this = the object's own id — same embedded layout every other
     /// object class in this plugin already relies on.</summary>
@@ -200,6 +210,10 @@ internal static unsafe class ContainerCloseHook
             }
 
             uint id = *(uint*)(placeable + ObjectIdOffset);
+            PlaceableLocalChanges.Record(id, false);
+            _latestCloseId = id;
+            ContainerUseHook.LatestAttempt(out _latestCloseAttemptSerial);
+            if (++_latestCloseSerial == 0) ++_latestCloseSerial;
             Register(id);
         }
         catch

@@ -123,6 +123,22 @@ public static class EngineGlobals
         return found;
     }
 
+    /// <summary>Confirms a scanned body against the native object array. An unresolved
+    /// array must not publish stale world flags while the game rebuilds its objects.</summary>
+    public static bool IsCurrentServerObject(ProcessMemory memory, nint objectArray, uint objectId, nint candidate)
+    {
+        return objectArray != 0
+            && memory.TryReadPointer(objectArray + ObjectArrayTree, out nint tree)
+            && IsCurrentServerObject(
+                a => memory.TryReadUInt32(a, out uint value) ? value : null,
+                tree, objectId, candidate);
+    }
+
+    internal static bool IsCurrentServerObject(Func<nint, uint?> read32, nint tree, uint objectId, nint candidate) =>
+        tree != 0 && candidate != 0
+        && TryLookupObject(read32, tree, objectId, out uint liveAddress)
+        && (nint)liveAddress == candidate;
+
     /// <summary>
     /// The bucket arithmetic and chain walk on their own, over any reader.
     ///

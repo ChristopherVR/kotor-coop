@@ -171,8 +171,10 @@ internal partial struct SharedBlock
     /// a record. See SharedBlock.Combat.cs for the five moved regions' own remarks.
     /// v81 grows to 0x8700 for the local/remote dialogue resource names at 0x8600/0x8614.
     /// v82 uses 0x8630/0x8634 in that tail for manual travel/load request intent.
+    /// v83 grows to 0xB800 for 1024 attributed peer/enemy damage rows at 0x8710.
+    /// v85 grows to 0xBA00 for native placeable apply acknowledgements at 0xB800.
     /// </summary>
-    public const int TotalSize = 0x8700;
+    public const int TotalSize = 0xBC00;
 
     public const int ProfileVisibleSize = 0x250;
 
@@ -1547,4 +1549,12 @@ internal partial struct SharedBlock
     /// local player) as OBJECT_SELF, through the engine's own RunScript. Dev-only test primitive
     /// (built to exercise ScriptDestroyGuardHook live).</summary>
     public const uint CheatKindRunScript = 107;
+
+    /// <summary>Write the dedicated Co-op slot directly; CheatAmount is its save number.</summary>
+    public const uint CheatKindCoopSave = 108;
+
+    /// <summary>Developer staging: close a door through SetOpenState and commit its walkmesh.</summary>
+    public const uint CheatKindCloseDoor = 109;
+    /// <summary>Developer staging: set a real door/placeable lock through the engine's lock field.</summary>
+    public const uint CheatKindSetLock = 110;
 }
