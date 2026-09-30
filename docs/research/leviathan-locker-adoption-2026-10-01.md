@@ -32,4 +32,4 @@ of locker contents from an earlier module or the original full capture/rescue ro
 4100 rifle, stack size3, nested item properties, unchanged own capture, an unrelated
 container, empty-own and first-join behavior, and the shared-mode byte-for-byte
 regression. A warning-clean standard win-x64 Agent is published at
-`artifacts/live-agent-v95-locker-x64`; the full fast tier and live replay are pending.
+`artifacts/live-agent-v95-locker-x64`; all 5,519 fast tests pass, zero failures, 1m38s. Live replay remains pending.
