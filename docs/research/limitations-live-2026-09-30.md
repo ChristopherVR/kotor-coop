@@ -195,6 +195,43 @@ The attempted quiet phase exposed a dev attack-stop bug: its queue clear left th
 Native87 automatic host return saves also completed after three actual Ebon Hawk/Manaan solo cycles, with confirmed dedicated-save ACKs and exact-slot archive stability after 1623/1310/1656 ms. All six QuickSave files on each of the two private installs kept hashes, lengths and UTC modification times. The joining player's dedicated automatic solo capture did not trigger because its adopted origin map stayed identical; this remains a live coverage gap, despite passing integration coverage. Evidence: artifacts/return-save-proof-v87/result.json and associated ACK/return/hash files.
 
 
+## Native88 ordinary travel and browser follow-ups
+
+Native88/wire80 initially exposed a real ordinary-travel regression on private games4/5:
+after END_M01AA to tar_m10aa, the joiner's actual native damage ledger recorded37 against
+GIT enemy0x38, but the host accepted none. The publisher could combine a retained PC module
+with a fresh native epoch, incorrectly quarantining the new world or binding its generation
+to an older digest. An unreadable epoch0 could also look like a same-area load.
+
+Commit2c579f3 samples coherent module/load/epoch around the fingerprint and retains the
+last resolved local namespace through unavailable samples. Genuine same-area reloads still
+quarantine old local reports. Native88 plus Agent81 from that commit passed the same live
+ordinary warp with local_combat=1: peer2 dealt20, host accepted20, native HP1021 to1001,
+and five application calls. After a quiet interval and actual disconnect/reconnect, the
+accepted total, HP and calls were unchanged. A fresh attack on the resolved GIT creature
+added13, reduced HP1001 to988 and advanced calls by4; a later quiet sample remained stable.
+Evidence: `artifacts/default-combat-v88/coherent-proof.json` and its six native snapshots.
+This checks a stock GIT enemy, not every materialised scripted encounter or threat policy.
+
+The actual empty-list browser test after quitting to the menu exposed an independent
+native exception. The preserved native88 PDB mapped RVA0xE69F1 to WithResRef+0x31:
+ShowDetails(-1) left portrait names null, and the resource-reference encoder dereferenced
+one. Commit281c4c1 supplies empty portrait names, a null-safe16-byte encoder and bounded
+failure cleanup to prevent repeated unregistered panel allocations.
+
+Native88b SHA256 `EC506615C4E47511AAC0F2FB5E0407C916A0AED09260905060621557D0F06CE6`
+and coherent Agent81 then passed live on fresh original stock copies33944/58408.
+The real browser/address modal rendered after quitting the loaded world; typing
+`localhost:27140` and pressing its OK button published the connect request and actually
+returned the joiner to the host's Endar world, with one native remote and phantom each.
+The earlier IPv6 localhost choice is fixed by preferring IPv4. Captures:
+`artifacts/stock-live-v88b/address-typed.png` and `address-connected-world.png`.
+The generated address sidecar was archived and its previous absence restored.
+
+Full fast validation of committed88b sources:5343 passed, zero failed. Two stale packet-size
+assertions were corrected for the added flag namespace; the environment-dependent LAN
+broadcast smoke check was removed as requested. Deterministic discovery tests remain.
+
 ## Fresh eight-player stop, quiet and return checks
 
 With native87 CancelCombat fix and Agent87b, all seven joiners each landed a new accepted hit through the bounded real-attack runner. The measured accepted delta9 equalled native HP loss9 (1000 to991), and application calls advanced7. After confirmed active-round cancellation,14 samples over10.50 seconds found all counters and HP unchanged. A real peer6 disconnect/reconnect rebuilt its host phantom303 to316 and its local enemy mirror138 to13D. Quiet totals and native health stayed unchanged; a fresh real hit on the resolved13D increased only peer6 by1, reduced host HP991 to990, and advanced application calls by1. The immediate-hit sample establishes this equality. A much later snapshot was deliberately excluded: the staged ten-minute temporary-HP effect had expired by then, invalidating a long-delay health comparison. Evidence: artifacts/eight-combat-v87b/executor/hits-proof.json,result.json, reconnect-quiet-proof.json, reconnected-native-mirror.json and fresh-hit-immediate-proof.json.
