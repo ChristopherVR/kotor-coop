@@ -31,7 +31,7 @@ function Stable-Key($snapshot) {
     $e=@($snapshot.Enemies | Where-Object Id -eq $HostEnemyId)[0]
     ($snapshot.Accepted | Sort-Object Peer,Enemy | ConvertTo-Json -Compress)+':'+$e.BaseHp+':'+$e.TemporaryHp+':'+$snapshot.AppliedEffects
 }
-function Validate-World($snapshot,$reference,[uint32]$enemy) {
+function Validate-World($snapshot,$reference,[uint32]$enemy,[switch]$Stopping) {
     if($snapshot.Version -ge 88 -or $reference.Version -ge 88){
         foreach($value in @($snapshot,$reference)){
             if($null -eq $value.NativeLivenessEpoch -or $value.NativeLivenessEpoch -eq 0){throw 'Native88 current-world epoch missing'}
@@ -45,6 +45,14 @@ function Validate-World($snapshot,$reference,[uint32]$enemy) {
     if($null -ne $reference.NativeLivenessEpoch -and $snapshot.NativeLivenessEpoch -ne $reference.NativeLivenessEpoch){throw 'Changed native liveness epoch'}
     foreach($key in @('Module','ModuleEpoch','ObjectArray','ObjectTree')) {
         if($snapshot.NativeNamespace.$key -ne $reference.NativeNamespace.$key){throw "Changed native namespace $key"}
+    }
+    if($Stopping){
+        # Stop addresses the current local player, never the former enemy. Its
+        # death/removal must not prevent cancellation of an active combat round.
+        if(!$snapshot.LocalPlayer.Resolved -or !$reference.LocalPlayer.Resolved -or
+            $snapshot.LocalPlayer.Id -ne $reference.LocalPlayer.Id -or
+            $snapshot.LocalPlayer.Address -ne $reference.LocalPlayer.Address){throw 'Current player changed or disappeared before stop'}
+        return
     }
     $e=@($snapshot.Enemies | Where-Object Id -eq $enemy)
     $r=@($reference.Enemies | Where-Object Id -eq $enemy)
@@ -79,7 +87,7 @@ function Read-U32($entry,[int]$offset){
 }
 function Attack-Command($entry,[uint32]$target){
     $fresh=Snapshot $entry.Pid $entry.Enemy ''
-    Validate-World $fresh $entry.Reference $entry.Enemy
+    Validate-World $fresh $entry.Reference $entry.Enemy -Stopping:($target -eq 0)
     if((Read-U32 $entry 8) -ne $entry.Reference.Version -or (Read-U32 $entry 12) -ne 0xC0FFEE01L){throw 'Shared block signature changed'}
     if((Read-U32 $entry 0x3328) -ne (Read-U32 $entry 0x3364)){throw 'Native command mailbox busy; refusing to overwrite'}
     $old=Read-U32 $entry 0x3328
@@ -185,3 +193,4 @@ try {
     if(!$success){foreach($entry in @($touched | Sort-Object Pid -Unique)){try{Attack-Command $entry 0}catch{Write-Warning "STOP FAILED for PID $($entry.Pid): $_"}}}
     foreach($entry in $entries){[PeerCombatReader]::CloseHandle($entry.Handle)>$null}
 }
+

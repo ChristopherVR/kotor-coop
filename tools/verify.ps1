@@ -185,7 +185,7 @@ function SendConsole($h, $b, [string]$cmdText) {
     $before = [VF]::U32($h, $b + 0xA58)
     $cheatBefore = [VF]::U32($h, $b + 0x3328)
     $verb = ($cmdText -split '\s+', 2)[0].ToLowerInvariant()
-    $nativeKinds = @{ tp = 5; opendoor = 17; useplaceable = 18; closeplaceable = 19; closedoor = 109; setlock = 110; input = 103; attack = 98 }
+    $nativeKinds = @{ tp = 5; opendoor = 17; useplaceable = 18; closeplaceable = 19; closedoor = 109; setlock = 110; input = 103; attack = 98; spawncreature = 68; applyeffect = 14 }
     $bytes = [byte[]]::new(96)
     $ascii = [Text.Encoding]::ASCII.GetBytes($cmdText)
     [Array]::Copy($ascii, $bytes, [Math]::Min($ascii.Length, 95))
@@ -691,6 +691,8 @@ for ($i = 0; $i -lt [Math]::Min($presenceCount, 32); $i++) {
     if ($d -lt $bestDist) { $bestDist = $d; $enemyId = $id }
 }
 if ($enemyId -ne 0) {
+    $fixtureBody = [VF]::FindCreature($h1, $enemyId)
+    Write-Host ("combat fixture before animation: UTC {0}, object 0x{1:X}, baseHP {2}, temporaryHP {3}" -f [DateTime]::UtcNow.ToString('O'), $enemyId, [VF]::I16($h1, $fixtureBody + 0xDC), [VF]::U32($h1, $fixtureBody + 0xE4))
     RequireWrite32 $h1 ($b1 + 0x1DA0) (PlayerId $h1 $b1)
     [VF]::W32($h1, $b1 + 0x1DA4, [int]$enemyId) | Out-Null     # target: a real enemy
     [VF]::W32($h1, $b1 + 0x1DA8, [int]([VF]::U32($h1, $b1 + 0x1DA8) + 1)) | Out-Null
@@ -867,6 +869,7 @@ if ($dmgId -ne 0) {
         # Native damage can be absorbed by a genuine temporary-hit-point effect.
         # Measure both pools so a durable combat fixture does not hide real delivery.
         $hpBefore = [VF]::I16($h1, $hostEnemy + 0xDC) + (AsI32 ([VF]::U32($h1, $hostEnemy + 0xE4)))
+        Write-Host ("combat fixture before client hit: UTC {0}, object 0x{1:X}, baseHP {2}, temporaryHP {3}" -f [DateTime]::UtcNow.ToString('O'), $dmgId, [VF]::I16($h1, $hostEnemy + 0xDC), [VF]::U32($h1, $hostEnemy + 0xE4))
         $clientTarget = ClientCombatTarget $dmgId
         # The real client attack route also closes to melee range. A raw VM order
         # using the owner's ID can attack a completely unrelated local phantom.
@@ -1252,6 +1255,21 @@ else {
         Start-Sleep -Seconds 2
     }
 
+    $revivePositionSaved = PlayerPosition $h2 $b2
+    $reviveMoved = $false
+    try {
+    $hostPosition = PlayerPosition $h1 $b1
+    if ((PlayerModule $h2) -ine 'end_m01aa') { throw 'revive staging requires the proven Endar Spire locker position' }
+    if ([Math]::Sqrt([Math]::Pow(10.8 - $hostPosition[0], 2) + [Math]::Pow(21.87 - $hostPosition[1], 2)) -le 3.5) {
+        throw 'host is within the proximity rescue radius of the revive fixture'
+    }
+    $reviveTp = 'tp 10.8 21.87 {0}' -f $revivePositionSaved[2].ToString('R', [Globalization.CultureInfo]::InvariantCulture)
+    if (-not (SendConsole $h2 $b2 $reviveTp)) { throw 'revive staging teleport did not apply' }
+    $reviveMoved = $true
+    $reviveLanded = PlayerPosition $h2 $b2
+    if ([Math]::Sqrt([Math]::Pow($reviveLanded[0] - $hostPosition[0], 2) + [Math]::Pow($reviveLanded[1] - $hostPosition[1], 2)) -le 3.5) {
+        throw 'revive fixture did not land beyond the proximity rescue radius'
+    }
     $hpSaved = [VF]::I16($h2, $pcPeer + 0xDC)
     $tempSaved = [VF]::U32($h2, $pcPeer + 0xE4)
     $downedSerialBefore = [VF]::U32($h2, $b2 + 0x1024)
@@ -1286,10 +1304,8 @@ else {
             $downedSerialBefore, [VF]::U32($h2, $b2 + 0x1024), $gameOverBefore,
             [VF]::U32($h2, $b2 + 0x1028), $downBlock)
 
-    # Drive the revive ourselves rather than waiting on the agent's proximity rule, which
-    # depends on where the two players happen to be standing after section 13. Same channel
-    # either way — and if the agent's own rescue fires first, that is the same path arriving
-    # by the other door, so it cannot make this pass falsely.
+    # The receiving player is outside proximity rescue range so this exact request can be
+    # distinguished from an automatic rescue through the same mailbox.
     $reviveHp = if ($hpSaved -gt 0) { $hpSaved } elseif ($maxPeer -ge 20) { 20 } else { [Math]::Max($maxPeer, 1) }
     RequireWrite32 $h2 ($b2 + 0x1040) $reviveHp
     $reviveRequested = ([Math]::Max([long][VF]::U32($h2, $b2 + 0x1034), [long][VF]::U32($h2, $b2 + 0x1038)) + 1) -band 4294967295L
@@ -1320,6 +1336,10 @@ else {
     Start-Sleep -Seconds 3
     [VF]::W32($h2, $pcPeer + 0xE4, [int]$tempSaved) | Out-Null
     if ($hpSaved -gt 0) { [VF]::W16($h2, $pcPeer + 0xDC, [int16]$hpSaved) | Out-Null }
+    }
+    finally {
+        if ($reviveMoved) { RestorePosition $h2 $b2 $revivePositionSaved }
+    }
 }
 
 # --- 17. engine call signatures ----------------------------------------------------------
