@@ -211,7 +211,7 @@ public sealed class ReturnSaveCaptureTests : IDisposable
         Assert.True((bool)Call("MaintainSoloReturnCapture", local, 2000L)!);
         Assert.True(ClientCharacterPersistence.TryReadSidecar(Path.Combine(_game, "saves"), out GffStruct actual, out _, out _));
         Assert.True(actual.TryGetShort("CurrentHitPoints", out short hp));
-        Assert.Equal(12, hp);
+        Assert.Equal(0, hp); // Preserve the native saved offset; effective living HP is 12.
     }
 
     [Theory]
@@ -257,7 +257,8 @@ public sealed class ReturnSaveCaptureTests : IDisposable
         Directory.CreateDirectory(directory);
         GffWriter ifo = new("IFO ");
         ifo.Root.AddList("Mod_PlayerList").Add(48813).SetInt("IsPC", 1)
-            .SetInt("Mod_IsPrimaryPlr", 1).SetShort("CurrentHitPoints", 12);
+            .SetInt("Mod_IsPrimaryPlr", 1).SetShort("CurrentHitPoints", 0)
+            .SetShort("HitPoints", 0).SetShort("MaxHitPoints", 12);
         File.WriteAllBytes(Path.Combine(directory, "SAVEGAME.sav"),
             Erf(module, 2057, Erf("Module", 2014, ifo.ToBytes())));
     }

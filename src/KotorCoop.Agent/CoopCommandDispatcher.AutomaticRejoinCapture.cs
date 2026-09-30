@@ -22,7 +22,10 @@ public sealed partial class CoopCommandDispatcher
     {
         if (!ClientCharacterPersistence.TryReadSidecar(Path.Combine(gameDirectory, "saves"),
                 out var player, out _, out _)
-            || !player.TryGetShort("CurrentHitPoints", out short hp) || hp <= 0) return false;
+            || !player.TryGetShort("CurrentHitPoints", out short hp)
+            || !player.TryGetShort("HitPoints", out short storedMaximum)
+            || !player.TryGetShort("MaxHitPoints", out short derivedMaximum)
+            || !SavedCharacterHealthRule.IsLiving(hp, storedMaximum, derivedMaximum)) return false;
         Log?.Invoke("automatic recovery: using the verified living character checkpoint; unsaved post-checkpoint changes cannot be recovered");
         return true;
     }
