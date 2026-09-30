@@ -343,9 +343,8 @@ public sealed partial class KotorGameBridge
         _reviveSerial = unchecked(newest + 1);
         if (_reviveSerial == 0) _reviveSerial = 1;
         // Hit points before the serial: the plugin reads the serial last.
-        bool ok = _memory.TryWrite(_pluginBlock + BlockReviveHitPoints, (uint)Math.Max(hitPoints, 0));
-        ok &= _memory.TryWrite(_pluginBlock + BlockReviveSerial, _reviveSerial);
-        return ok;
+        return _memory.TryWrite(_pluginBlock + BlockReviveHitPoints, (uint)Math.Max(hitPoints, 0))
+            && _memory.TryWrite(_pluginBlock + BlockReviveSerial, _reviveSerial);
     }
 
     /// <summary>The plugin's verdict on the last revive: 0 = applied, non-zero = refused.</summary>

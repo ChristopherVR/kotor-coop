@@ -7,6 +7,35 @@ using Xunit;
 namespace KotorCoop.Tests;
 public sealed class WorldRequestContinuityTests
 {
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern nint VirtualAlloc(nint address, nuint size, uint type, uint protection);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool VirtualProtect(nint address, nuint size, uint protection, out uint oldProtection);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool VirtualFree(nint address, nuint size, uint type);
+
+    [Fact]
+    public void FailedAmountWriteDoesNotPublishReviveRequest()
+    {
+        nint allocation = VirtualAlloc(0, 0x3000, 0x3000, 0x04);
+        Assert.NotEqual(0, allocation);
+        // Put the amount on a read-only page while leaving the preceding serial writable.
+        nint block = allocation + 0x2000 - 0x1040;
+        using ProcessMemory memory = ProcessMemory.Attach(Environment.ProcessId);
+        using KotorGameBridge bridge = new(memory, ownsMemory:false);
+        try
+        {
+            typeof(KotorGameBridge).GetField("_pluginBlock", BindingFlags.Instance|BindingFlags.NonPublic)!.SetValue(bridge,block);
+            Marshal.WriteInt32(block+0x1034, 10);
+            Marshal.WriteInt32(block+0x1038, 9);
+            Marshal.WriteInt32(block+0x1040, 3);
+            Assert.True(VirtualProtect(allocation+0x2000, 0x1000, 0x02, out _));
+            Assert.False(bridge.RequestRevive(15));
+            Assert.Equal(10, Marshal.ReadInt32(block+0x1034));
+            Assert.Equal(3, Marshal.ReadInt32(block+0x1040));
+        }
+        finally { VirtualFree(allocation, 0, 0x8000); }
+    }
     [Fact]
     public void SamePeerSequenceAfterCheckpointIsANewOpButItsExactReplayRemainsDuplicate()
     {
