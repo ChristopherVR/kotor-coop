@@ -413,3 +413,26 @@ Evidence: `artifacts/final91-arena/fallback-evidence.txt` and44 typed native sna
 in `fallback-samples.json`. This closes the persistent-down fallback check that
 earlier short or idle-NPC attempts could not qualify. The fixture is explicitly
 crafted; this does not certify every campaign encounter.
+
+## Native save-completion snapshot92 validation
+
+Snapshot `032c780` (native92, wire83 unchanged) passed all 5,438 fast tests with
+a clean runner exit. Native x86 and managed Agent publishes passed with warnings
+treated as errors. The subsequent capture-coordination guard `fd44b8e` passed
+54 focused capture/refresh checks and another clean Agent publish. Native DLL SHA256:
+`15ADAFC7CCF045EB5EC1F99050864F5C0C23C24968C6CE42D6FAFE5C24BE6E4D`.
+
+The native completion observer requires positive, successful writes and closes for
+the selected save's SAVEGAME, PARTYTABLE, SAVENFO and GLOBALVARS files. It observes
+real byte counts and CRT flush/close results rather than the stall's void return or
+the archive helper's unconditional success. The final native world epoch, load
+serial, party masks, controlled slot, cached body IDs and recruitment generations
+must still agree. Managed processing requires stable parsed contents and another
+four-file content-hash fence before recording lineage.
+
+TCP world transfer and payload parsing now accept files up to64MiB and aggregate
+payloads up to128MiB. A real16.9MB BoS save exposed the prior16MiB per-file limit.
+The UDP network transport's separate acknowledgement limit remains under repair.
+Automatic adoption captures a fresh dedicated Co-op save without replacing Quick
+Save; a wiped or downed player uses its verified living checkpoint instead of
+waiting for an impossible fresh save. Live checks of these paths are in progress.
