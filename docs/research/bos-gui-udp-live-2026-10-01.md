@@ -1,0 +1,29 @@
+# BoS native93 GUI and UDP proof — 2026-10-01
+
+This bounded fixture uses only `artifacts/solomon-isolation/host` and `client`, native93 and Agent93/wire84 from immutable commit2395d79. It is a crafted coherent Sera fixture with original BoS script execution; it does not establish the full natural BoS dialogue route or campaign compatibility.
+
+## UDP-only saved-world adoption and controlled return
+
+The loopback relay listened on35153 and forwarded UDP to35152. It had no TCP listener. The Agent explicitly logged TCP unavailable and UDP fallback. Initial active companion adoption transferred16,374,920bytes; nine native samples over12.247seconds retained host generation7 and client adopted local baseline8 with typed Sera appearance511. Evidence: `artifacts/bos-active-v93/active-proof/result.json`.
+
+During the original controlled-scene fixture, native host F0 was0 and Solo was1. The parked client retained its own original character. Native keyboard lock was1; a genuine two-second injected W press left its position exactly `[52.7627,75.729,1.8]` before and after. Evidence: `control/client-parked.json`, `control/client-parked-after-w.json`. A controlled save request was refused with a clear busy/control reply.
+
+Original engine SwitchPlayerCharacter(-1) restored host control. The joiner requested its fresh dedicated Co-op save at03:54:11, then used UDP fallback. The first fetch had no ready host save; retry at03:54:35 adopted16,983,934bytes into `bos_ebovis` at03:54:46. Client actual load serial became2, F0 was-1, and keyboard lock was0. Relay totals were31,885forwarded and108,821returned packets, TCP listener false. Evidence: `relay-counts.json`, `control/client-pre-return.json`, `control/client-post-return.json`.
+
+Direct current-native inventory-object lookup independently verified equipped robe `g_a_kghtrobe03`, gauntlet `g_i_gauntlet07`, lightsaber `g_w_lghtsbr01` with upgrades4100, implant `g_i_implant202`, and belt `g_i_belt012`; semantic slot/tag/charges/stack/upgrades were equal across return despite new object IDs. Classes remained1@4 and5@14. Evidence: `control/native-equipment-comparison.json`. These current-native checks avoid relying on the empty root PC.UTC Equip_ItemList.
+
+## Stock GUI load provenance
+
+Host Agent40800 was stopped before opening the actual stock Load Game menu. Existing plugin synthetic UI input clicked the visible save row, Load button, and confirmation OK. No typed load command was used. The native-selected source was `000906 - GUI Known Sera`; the vanilla display label was Game905. Screenshot `host/kotorcoop-shots/gui93-confirm-load.bmp` records the selected row and stock confirmation.
+
+Before the restarted Agent attached, current typed Sera appearance was511 and template identity was empty. Agent57044 attached after the native GUI load had completed. Its04:04:23 log submitted the exact native-selected pre-load bytes for completed-load validation. The after sample showed template `orn_fakechanna`, generation17 and load serial2. Evidence: `gui-native-before-agent.json`, `gui-native-after-agent.json`, `rig/gui-agent.log`. This proves the retained recent load proof survives Agent restart; it does not claim arbitrary old proof acceptance.
+
+Actual subsequent stock GUI reloads of missing-manifest and deliberately changed-manifest fixtures retained typed Sera appearance511 but left the template empty. The settled missing sample was generation26/load serial3, and changed sample generation35/load serial4. Evidence: `gui-missing-settled.json`, `gui-changed-settled.json`. An earlier missing sample was taken before reload settled and must not be used as the negative result.
+
+## QuickSave defect and repair qualification
+
+The automatic controlled return used dedicated capture. However, an earlier explicit connect-to-new-endpoint while connected hit the legacy disconnect QuickSave capture: it accepted partial readable files after236ms, attempted one relocation, and left the original six QuickSave files in `.kcoop-quicksave-holdback`. The visible QuickSave then contained the new capture. Therefore this run does not establish overall QuickSave preservation from its original pre-run baseline.
+
+Both visible new QuickSave and original held-back files, their hashes/mtimes, and logs are preserved under `quicksave-failure`. The repair replaces explicit disconnect capture with a dedicated Co-op save, matching exact new native completion/directory/world and ACK, requiring all four parsed outputs with750ms stable hash, and retaining the prior verified checkpoint on refusal/timeout. Focused tests7/7 pass; a matching final-build endpoint-change and explicit-disconnect live preservation audit is still pending. No full stock GUI Save/QuickSave/AutoSave matrix is claimed here.
+
+After completing GUI checks, scoped launcher cleanup stopped both native processes and both Agents. Only then was the held-back original moved back into the visible QuickSave slot. Independent restoration audit proves all six original file hashes and modified ticks match the held-back originals exactly (quicksave-failure/restoration-proof.json); the overwritten visible capture remains preserved separately. No late native write was possible during restoration.

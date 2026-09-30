@@ -425,7 +425,9 @@ public sealed partial class CoopCommandDispatcher
             bool freshIntent = _lastNewGameIntentGeneration.HasValue
                 && _lastNewGameIntentGeneration.Value != generation && generation != 0;
             _lastNewGameIntentGeneration = generation;
-            if (freshIntent && (manager.Current is CoopClient || _rejoinOwnsDisconnect))
+            bool joinOwnsCreation = gameBridge.TryGetNewCharacterCapture(out uint creationState, out _, out _)
+                && creationState is ChargenStateArmed or ChargenStateSaving;
+            if (freshIntent && !joinOwnsCreation && (manager.Current is CoopClient || _rejoinOwnsDisconnect))
             {
                 // Stock chargen has no selected-save provenance. Keep the chosen new
                 // game and the existing co-op checkpoint; recovery must not interrupt it.
@@ -785,8 +787,8 @@ public sealed partial class CoopCommandDispatcher
 
             (bool hostBackAfterWipe, WipeRecoveryState nextWipeState) =
                 WipeRecoveryRule.Observe(_wipeRecoveryState, localState, hostState);
-            // Keep the wipe armed until adoption succeeds: another safety/capture branch
-            // can defer this tick, and observing the host must not consume recovery.
+            // Keep the wipe armed until a recovery attempt is selected: another safety/
+            // capture branch can defer this tick without consuming recovery.
             if (!hostBackAfterWipe)
                 _wipeRecoveryState = nextWipeState;
 
@@ -1402,6 +1404,8 @@ public sealed partial class CoopCommandDispatcher
             {
                 if (!TryUseAutomaticRecoveryCheckpoint())
                 {
+                    if (trigger == RejoinTrigger.WipeRecovery)
+                        _wipeRecoveryState = WipeRecoveryState.Initial;
                     Reply("recovery held: no verified living character checkpoint is available; your connection and saves were retained");
                     return;
                 }
@@ -1434,6 +1438,8 @@ public sealed partial class CoopCommandDispatcher
         // Whatever fired, the host's pending serial edge (if any) belongs to this same load:
         // one host load, one rejoin. Disarmed even when the gate refuses, for the same reason.
         _hostWorldReplacedState = HostWorldReplacedRule.Disarm();
+        if (trigger == RejoinTrigger.WipeRecovery)
+            _wipeRecoveryState = WipeRecoveryState.Initial;
 
         if (!shouldStart)
         {
@@ -2036,80 +2042,16 @@ public sealed partial class CoopCommandDispatcher
         if (_ownLoadVerdictPending || _skipNextDisconnectCapture || _ownLoadCaptureRequiresConfirmedSave)
         {
             _skipNextDisconnectCapture = false;
-            Log?.Invoke("character capture: selected-load character protection is active; skipped disconnect quicksave");
+            Log?.Invoke("character capture: selected-load character protection is active; skipped disconnect save");
             return;
         }
 
-        // Same source rule as the per-tick capture: this install's own newest save, not the
-        // staged copy of the host's world (the 2026-09-03 live pass caught exactly this call
-        // writing the host's PC into the sidecar).
-        string savesDirectory = Path.Combine(gameDirectory, "saves");
-        string? currentSave = ClientCharacterPersistence.FindCaptureSource(savesDirectory);
-
-        // 2026-09-18: save FIRST, so the capture holds the levels and gear since the last door
-        // rather than whatever the last autosave happened to hold. Straight through the bridge,
-        // not SendCheat's queue — the session is being torn down and there is no next tick to
-        // drain a queue on. Bounded: CSWSPlayer::GetIsAllowedToSave refuses silently, so after
-        // SaveWaitMs the newest existing save is captured exactly as before.
-        DateTime stampBefore = SaveStamp(currentSave);
-        bool holdbackArmed = false;
-        if (bridge.SupportsCheats)
+        string? currentSave = CaptureDedicatedDisconnectSave();
+        if (currentSave is null)
         {
-            holdbackArmed = CoopSaveRedirect.BeginHoldback(savesDirectory, out string holdbackDiagnostic);
-            if (!holdbackArmed)
-            {
-                Log?.Invoke($"character capture: {holdbackDiagnostic}");
-            }
+            Reply("character capture: fresh disconnect save unavailable; kept your last verified character checkpoint (QuickSave untouched)");
+            return;
         }
-
-        if (bridge.SupportsCheats && bridge.TryRequestCheat(new CheatRequest(CheatKinds.QuickSave), out _))
-        {
-            long requestedMs = SessionClock.NowMs;
-            bool landed = false;
-
-            while (!CharacterCaptureCadenceRule.WaitExpired(requestedMs, SessionClock.NowMs))
-            {
-                Thread.Sleep(100);
-
-                string? sourceNow = ClientCharacterPersistence.FindCaptureSource(savesDirectory);
-                bool changed = CharacterCaptureCadenceRule.SaveLanded(currentSave, stampBefore, sourceNow, SaveStamp(sourceNow));
-                if (changed && ClientCharacterPersistence.IsCaptureSourceReady(sourceNow))
-                {
-                    currentSave = sourceNow;
-                    landed = true;
-                    break;
-                }
-            }
-
-            Log?.Invoke(landed
-                ? $"character capture: pre-disconnect quicksave landed after {SessionClock.NowMs - requestedMs} ms"
-                : "character capture: pre-disconnect quicksave did not land within the wait - capturing the newest save as before");
-
-            // Relocate a fresh capture to the dedicated co-op slot and restore the held-back
-            // player quicksave now, before resolving the capture source below - a no-op when
-            // nothing landed in 000000 - QUICKSAVE this cycle.
-            if (CoopSaveRedirect.CompleteRedirect(savesDirectory, out _, out string redirectDiagnostic))
-            {
-                Log?.Invoke($"character capture: {redirectDiagnostic}");
-            }
-
-            // The loop can observe an intermediate write before the engine updates the
-            // quicksave's SAVEGAME.sav timestamp. Re-resolve at the capture boundary so a
-            // newly landed quicksave wins over the path selected before the request.
-            currentSave = ClientCharacterPersistence.RefreshCaptureSource(savesDirectory, currentSave);
-        }
-        else if (holdbackArmed)
-        {
-            // The request itself was refused (or cheats stopped being supported between the
-            // two checks) - nothing will ever land, so restore the held-back quicksave now
-            // rather than leaving it hidden.
-            CoopSaveRedirect.CompleteRedirect(savesDirectory, out _, out _);
-        }
-
-        string? outcome = _sessionSaveWatch.CaptureOnDisconnect(currentSave);
-        if (outcome is not null)
-        {
-            Reply(outcome);
-        }
+        Reply("co-op character saved from the completed dedicated disconnect save (QuickSave untouched)");
     }
 }

@@ -488,6 +488,54 @@ public sealed class SessionSaveWatchTests : IDisposable
         Assert.Equal("Own character", saved.GetLocString("FirstName")!.Text());
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CompletedSaveCommitCannotReplaceCheckpointAfterProofOrSourceChanges(bool mutateSource)
+    {
+        string own = BuildSave("Own checkpoint");
+        string candidate = BuildSave("Candidate character");
+        string game = TempDirectory();
+        candidate = CopySaveIntoGame(candidate, game);
+        SessionSaveWatch watch = new(game);
+        Assert.NotNull(watch.CaptureOnDisconnect(own));
+        Assert.True(ClientCharacterPersistence.TryHashSave(candidate, out string hash, out long length));
+        bool validated = false;
+        bool Guard()
+        {
+            validated = true;
+            if (!mutateSource) return false;
+            File.AppendAllText(Path.Combine(candidate, "savenfo.res"), "changed");
+            return true;
+        }
+        Assert.False(watch.CaptureVerifiedRefreshSource(candidate, hash, length, Guard, out _));
+        Assert.True(validated);
+        Assert.True(ClientCharacterPersistence.TryReadSidecar(Path.Combine(game, "saves"), out GffStruct retained, out _, out _));
+        Assert.Equal("Own checkpoint", retained.GetLocString("FirstName")!.Text());
+    }
+
+    [Fact]
+    public void CompletedSaveCommitWritesOnlyTheExpectedCharacterWhileProofStillHolds()
+    {
+        string source = BuildSave("Verified own character");
+        string game = TempDirectory();
+        source = CopySaveIntoGame(source, game);
+        SessionSaveWatch watch = new(game);
+        Assert.True(ClientCharacterPersistence.TryHashSave(source, out string hash, out long length));
+        Assert.True(watch.CaptureVerifiedRefreshSource(source, hash, length, () => true, out _));
+        Assert.True(ClientCharacterPersistence.TryReadSidecar(Path.Combine(game, "saves"), out GffStruct retained, out _, out _));
+        Assert.Equal("Verified own character", retained.GetLocString("FirstName")!.Text());
+    }
+
+    private static string CopySaveIntoGame(string source, string game)
+    {
+        string target = Path.Combine(game, "saves", "000901 - Co-op");
+        Directory.CreateDirectory(target);
+        foreach (string file in Directory.EnumerateFiles(source))
+            File.Copy(file, Path.Combine(target, Path.GetFileName(file)));
+        return target;
+    }
+
     // ---- helpers --------------------------------------------------------------
 
     private string BuildSave(string name)

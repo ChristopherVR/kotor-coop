@@ -299,6 +299,23 @@ public sealed class SessionSaveWatch(string gameDirectory, Func<DateTime>? utcNo
         return captured;
     }
 
+    /// <summary>Binds disconnect capture to the completed save that survived its full-output fence.</summary>
+    public bool CaptureVerifiedRefreshSource(string source, string expectedSha256, long expectedLength,
+        Func<bool> sourceStillValid, out string outcome)
+    {
+        FileInfo archive = new(Path.Combine(source, "SAVEGAME.sav"));
+        if (!archive.Exists || StagedSave.IsStagedCopy(SavesDirectory, source)
+            || _connectedSinceUtc != DateTime.MinValue && archive.LastWriteTimeUtc < _connectedSinceUtc)
+        {
+            outcome = "completed save capture refused: source is missing, staged or predates this connection";
+            return false;
+        }
+        bool captured = ClientCharacterPersistence.TryCaptureVerifiedLoadSource(SavesDirectory, source,
+            expectedSha256, expectedLength, _sessionBaselineIdentity, false, sourceStillValid, out string diagnostic);
+        outcome = $"completed save character{(captured ? string.Empty : " NOT")} captured: {diagnostic}";
+        return captured;
+    }
+
     /// <summary>Captures only the directory proven by a fresh, completed own-load request.
     /// This deliberately bypasses the ordinary newest-save and staged-copy rules because the
     /// provenance plus unchanged archive fingerprint establishes that this staged directory

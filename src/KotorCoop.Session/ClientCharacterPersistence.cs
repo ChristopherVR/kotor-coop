@@ -165,6 +165,14 @@ public static class ClientCharacterPersistence
         uint hostSaveIdentity,
         bool allowStagedDirectory,
         out string diagnostic)
+        => TryCaptureVerifiedLoadSource(savesDirectory, sourceDirectory, expectedSha256,
+            expectedLength, hostSaveIdentity, allowStagedDirectory, null, out diagnostic);
+
+    /// <summary>Checks the completed-save/world proof immediately before committing a character.</summary>
+    public static bool TryCaptureVerifiedLoadSource(
+        string savesDirectory, string sourceDirectory, string expectedSha256, long expectedLength,
+        uint hostSaveIdentity, bool allowStagedDirectory, Func<bool>? sourceStillValid,
+        out string diagnostic)
     {
         string root = Path.GetFullPath(savesDirectory);
         string source = Path.GetFullPath(sourceDirectory);
@@ -197,6 +205,17 @@ public static class ClientCharacterPersistence
             return false;
         }
 
+        if (sourceStillValid is not null && !sourceStillValid())
+        {
+            diagnostic = "the completed save or world proof changed before capture - kept the existing character";
+            return false;
+        }
+        if (sourceStillValid is not null && (!TryHashSave(source, out string commitHash, out long commitLength)
+            || commitLength != expectedLength || commitHash != expectedSha256))
+        {
+            diagnostic = "the verified source changed before capture commit - kept the existing character";
+            return false;
+        }
         return TryWriteSidecar(savesDirectory, player, hostSaveIdentity, DateTime.UtcNow, out diagnostic);
     }
 
