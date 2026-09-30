@@ -238,3 +238,29 @@ With native87 CancelCombat fix and Agent87b, all seven joiners each landed a new
 
 Afterwards the host entered MANM28AB alone and returned to END_M01AA with a genuinely changed origin map from the spawned enemy. All seven parked joiners requested their own dedicated Co-op saves, confirmed exact fresh captures, and entered SoloReturn adoption. The host initially was not save-ready, then its fresh return save landed after1210ms; the joiners' first download attempts safely refused and automatically retried20seconds later. All seven actually rejoined the updated Endar world, keeping their own Scoundrel class. Twelve existing QuickSave files(game7/8) retained hashes and UTC modification times; game1..6 had no QuickSave files before or after. This closes the previously unit-only client return-capture case on this staged path. Evidence: solo-return-proof.json and return-quicksave-before/after.json in the same owned run. The rig was stopped through its recorded PID/start/path ownership.
 
+
+## October 1 continuation: verification and request identity
+
+The frozen native88b source snapshot passed all5343 fast tests and all116 Slow tests
+(the Slow run took9m18s). A later live battery found that a newly adopted joiner could
+restart its flag sequence at1, while the host deduplicated only by peer and sequence.
+Commit f7f2286 includes the host session, load, flag revision and immutable operation
+identity in duplicate detection; exact packet retransmissions remain idempotent.
+
+That battery also exposed revive request serial reuse. The managed publisher now reads
+both native requested/applied serials before allocating a fresh one, and commit15421d9
+publishes the serial only after its HP payload write succeeds. Focused continuity tests
+include a real split-page write refusal. The live verifier places its receiving player
+beyond automatic proximity rescue range so a manual request is measured separately.
+
+Combat-runner cancellation now validates the current player independently of a former
+enemy that has died or disappeared. Attack admission still requires the original living,
+resolved target in the unchanged native world. This permits safe cancellation after a
+fight without loosening attack guards.
+
+The first battery's short-lived Sith fixture invalidated its later enemy comparisons.
+Its native base HP was2; one physical host hit removed both its base and temporary HP.
+This is not established as a co-op defect or an effect-expiry event. Repeat verification
+uses a clearly staged stock Sith UTC clone with500 base/max/current HP, preserving its
+hostile faction and scripts, before measurement. Evidence and any remaining failures
+are retained separately from successful runs.
