@@ -417,7 +417,8 @@ crafted; this does not certify every campaign encounter.
 ## Native save-completion snapshot92 validation
 
 Snapshot `032c780` (native92, wire83 unchanged) passed all 5,438 fast tests with
-a clean runner exit. Native x86 and managed Agent publishes passed with warnings
+a clean runner exit; all 116 Slow integration tests also passed in 9m35s with a
+clean exit. Native x86 and managed Agent publishes passed with warnings
 treated as errors. The subsequent capture-coordination guard `fd44b8e` passed
 54 focused capture/refresh checks and another clean Agent publish. Native DLL SHA256:
 `15ADAFC7CCF045EB5EC1F99050864F5C0C23C24968C6CE42D6FAFE5C24BE6E4D`.
