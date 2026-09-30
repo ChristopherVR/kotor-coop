@@ -344,3 +344,26 @@ the joiner's actual local generation8. Thirteen verified native samples spanning
 remained stable. Evidence: `artifacts/bos-active-v90/active-proof/result.json` and its
 typed before/after snapshots. This controlled path does not certify the natural BoS
 campaign route or restart recovery without durable saved provenance.
+
+## Saved companion provenance snapshot91 validation
+
+Committed snapshot `b76650c` (native91, wire83 unchanged) passed all 5,404 fast
+tests with a clean runner exit. Matching native x86 and managed Agent publishes
+completed with warnings treated as errors. Native DLL SHA256:
+`4DDDB5ACA94B24202D6E919297BB0EB3B79BE13254E9946C64625868BEB8E4FA`.
+The immutable source and build/test logs are under `artifacts/companion-v91`.
+
+Verified dedicated Co-op saves record exact full-save and companion UTC hashes
+with known native recruitment identities. Observed `loadgame` restoration checks
+both the selected original and the actual staged Auto Save against that retained
+snapshot after the correlated native load acknowledgement. New recruitment revokes
+restore eligibility. Unknown scripted party control defers automatic saves.
+This validation establishes the automated guards; live reload proof and observed
+completion of ordinary menu saves, Quick Saves and Auto Saves remain separate work.
+
+Native90b additionally passed a live stale-generation equipment refusal and a
+145-second BoS controlled-scene survival check with Co-op saves refused. The real
+`SwitchPlayerCharacter(-1)` return restored the original host character and keyboard
+movement. The joiner still unloaded to the menu during entry, so this run does not
+prove joiner parking or the complete BoS scene. See
+[the focused report](bos-active-adoption-live-2026-10-01.md).
