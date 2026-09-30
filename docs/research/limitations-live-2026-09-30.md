@@ -352,6 +352,7 @@ tests with a clean runner exit. Matching native x86 and managed Agent publishes
 completed with warnings treated as errors. Native DLL SHA256:
 `4DDDB5ACA94B24202D6E919297BB0EB3B79BE13254E9946C64625868BEB8E4FA`.
 The immutable source and build/test logs are under `artifacts/companion-v91`.
+All 116 Slow integration tests also passed with a clean exit in 9m16s.
 
 Verified dedicated Co-op saves record exact full-save and companion UTC hashes
 with known native recruitment identities. Observed `loadgame` restoration checks
