@@ -1202,3 +1202,11 @@ serialization pass before the unsafe party walk at `0x4B36C5`. This does not cha
 hook bytes or the ABI. Warning-clean build: `artifacts/live-native-v95-serializationguard`.
 The initial party guard passed all 24 existing party-count rule tests; live replay
 must use this later serialization guard.
+
+
+The final build moves the engine-facing bound into a startup-registered callback so
+that the completion observer remains independently compiled by its linked-source
+tests. Commits `ed9838f` / `0518d08` preserve the same runtime guard. Final DLL:
+`artifacts/live-native-v95-saveguard-final/dinput8.dll`; 55 focused party-count,
+completion-observer and save-flush tests pass. The native publish also passes with
+warnings treated as errors. Live replay remains a separate requirement.
