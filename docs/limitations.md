@@ -210,8 +210,11 @@ Built and automatically tested, but nobody has watched them on the running game 
 - The Windows Firewall rule the installer adds (2026-09-18) has not yet been watched making the
   difference on a real second PC.
 - Longer multi-hour sessions: the recovered 2026-09-17 three-player run covered 12 transitions (eight door crossings and four warps) over about 30 minutes, with all three games alive.
-- The keyboard side of the "you're parked" locks (swoop, Star Forge duels). The plugin now
-  accepts synthetic keyboard input, but these particular locks still need a live check.
+- Natural Swoop entry, completion and return, and the actual Star Forge duels. On 2026-09-30,
+  staged live checks verified that two seconds of keyboard movement moved the parked joiner
+  zero distance on the real Swoop track and during a controlled Star Forge solo segment.
+  Movement resumed after explicit host returns. Those checks establish the locks, not the
+  natural story sequences. See [keyboard lock evidence](research/solo-keyboard-lock-live-2026-09-30.md).
 - The connection line outside the measured 800x600 layout, and seeing shared map fog clear in the map GUI. Native reveal calls following peer movement and resuming after a module transition were checked on 2026-08-27; the map pixels were not captured in that pass. See [map evidence](research/map-reveal.md).
 - Linux and Steam Deck (Proton): the whole thing, from the DLL loading under Wine to a session
   between a Deck and a Windows PC.
@@ -226,8 +229,9 @@ Built and automatically tested, but nobody has watched them on the running game 
   leg have narrower live evidence; this does not establish a complete story path. Missing
   implementation and live checks are separated in the current table at the end of
   [review-seamless-2026-09-18.md](review-seamless-2026-09-18.md).
-- Explicit `reconnect world` recovery after arbitrary script changes. JFTS's automatic first-class
-  refresh now has three-player evidence with different classes and personal items. The steps are in
+- Script changes outside the scoped JFTS refresh. Explicit `reconnect world` recovery passed live
+  on both JFTS joiners, preserving their different classes and personal items; that does not prove
+  every mod's scripts. The steps are in
   [PLAYTEST.md](PLAYTEST.md#story-skip-follow-up-checks-2026-09-30).
 - A physical gamepad. The controller support was verified with a simulated one. On 2026-09-17 the
   mod was confirmed to find Windows' controller support on a real PC and to correctly report "no
