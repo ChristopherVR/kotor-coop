@@ -367,3 +367,10 @@ Native90b additionally passed a live stale-generation equipment refusal and a
 movement. The joiner still unloaded to the menu during entry, so this run does not
 prove joiner parking or the complete BoS scene. See
 [the focused report](bos-active-adoption-live-2026-10-01.md).
+
+The subsequent managed controlled-scene repair, snapshot `670039c`, passed all
+5,408 fast tests with a clean exit and a warning-as-error Agent publish. It refuses
+bare follower travel into `bos_ebovis`, defers saved-world adoption during actual
+controlled host solo state, and uses the existing native input-lock channel to park
+a joiner waiting in another world. Unit checks include pre-flag announcements,
+host return and owner disconnect. Live parking and return checks remain pending.
