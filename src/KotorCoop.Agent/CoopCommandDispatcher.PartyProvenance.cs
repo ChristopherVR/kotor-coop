@@ -19,9 +19,30 @@ public sealed partial class CoopCommandDispatcher
         public long StableSince;
     }
     private PartySaveAttempt? _partySaveAttempt;
+    private uint _partySaveCompletionSequence;
+    private bool _partySaveCompletionSeeded;
+
+    private void ObserveNativePartySaveCompletion()
+    {
+        bool found=_kotor is not null && _kotor.TryReadNativeSaveCompletion(out uint _,out _,out _);
+        if(!_partySaveCompletionSeeded)
+        {
+            _partySaveCompletionSeeded=true;
+            if(found && _kotor!.TryReadNativeSaveCompletion(out uint initial,out _,out _))_partySaveCompletionSequence=initial;
+            return; // A hot attachment never certifies a historical event.
+        }
+        if(_kotor is null || !_kotor.TryReadNativeSaveCompletion(out uint sequence,out string directory,out PartyRoster saved)
+            || sequence==_partySaveCompletionSequence)return;
+        _partySaveCompletionSequence=sequence;
+        if(string.IsNullOrEmpty(gameDirectory) || !bridge.TryReadLocalPartyRoster(out PartyRoster current)
+            || !SameNativeParty(current,saved))return;
+        string path=Path.Combine(gameDirectory,"saves",directory);
+        _partySaveAttempt=new(path,saved,DateTime.MinValue,SessionClock.NowMs);
+    }
 
     private void MaintainPartyProvenanceSave()
     {
+        ObserveNativePartySaveCompletion();
         if (_partySaveAttempt is not { } attempt) return;
         if (SessionClock.NowMs - attempt.Requested > 30_000
             || !bridge.TryReadLocalPartyRoster(out PartyRoster current) || !SameNativeParty(current, attempt.Party))
@@ -31,9 +52,13 @@ public sealed partial class CoopCommandDispatcher
         if (stamp != attempt.Observed)
         { attempt.Observed = stamp; attempt.StableSince = SessionClock.NowMs; return; }
         if (SessionClock.NowMs - attempt.StableSince < 750) return;
+        if(!NativeSaveArtifactRule.TryHashOutputs(attempt.Directory,out string beforeOutputs)
+            || !NativeSaveArtifactRule.Complete(attempt.Directory)){_partySaveAttempt=null;return;}
         string[] payloads = PartyCacheFingerprint.ReadSave(attempt.Directory);
         if (!bridge.TryReadLocalPartyRoster(out current) || !SameNativeParty(current, attempt.Party)
-            || SaveStamp(attempt.Directory) != stamp) { _partySaveAttempt = null; return; }
+            || SaveStamp(attempt.Directory) != stamp
+            || !NativeSaveArtifactRule.TryHashOutputs(attempt.Directory,out string afterOutputs)
+            || beforeOutputs!=afterOutputs) { _partySaveAttempt = null; return; }
         if (PartySaveProvenance.TryWriteVerified(attempt.Directory, attempt.Party, payloads, out string outcome)) Log?.Invoke(outcome);
         _partySaveAttempt = null;
     }

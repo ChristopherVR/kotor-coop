@@ -211,6 +211,9 @@ internal static unsafe partial class PluginHost
             Log("RemovePartyMember hook NOT installed: disabled by coop.ini removeparty_hook=0");
         }
 
+        NativeSaveCompletionHook.Block = BlockAddress;
+        NativeSaveCompletionHook.Install(out string saveCompletionDiagnostic);
+        Log(saveCompletionDiagnostic);
         PartyOccupantHook.PublicationBank = BlockAddress + SharedBlock.OffsetLocalPartyOccupants;
         PartyOccupantHook.Install(out string occupantDiagnostic);
         Log($"party occupant: {occupantDiagnostic}");

@@ -39,12 +39,9 @@ public sealed record PartySnapshotPacket(long ServerTimeMs, IReadOnlyList<PartyM
 /// <summary>
 /// One instance's whole companion roster, as two nine-bit masks over the engine's NPC slots.
 ///
-/// ⚠ THE SLOT INDEX IS THE COMPANION'S IDENTITY, and nothing else on the wire names one.
-/// KOTOR's roster is a fixed nine-entry table (NPC_BASTILA .. NPC_ZAALBAR) and both instances
-/// loaded the same save, so slot N means the same character on both. That is also the key
-/// PartyPresenceController already resolves companions by — see its "companions are keyed by
-/// NPC roster slot (identical across two instances of the same save)" — so this channel and
-/// the companion mirror agree on identity by construction rather than by convention.
+/// Slots identify roster positions, not the current character. Occupant generations,
+/// verified recruitment templates and exact saved-payload proof distinguish replacements.
+/// Runtime IDs remain local addresses and do not establish occupant identity.
 ///
 /// <paramref name="AvailableMask"/> = recruited: the story has handed this companion over,
 /// whether or not they are in the active party right now. Read from party table +0x30

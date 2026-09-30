@@ -59,16 +59,10 @@ public sealed partial class CoopCommandDispatcher
         if (dash < 0 || !int.TryParse(folder.AsSpan(0, dash), out int number) || number < 2) return null;
         string path = Path.Combine(saves, folder);
         if (onPrepared is not null && !onPrepared(path)) return null;
-        PartyRoster beforeParty = bridge.TryReadLocalPartyRoster(out PartyRoster savedParty) ? savedParty : PartyRoster.Empty;
-        DateTime beforeStamp = SaveStamp(path);
-        long requestedAt = SessionClock.NowMs;
         SendCheat(new CheatRequest(CheatKinds.CoopSave, Amount: number, Text: CoopSaveSlot.SlotLabel),
             onApplied: () =>
             {
                 if (capture is not null) capture.Answered = true;
-                if (beforeParty.HostNativeEpoch != 0 && Enumerable.Range(0,9).Any(slot => beforeParty.IsAvailable(slot)
-                    && ModSupportProfile.IsResref(beforeParty.OccupantFor(slot).Template)))
-                    _partySaveAttempt = new(path, beforeParty, beforeStamp, requestedAt);
                 onApplied?.Invoke();
             },
             onRefused: () => { if (capture is not null) capture.Refused = true; onRefused?.Invoke(); }, quiet: quiet);
