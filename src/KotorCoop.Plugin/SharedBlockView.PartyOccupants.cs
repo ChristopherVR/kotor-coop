@@ -43,15 +43,23 @@ internal sealed unsafe partial class SharedBlockView
         if (length > 0 && PartyOccupantTable.ValidTemplate(bytes[..length])) template = Encoding.ASCII.GetString(bytes[..length]);
         return sequence == *U32(bank) && HostPartyOccupantsCurrent();
     }
-    public bool HostPartyOccupantReplaced(int slot) => (uint)slot < 9 && baseAddress[SharedBlock.OffsetHostPartyOccupants + 240 + slot] != 0;
+    public bool HostPartyOccupantRequiresBinding(int slot) => TryGetHostPartyOccupant(slot, out uint generation, out string template)
+        && generation != 0 && (HostPartyOccupantReplaced(slot) || (!PartyRosterTemplateTable.TryGetTemplate(slot, out string stock) || !template.Equals(stock, StringComparison.OrdinalIgnoreCase)));
+    public bool HostPartyOccupantReplaced(int slot) => (uint)slot < 9 && (baseAddress[SharedBlock.OffsetHostPartyOccupants + 240 + slot] & 1) != 0;
+    public bool HostPartyOccupantAdopted(int slot) => (uint)slot < 9 && HostPartyOccupantsCurrent()
+        && (baseAddress[SharedBlock.OffsetHostPartyOccupants + 240 + slot] & 2) != 0
+        && *U32(SharedBlock.OffsetPartyAdoptedLocalGenerations + slot * 4) == PartyOccupantHook.Captured.Generation(slot);
     public uint HostPartyOccupantSession => *U32(SharedBlock.OffsetHostPartyOccupants + 12);
+    public uint HostPartyOccupantSequence => *U32(SharedBlock.OffsetHostPartyOccupants);
+    public uint HostPartyOccupantGeneration(int slot) => (uint)slot < 9 && HostPartyOccupantsCurrent()
+        ? *U32(SharedBlock.OffsetHostPartyOccupants + SharedBlock.PartyOccupantRowsOffset + slot * SharedBlock.PartyOccupantStride) : 0;
     public bool CanMirrorPartyOccupant(int slot, uint publishedGeneration = uint.MaxValue)
     {
         if ((uint)slot >= 9 || !HostPartyOccupantsCurrent()) return false;
         int bank = SharedBlock.OffsetHostPartyOccupants;
         int row = bank + SharedBlock.PartyOccupantRowsOffset + slot * SharedBlock.PartyOccupantStride;
         uint sequence = *U32(bank), generation = *U32(row), snapshotGeneration = publishedGeneration == uint.MaxValue ? *U32(row + 4) : publishedGeneration;
-        bool valid = *U32(bank + 20) == *U32(bank + 4) && !HostPartyOccupantReplaced(slot) && generation == snapshotGeneration && (generation == 0
+        bool valid = *U32(bank + 20) == *U32(bank + 4) && (!HostPartyOccupantRequiresBinding(slot) || HostPartyOccupantAdopted(slot)) && generation == snapshotGeneration && ((generation == 0 && PartyOccupantHook.Captured.FixedStockIdentity(slot))
             || (baseAddress[row + 8] != 0 && PartyOccupantReconcileState.IsApplied(slot, HostPartyOccupantSession, generation)));
         return valid && sequence == *U32(bank);
     }

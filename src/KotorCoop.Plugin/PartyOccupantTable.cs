@@ -7,16 +7,45 @@ internal sealed class PartyOccupantTable
     private readonly byte[] _templates = new byte[9 * 16];
     private uint _sequence;
     private readonly bool[] _replaced = new bool[9];
+    private readonly uint[] _cachedBody = new uint[9], _retiredBody = new uint[9];
+    private readonly bool[] _cachedBodyKnown = new bool[9], _retiredBodyKnown = new bool[9];
+    public void ObserveCachedBody(int slot, uint objectId)
+    { if ((uint)slot < 9) { _cachedBody[slot] = objectId; _cachedBodyKnown[slot] = objectId != 0; } }
+    public void ObserveSerialization(int slot, uint objectId)
+    {
+        if ((uint)slot >= 9 || !Replaced(slot) || !TemplateKnown(slot)) return;
+        // SaveMember has resolved a real cached body. The old body's serialization must
+        // not relabel its UTC as the newly admitted occupant, even on a later save retry.
+        if (!_retiredBodyKnown[slot] || objectId == _retiredBody[slot]) ObserveUnknown(slot);
+    }
     public bool TemplateKnown(int slot) => (uint)slot < 9 && _templates[slot * 16] != 0;
+    public bool FixedStockIdentity(int slot)
+    {
+        if ((uint)slot >= 9) return false;
+        if (_generation[slot] == 0) return true;
+        if (_replaced[slot] || !PartyRosterTemplateTable.TryGetTemplate(slot, out string stock)) return false;
+        ReadOnlySpan<byte> bytes = _templates.AsSpan(slot * 16, 16);
+        for (int i = 0; i < stock.Length; i++)
+            if (bytes[i] != (byte)stock[i]) return false;
+        return stock.Length == 16 || bytes[stock.Length] == 0;
+    }
     public bool LegacySideChannelAllowed(int slot) => (uint)slot < 9
         && (_generation[slot] == 0 || (!_replaced[slot] && TemplateKnown(slot)));
     public void ObserveAdmission(int slot)
     {
-        if ((uint)slot < 9 && TemplateKnown(slot)) _replaced[slot] = true;
+        if ((uint)slot < 9 && (TemplateKnown(slot) || Replaced(slot)
+            || (_cachedBodyKnown[slot] && _cachedBody[slot] != 0x7F000000)))
+        { _replaced[slot] = true; _retiredBody[slot] = _cachedBody[slot]; _retiredBodyKnown[slot] = _cachedBodyKnown[slot]; }
         ObserveUnknown(slot);
     }
     public bool Replaced(int slot) => (uint)slot < 9 && _replaced[slot];
-    public void ObserveRemoval(int slot) { if ((uint)slot < 9) _replaced[slot] = true; ObserveUnknown(slot); }
+    public void ObserveRemoval(int slot)
+    {
+        if ((uint)slot < 9) { _replaced[slot] = true; _retiredBody[slot] = _cachedBody[slot]; _retiredBodyKnown[slot] = _cachedBodyKnown[slot]; }
+        ObserveUnknown(slot);
+    }
+    public void HoldUnprovenLoadedSlot(int slot)
+    { if ((uint)slot < 9 && _generation[slot] == 0) { _replaced[slot] = true; ObserveUnknown(slot); } }
 
     public uint Generation(int slot) => (uint)slot < 9 ? _generation[slot] : 0;
     public void CopyTemplate(int slot, Span<byte> destination)
@@ -49,6 +78,7 @@ internal sealed class PartyOccupantTable
     }
     public void InvalidateWorld()
     {
+        Array.Clear(_cachedBody); Array.Clear(_retiredBody); Array.Clear(_cachedBodyKnown); Array.Clear(_retiredBodyKnown);
         for (int slot = 0; slot < 9; slot++)
         {
             if (_generation[slot] == 0) continue;

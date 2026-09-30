@@ -674,6 +674,11 @@ internal static unsafe class PhantomHitHook
             }
         }
     }
+    public static void ResetCompanionCounters()
+    {
+        Array.Clear(_companionCumulative);
+        Array.Clear(_companionSerial);
+    }
 
     public static void ReadCompanionSlot(
         int slot, out uint rosterSlotPlusOne, out uint cumulative, out uint serial) =>

@@ -73,10 +73,14 @@ public interface IPartySession
     /// roster slot (a set bit in <paramref name="presentMask"/> means that slot's entry in
     /// <paramref name="xpBySlot"/> is meaningful). Ignored on a client.</summary>
     void PublishCompanionExperience(ushort presentMask, IReadOnlyList<uint> xpBySlot) { }
+    void PublishCompanionExperience(ushort presentMask, IReadOnlyList<uint> xpBySlot, PartyRoster captured)
+        => PublishCompanionExperience(presentMask, xpBySlot);
 
     /// <summary>Client only: this peer's own reading of each active companion's experience,
     /// for the host to merge upward by max against every other peer's.</summary>
     void ReportCompanionExperience(ushort presentMask, IReadOnlyList<uint> xpBySlot) { }
+    void ReportCompanionExperience(ushort presentMask, IReadOnlyList<uint> xpBySlot, PartyRoster captured, uint localEpoch)
+        => ReportCompanionExperience(presentMask, xpBySlot);
 
     /// <summary>Host only: every client's latest companion-experience report, fresh ones only.
     /// Empty on a client.</summary>

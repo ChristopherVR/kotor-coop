@@ -48,6 +48,11 @@ internal sealed class DamageOwedLedger
         int slot = Find(objectId);
         return slot < 0 ? 0 : _applied[slot];
     }
+    public void Forget(uint objectId)
+    {
+        int slot = Find(objectId);
+        if (slot >= 0) { _id[slot] = 0; _applied[slot] = 0; }
+    }
 
     /// <summary>
     /// Adopts the agent's epoch, clearing the applied totals when it changes.

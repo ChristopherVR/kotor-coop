@@ -60,6 +60,8 @@ public sealed partial class CoopHost
             if (_damageWorldEpoch != 0 && nativeEpoch != _damageWorldEpoch
                 && unchecked((int)(nativeEpoch - _damageWorldEpoch)) <= 0) return;
             _enemyDamageGenerations.RetireCurrentWorld();
+            _companionDamageGenerations.RetireCurrentWorld();
+            _companionDamage.Clear();
             _enemyDamage.Clear();
             _damageWorldModule = module; _damageWorldSerial = worldSerial; _damageWorldEpoch = nativeEpoch;
         }

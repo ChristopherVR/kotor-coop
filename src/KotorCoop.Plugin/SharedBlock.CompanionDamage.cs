@@ -11,11 +11,8 @@ namespace KotorCoop.Plugin;
 // never a health sample" shape, for the identical reason. See
 // docs/research/companion-state-sync.md §13.
 //
-// UNLIKE the enemy ledger, there is no per-module EPOCH here: an NPC roster slot names the
-// same companion for the whole session, module transition or not (PartyPresenceController
-// already resolves companions by roster slot for exactly that reason), so nothing needs
-// invalidating when the world changes. A per-publish GENERATION still exists, for the ordinary
-// "tell a legitimate restart from a stale datagram" reason every cumulative channel here needs.
+// Version 90 binds every row to its captured native world and occupant generation.
+// A load or replacement retires the cumulative run and outstanding debt.
 //
 // Taken side (plugin -> agent): PhantomHitHook's companion watch, one row per currently-watched
 // presence slot (SharedBlock.PartyPresenceCapacity, 4) — only ever nonzero while
@@ -28,6 +25,10 @@ namespace KotorCoop.Plugin;
 // walk PartyPresenceController.ResolveRosterObjectId already does.
 internal partial struct SharedBlock
 {
+    // v90: coherent local capture and explicit expected native owed namespace.
+    public const int OffsetCompanionTakenMetadata = 0xBE00;
+    public const int OffsetCompanionOwedMetadata = 0xBE40;
+    public const int OffsetPartyAdoptedLocalGenerations = 0xBE80;
     /// <summary>Companion presence slots this instance can watch at once — matches
     /// <see cref="PartyPresenceCapacity"/>, since a slot can only ever be released while it is
     /// also a tracked presence slot.</summary>

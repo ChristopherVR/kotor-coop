@@ -73,8 +73,10 @@ public static partial class PacketCodec
         for (int slot = 0; slot < ProtocolConstants.PartyRosterSlots; slot++)
         {
             w.WriteUInt32(slot < packet.Xp.Length ? packet.Xp[slot] : 0);
+            w.WriteUInt32(packet.OccupantGenerations is { } generations && slot < generations.Length ? generations[slot] : 0);
         }
 
+        w.WriteUInt32(packet.HostSessionId); w.WriteUInt32(packet.HostLoadSerial); w.WriteUInt32(packet.HostNativeEpoch);
         return w.Failed ? 0 : w.Position;
     }
 
@@ -90,12 +92,15 @@ public static partial class PacketCodec
         ushort mask = r.ReadUInt16();
 
         uint[] xp = new uint[ProtocolConstants.PartyRosterSlots];
+        uint[] generations = new uint[ProtocolConstants.PartyRosterSlots];
         for (int slot = 0; slot < ProtocolConstants.PartyRosterSlots; slot++)
         {
             xp[slot] = r.ReadUInt32();
+            generations[slot] = r.ReadUInt32();
         }
 
-        return r.Failed ? null : new CompanionXpSnapshotPacket(serverTime, mask, xp);
+        uint session = r.ReadUInt32(), serial = r.ReadUInt32(), epoch = r.ReadUInt32();
+        return r.Failed ? null : new CompanionXpSnapshotPacket(serverTime, mask, xp, session, serial, epoch, generations);
     }
 
     public static int Write(Span<byte> buffer, CompanionXpReportPacket packet)
@@ -108,8 +113,10 @@ public static partial class PacketCodec
         for (int slot = 0; slot < ProtocolConstants.PartyRosterSlots; slot++)
         {
             w.WriteUInt32(slot < packet.Xp.Length ? packet.Xp[slot] : 0);
+            w.WriteUInt32(packet.OccupantGenerations is { } generations && slot < generations.Length ? generations[slot] : 0);
         }
 
+        w.WriteUInt32(packet.HostSessionId); w.WriteUInt32(packet.HostLoadSerial); w.WriteUInt32(packet.HostNativeEpoch);
         return w.Failed ? 0 : w.Position;
     }
 
@@ -125,11 +132,14 @@ public static partial class PacketCodec
         ushort mask = r.ReadUInt16();
 
         uint[] xp = new uint[ProtocolConstants.PartyRosterSlots];
+        uint[] generations = new uint[ProtocolConstants.PartyRosterSlots];
         for (int slot = 0; slot < ProtocolConstants.PartyRosterSlots; slot++)
         {
             xp[slot] = r.ReadUInt32();
+            generations[slot] = r.ReadUInt32();
         }
 
-        return r.Failed ? null : new CompanionXpReportPacket(peerId, mask, xp);
+        uint session = r.ReadUInt32(), serial = r.ReadUInt32(), epoch = r.ReadUInt32();
+        return r.Failed ? null : new CompanionXpReportPacket(peerId, mask, xp, session, serial, epoch, generations);
     }
 }

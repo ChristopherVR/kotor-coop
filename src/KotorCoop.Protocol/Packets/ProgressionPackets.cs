@@ -49,13 +49,15 @@ public readonly record struct PeerProgression(
 /// (<see cref="ProtocolConstants.PartyRosterSlots"/>); only the slots set in
 /// <paramref name="PresentMask"/> are meaningful.
 /// </summary>
-public sealed record CompanionXpSnapshotPacket(long ServerTimeMs, ushort PresentMask, uint[] Xp);
+public sealed record CompanionXpSnapshotPacket(long ServerTimeMs, ushort PresentMask, uint[] Xp,
+    uint HostSessionId = 0, uint HostLoadSerial = 0, uint HostNativeEpoch = 0, uint[]? OccupantGenerations = null);
 
 /// <summary>
 /// client -&gt; host: this peer's own reading of each active companion's experience, same
 /// packing as <see cref="CompanionXpSnapshotPacket"/>.
 /// </summary>
-public sealed record CompanionXpReportPacket(uint PeerId, ushort PresentMask, uint[] Xp);
+public sealed record CompanionXpReportPacket(uint PeerId, ushort PresentMask, uint[] Xp,
+    uint HostSessionId = 0, uint HostLoadSerial = 0, uint HostNativeEpoch = 0, uint[]? OccupantGenerations = null);
 
 /// <summary>One peer's companion-experience report, as the host sees it after freshness
 /// filtering.</summary>

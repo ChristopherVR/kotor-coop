@@ -68,6 +68,7 @@ public sealed partial class KotorGameBridge
             return false;
         }
 
+        _publishedHostPartyRoster = valid ? roster : PartyRoster.Empty;
         uint packed = valid
             ? BlockPartyRosterValid
                 | ((roster.AvailableMask & BlockPartyRosterSlotMask) << BlockPartyRosterAvailableShift)
@@ -91,7 +92,10 @@ public sealed partial class KotorGameBridge
             PartyOccupantIdentity occupant = valid ? roster.OccupantFor(slot) : new(0, "");
             nint identityRow = _pluginBlock + BlockHostPartyOccupants + PartyOccupantRows + slot * PartyOccupantStride;
             ok &= _memory.TryWrite(identityRow, occupant.Generation);
-            ok &= _memory.TryWrite(_pluginBlock + BlockHostPartyOccupants + 240 + slot, occupant.Replaced ? (byte)1 : (byte)0);
+            ok &= _memory.TryWrite(_pluginBlock + 0xBE80 + slot * 4, _partyAdoptionProof?.LocalGeneration(slot) ?? uint.MaxValue);
+            bool adopted = valid && (_partyAdoptionProof?.Allows(slot, roster, targetSerial, targetEpoch, ReadPartyOccupantGeneration(slot)) ?? false);
+            ok &= _memory.TryWrite(_pluginBlock + BlockHostPartyOccupants + 240 + slot,
+                (byte)((occupant.Replaced ? 1 : 0) | (adopted ? 2 : 0)));
             ok &= _memory.TryWriteAsciiString(identityRow + 8, occupant.Template, 16);
         }
 
@@ -336,7 +340,7 @@ public sealed partial class KotorGameBridge
         {
             if (!_memory.TryReadInt32(partyTable + PartyActiveSlots + (i * 4), out int slot)
                 || slot is < 0 or >= PartyNpcSlots
-                || slot >= xpBySlot.Length)
+                || slot >= xpBySlot.Length || PartySlotSideChannelHeld(slot))
             {
                 continue;
             }

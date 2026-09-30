@@ -16,9 +16,10 @@ public sealed partial class CoopHost
     private bool _hasObservedHostLoad;
     private uint _scriptRefreshRevision;
     private uint _scriptRefreshSaveIdentity;
+    private uint _scriptRefreshReason;
 
     /// <summary>Announce only after the authoritative post-script archive finished writing.</summary>
-    public void PublishScriptWorldRefresh(uint saveIdentity)
+    public void PublishScriptWorldRefresh(uint saveIdentity, uint reason = 1)
     {
         if (saveIdentity == 0) return;
         lock (_gate)
@@ -26,10 +27,12 @@ public sealed partial class CoopHost
             _scriptRefreshRevision++;
             if (_scriptRefreshRevision == 0) _scriptRefreshRevision++;
             _scriptRefreshSaveIdentity = saveIdentity;
+            _scriptRefreshReason = reason;
             _localWorld = _localWorld with
             {
                 ScriptRefreshRevision = _scriptRefreshRevision,
                 ScriptRefreshSaveIdentity = saveIdentity,
+                ScriptRefreshReason = reason,
             };
         }
     }
@@ -61,6 +64,7 @@ public sealed partial class CoopHost
             {
                 ScriptRefreshRevision = _scriptRefreshSaveIdentity == 0 ? 0 : _scriptRefreshRevision,
                 ScriptRefreshSaveIdentity = _scriptRefreshSaveIdentity,
+                ScriptRefreshReason = _scriptRefreshReason,
             };
             if (digest.NativeWorldEpoch != 0)
                 BeginEnemyDamageWorld(digest.Module, digest.LoadSerial, digest.NativeWorldEpoch);
@@ -109,7 +113,7 @@ public sealed partial class CoopHost
     {
         ResetFlagsForLoadedSave();
         _scriptRefreshSaveIdentity = 0;
-        _localWorld = _localWorld with { ScriptRefreshRevision = 0, ScriptRefreshSaveIdentity = 0 };
+        _localWorld = _localWorld with { ScriptRefreshRevision = 0, ScriptRefreshSaveIdentity = 0, ScriptRefreshReason = 0 };
         _hasObservedHostLoad = true;
         foreach (PeerConnection peer in _peers.Values)
         {

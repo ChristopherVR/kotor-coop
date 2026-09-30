@@ -441,20 +441,24 @@ internal sealed class PartyPump(
             return;
         }
 
+        PartyRoster captured;
+        if (!bridge.TryReadLivenessEpoch(out uint epoch) || epoch == 0
+            || (session.IsEnemyAuthority ? !bridge.TryReadLocalPartyRoster(out captured) : !session.TryGetPartyRoster(out captured))) return;
         uint[] localXp = new uint[ProtocolConstants.PartyRosterSlots];
         if (!bridge.TryReadCompanionExperience(localXp, out ushort localMask))
         {
             return;
         }
 
+        if (!bridge.TryReadLivenessEpoch(out uint afterEpoch) || afterEpoch != epoch) return;
         if (session.IsEnemyAuthority)
         {
-            PumpCompanionExperienceHost(localMask, localXp);
+            PumpCompanionExperienceHost(localMask, localXp, captured);
             return;
         }
 
         // A client: report our own reading, then mirror whatever the host makes of it.
-        session.ReportCompanionExperience(localMask, localXp);
+        session.ReportCompanionExperience(localMask, localXp, captured, epoch);
 
         if (!session.TryGetCompanionExperience(out ushort hostMask, out uint[] hostXp))
         {
@@ -480,7 +484,7 @@ internal sealed class PartyPump(
     /// the result to its own party table (a client-only script grant otherwise never reaches
     /// the host's own companion), then publish the merged truth.
     /// </summary>
-    private void PumpCompanionExperienceHost(ushort localMask, uint[] localXp)
+    private void PumpCompanionExperienceHost(ushort localMask, uint[] localXp, PartyRoster captured)
     {
         uint[] merged = new uint[ProtocolConstants.PartyRosterSlots];
         ushort mergedMask = 0;
@@ -496,6 +500,6 @@ internal sealed class PartyPump(
             bridge.TryWriteCompanionExperience(merged, mergedMask);
         }
 
-        session.PublishCompanionExperience(mergedMask, merged);
+        session.PublishCompanionExperience(mergedMask, merged, captured);
     }
 }

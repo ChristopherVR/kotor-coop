@@ -55,9 +55,13 @@ public class CompanionDamageLoopbackTests
         {
             host.PublishLocalState(state);
             client.PublishLocalState(state);
+            WorldDigest world = new(1, 1, state.Module, 1, NativeWorldEpoch: 1);
+            host.PublishWorldDigest(world);
+            client.PublishWorldDigest(world);
+            host.PublishPartyRoster(new PartyRoster(1, 1, HostNativeEpoch: 1));
         }
 
-        Assert.True(await WaitForAsync(() => client.IsConnected, Timeout, Publish), "client must be admitted");
+        Assert.True(await WaitForAsync(() => client.IsConnected && client.RemoteWorldDigest.NativeWorldEpoch == 1, Timeout, Publish), "client must be admitted");
 
         // The companion released to slot 0 (roster slot 1) has taken 12, then 27 — a rising
         // cumulative total, exactly the shape PumpCompanionDamage reports every tick.
@@ -109,9 +113,13 @@ public class CompanionDamageLoopbackTests
         {
             host.PublishLocalState(state);
             client.PublishLocalState(state);
+            WorldDigest world = new(1, 1, state.Module, 1, NativeWorldEpoch: 1);
+            host.PublishWorldDigest(world);
+            client.PublishWorldDigest(world);
+            host.PublishPartyRoster(new PartyRoster(1, 1, HostNativeEpoch: 1));
         }
 
-        Assert.True(await WaitForAsync(() => client.IsConnected, Timeout, Publish), "client must be admitted");
+        Assert.True(await WaitForAsync(() => client.IsConnected && client.RemoteWorldDigest.NativeWorldEpoch == 1, Timeout, Publish), "client must be admitted");
 
         client.ReportCompanionDamage(1, [new CompanionDamageEntry(1, 12)]);
         Assert.True(

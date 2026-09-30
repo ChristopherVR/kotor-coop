@@ -16,9 +16,10 @@ public sealed partial class CoopHost
 {
     /// <summary>Latest companion-damage report per client.</summary>
     private sealed record CompanionDamageReport(
-        uint Generation, IReadOnlyList<CompanionDamageEntry> Damage, long ReceivedMs);
+        uint Generation, IReadOnlyList<CompanionDamageEntry> Damage, long ReceivedMs, uint Incarnation, uint HostLoadSerial, uint HostNativeEpoch);
 
     private readonly Dictionary<uint, CompanionDamageReport> _companionDamage = [];
+    private readonly DamageGenerationWatch _companionDamageGenerations = new();
 
     /// <summary>Same window as <see cref="EnemyReportFreshMs"/>, and for the identical reason:
     /// a companion's local fight goes stale exactly when its owning peer does.</summary>
@@ -57,7 +58,8 @@ public sealed partial class CoopHost
             {
                 CompanionDamageReport report = entry.Value;
 
-                if (now - report.ReceivedMs > CompanionDamageFreshMs)
+                if (now - report.ReceivedMs > CompanionDamageFreshMs || report.HostLoadSerial != _localWorld.LoadSerial
+                    || report.HostNativeEpoch != _localWorld.NativeWorldEpoch)
                 {
                     // Freshness already kept an expired report out of the wire result, but
                     // leaving it in this dictionary meant every peer identity ever admitted
@@ -72,7 +74,7 @@ public sealed partial class CoopHost
                 foreach (CompanionDamageEntry damage in report.Damage)
                 {
                     merged.Add(new PeerCompanionDamage(
-                        entry.Key, report.Generation, damage.RosterSlotPlusOne, damage.CumulativeDamage));
+                        entry.Key, report.Generation, damage.RosterSlotPlusOne, damage.CumulativeDamage, damage.OccupantGeneration, report.Incarnation, report.HostLoadSerial, report.HostNativeEpoch));
                 }
             }
 
@@ -98,13 +100,23 @@ public sealed partial class CoopHost
 
         lock (_gate)
         {
-            if (!_peers.ContainsKey(report.PeerId))
+            if (report.HostSessionId != _sessionId || report.HostLoadSerial != _localWorld.LoadSerial
+                || report.HostNativeEpoch == 0 || report.HostNativeEpoch != _localWorld.NativeWorldEpoch
+                || !_peers.TryGetValue(report.PeerId, out PeerConnection? peer) || !peer.EndPoint.Equals(from)
+                || peer.DamageIncarnation != report.Incarnation
+                || !_companionDamageGenerations.Observe(report.PeerId, report.Incarnation, report.Generation))
             {
                 return;
             }
 
             _companionDamage[report.PeerId] =
-                new CompanionDamageReport(report.Generation, report.Damage, now);
+                new CompanionDamageReport(report.Generation, report.Damage.Where(damage =>
+                {
+                    int slot = (int)CompanionDamageSlots.RosterSlotPlusOne(damage.RosterSlotPlusOne) - 1;
+                    PartyOccupantIdentity occupant = _partyRoster.OccupantFor(slot);
+                    return (uint)slot < 9 && damage.OccupantGeneration == occupant.Generation
+                        && (occupant.Generation == 0 || occupant.Template.Length != 0);
+                }).ToArray(), now, report.Incarnation, report.HostLoadSerial, report.HostNativeEpoch);
         }
     }
 }

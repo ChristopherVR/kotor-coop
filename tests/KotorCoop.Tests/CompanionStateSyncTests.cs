@@ -305,6 +305,9 @@ public sealed class CompanionStateSyncTests
 
     private sealed class CompanionBridge : IGameBridge
     {
+        public bool TryReadLivenessEpoch(out uint epoch) { epoch = 1; return true; }
+        public bool TryReadLocalPartyRoster(out PartyRoster roster)
+        { roster = new PartyRoster(LocalPresentMask, LocalPresentMask, HostNativeEpoch: 1); return true; }
         public bool SupportsPartySync => true;
 
         public bool SupportsCompanionProgressionSync => true;
@@ -380,6 +383,8 @@ public sealed class CompanionStateSyncTests
 
     private sealed class StubPartySession : ICoopSession
     {
+        public bool TryGetPartyRoster(out PartyRoster roster)
+        { roster = new PartyRoster(0, 0, HostSessionId: 1, HostNativeEpoch: 1); return true; }
         public bool EnemyAuthority { get; set; }
 
         public List<PartyMemberState> PublishedParty { get; } = [];

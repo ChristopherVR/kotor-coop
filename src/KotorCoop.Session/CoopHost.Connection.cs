@@ -132,7 +132,8 @@ public sealed partial class CoopHost
 
             if (existing is not null)
             {
-                if (!_enemyDamageGenerations.Bind(existing.Id, hello.DamageIncarnation)) return;
+                if (!_enemyDamageGenerations.Bind(existing.Id, hello.DamageIncarnation)
+                    || !_companionDamageGenerations.Bind(existing.Id, hello.DamageIncarnation)) return;
                 existing.DamageIncarnation = hello.DamageIncarnation;
                 existing.LastSeenMs = now;
                 existing.EndPoint = from;
@@ -178,7 +179,8 @@ public sealed partial class CoopHost
                     name = string.IsNullOrWhiteSpace(hello.PlayerName) ? $"peer{assignedId}" : hello.PlayerName;
                 }
 
-                if (!_enemyDamageGenerations.Bind(assignedId, hello.DamageIncarnation)) return;
+                if (!_enemyDamageGenerations.Bind(assignedId, hello.DamageIncarnation)
+                    || !_companionDamageGenerations.Bind(assignedId, hello.DamageIncarnation)) return;
                 PeerConnection created = new()
                 {
                     Id = assignedId,

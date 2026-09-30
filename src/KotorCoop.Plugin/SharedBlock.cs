@@ -174,7 +174,7 @@ internal partial struct SharedBlock
     /// v83 grows to 0xB800 for 1024 attributed peer/enemy damage rows at 0x8710.
     /// v85 grows to 0xBA00 for native placeable apply acknowledgements at 0xB800.
     /// </summary>
-    public const int TotalSize = 0xBE00;
+    public const int TotalSize = 0xC000;
 
     public const int ProfileVisibleSize = 0x250;
 

@@ -68,10 +68,10 @@ public sealed record PartySnapshotPacket(long ServerTimeMs, IReadOnlyList<PartyM
 /// as "the id is 0" the way <see cref="ObjectIdFor"/> reports it; 0 either way means "do not
 /// reuse", so no separate check is needed in practice.
 /// </summary>
-public readonly record struct PartyOccupantIdentity(uint Generation, string Template, bool Replaced = false);
+public readonly record struct PartyOccupantIdentity(uint Generation, string Template, bool Replaced = false, string CacheFingerprint = "");
 
 public readonly record struct PartyRoster(ushort AvailableMask, ushort PartyMask, uint[]? ObjectIds = null,
-    PartyOccupantIdentity[]? Occupants = null, uint HostSessionId = 0, uint HostLoadSerial = 0, uint HostNativeEpoch = 0)
+    PartyOccupantIdentity[]? Occupants = null, uint HostSessionId = 0, uint HostLoadSerial = 0, uint HostNativeEpoch = 0, uint RefreshSaveIdentity = 0, uint RefreshRevision = 0)
 {
     /// <summary>Nothing recruited, nobody in the party. What a peer's roster reads as before
     /// the first level has arrived, and what must never be applied as if it were real.</summary>
@@ -103,11 +103,12 @@ public readonly record struct PartyRoster(ushort AvailableMask, ushort PartyMask
     /// </summary>
     public PartyOccupantIdentity OccupantFor(int slot) =>
         Occupants is not null && (uint)slot < (uint)Occupants.Length
-            ? Occupants[slot] with { Template = Occupants[slot].Template ?? "" } : new(0, "");
+            ? Occupants[slot] with { Template = Occupants[slot].Template ?? "", CacheFingerprint = Occupants[slot].CacheFingerprint ?? "" } : new(0, "");
 
     public bool Equals(PartyRoster other) =>
         AvailableMask == other.AvailableMask
         && PartyMask == other.PartyMask
+        && RefreshSaveIdentity == other.RefreshSaveIdentity && RefreshRevision == other.RefreshRevision
         && HostSessionId == other.HostSessionId && HostLoadSerial == other.HostLoadSerial && HostNativeEpoch == other.HostNativeEpoch
         && ObjectIdsEqual(other);
 

@@ -89,6 +89,7 @@ public static partial class PacketCodec
         w.WriteHeader(PacketType.PartyRoster);
         w.WriteInt64(packet.ServerTimeMs);
         w.WriteUInt32(packet.Roster.HostSessionId); w.WriteUInt32(packet.Roster.HostLoadSerial); w.WriteUInt32(packet.Roster.HostNativeEpoch);
+        w.WriteUInt32(packet.Roster.RefreshSaveIdentity); w.WriteUInt32(packet.Roster.RefreshRevision);
         w.WriteUInt16(packet.Roster.AvailableMask);
         w.WriteUInt16(packet.Roster.PartyMask);
 
@@ -103,6 +104,7 @@ public static partial class PacketCodec
             w.WriteUInt32(occupant.Generation);
             w.WriteUInt8(occupant.Replaced ? (byte)1 : (byte)0);
             w.WriteString(occupant.Template, ProtocolConstants.MaxResrefLength);
+            w.WriteString(occupant.CacheFingerprint, 64);
         }
 
         return w.Failed ? 0 : w.Position;
@@ -118,6 +120,7 @@ public static partial class PacketCodec
 
         long serverTimeMs = r.ReadInt64();
         uint hostSession = r.ReadUInt32(), hostSerial = r.ReadUInt32(), hostEpoch = r.ReadUInt32();
+        uint refreshSave = r.ReadUInt32(), refreshRevision = r.ReadUInt32();
         ushort available = r.ReadUInt16();
         ushort party = r.ReadUInt16();
 
@@ -129,9 +132,11 @@ public static partial class PacketCodec
             uint occupantGeneration = r.ReadUInt32();
             byte replaced = r.ReadUInt8();
             string template = r.ReadString(ProtocolConstants.MaxResrefLength);
+            string fingerprint = r.ReadString(64);
+            if (fingerprint.Length != 0 && (fingerprint.Length != 64 || fingerprint.Any(c => !((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F'))))) return null;
             if (replaced > 1 || (template.Length > 0 && !ModSupportProfile.IsResref(template))
                 || (occupantGeneration == 0 && (replaced != 0 || template.Length != 0))) return null;
-            occupants[slot] = new(occupantGeneration, template, replaced != 0);
+            occupants[slot] = new(occupantGeneration, template, replaced != 0, fingerprint);
         }
 
         if (r.Failed)
@@ -160,6 +165,6 @@ public static partial class PacketCodec
             return null;
         }
 
-        return new PartyRosterPacket(serverTimeMs, new PartyRoster(available, party, objectIds, occupants, hostSession, hostSerial, hostEpoch));
+        return new PartyRosterPacket(serverTimeMs, new PartyRoster(available, party, objectIds, occupants, hostSession, hostSerial, hostEpoch, refreshSave, refreshRevision));
     }
 }

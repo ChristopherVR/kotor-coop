@@ -95,6 +95,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyOccupantRule.cs" Link="Plugin\PartyOccupantRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyOccupantReconcileState.cs" Link="Plugin\PartyOccupantReconcileState.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlock.PartyOccupants.cs" Link="Plugin\SharedBlock.PartyOccupants.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlockView.CompanionDamage.cs" Link="Plugin\SharedBlockView.CompanionDamage.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SharedBlockView.PartyOccupants.cs" Link="Plugin\SharedBlockView.PartyOccupants.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyRosterTemplateTable.cs" Link="Plugin\PartyRosterTemplateTable.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\ClassGrantCaptureRule.cs" Link="Plugin\ClassGrantCaptureRule.cs" />

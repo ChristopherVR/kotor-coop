@@ -6,6 +6,18 @@ public sealed partial class KotorGameBridge
 {
     private const int BlockLocalPartyOccupants = 0xBC00, BlockHostPartyOccupants = 0xBD00;
     private uint _partyPresenceWorldEpoch;
+    private PartyAdoptionProof? _partyAdoptionProof;
+    private PartyRoster _publishedHostPartyRoster;
+    private PartyRoster _hostPartyRefreshProof;
+    public void RecordHostPartyRefreshProof(PartyRoster host) => _hostPartyRefreshProof = host;
+    public void RecordPartyAdoptionProof(PartyRoster host, IReadOnlyList<string> transferred, uint adoptedSaveIdentity)
+    {
+        _partyAdoptionProof = null;
+        if (TryReadWorldLoadSerial(out uint serial) && TryReadLivenessEpoch(out uint epoch) && epoch != 0
+            && TryReadLocalPartyRoster(out PartyRoster local) && local.HostLoadSerial == serial && local.HostNativeEpoch == epoch)
+            _partyAdoptionProof = new(host, transferred, serial, epoch, adoptedSaveIdentity,
+                Enumerable.Range(0, 9).Select(slot => local.OccupantFor(slot).Generation).ToArray());
+    }
     private const int PartyOccupantRows = 24, PartyOccupantStride = 24;
     private bool TryReadPartyOccupants(uint packed, out PartyOccupantIdentity[] occupants, out uint serial, out uint epoch)
     {
@@ -29,7 +41,9 @@ public sealed partial class KotorGameBridge
     }
     private uint ReadPartyOccupantGeneration(int slot)
     {
-        if (_pluginBlock == 0 || (uint)slot >= 9) return 0;
+        if (_pluginBlock == 0 || (uint)slot >= 9
+            || !_memory.TryReadUInt32(_pluginBlock + BlockLocalPartyOccupants, out uint sequence)
+            || sequence == 0 || (sequence & 1) != 0) return uint.MaxValue;
         _memory.TryReadUInt32(_pluginBlock + BlockLocalPartyOccupants + PartyOccupantRows + slot * PartyOccupantStride, out uint generation);
         return generation;
     }
@@ -37,8 +51,16 @@ public sealed partial class KotorGameBridge
     {
         if (_pluginBlock == 0 || (uint)slot >= 9) return false;
         nint row = _pluginBlock + BlockLocalPartyOccupants + PartyOccupantRows + slot * PartyOccupantStride;
-        if (!_memory.TryReadUInt32(row, out uint generation)) return true;
+        if (!_memory.TryReadUInt32(_pluginBlock + BlockLocalPartyOccupants, out uint localSequence)
+            || localSequence == 0 || (localSequence & 1) != 0
+            || !_memory.TryReadUInt32(row, out uint generation)) return true;
         if (generation == 0) return false;
+        if (TryReadWorldLoadSerial(out uint hostSerial) && TryReadLivenessEpoch(out uint hostEpoch)
+            && _hostPartyRefreshProof.HostNativeEpoch == hostEpoch && _hostPartyRefreshProof.HostLoadSerial == hostSerial
+            && _hostPartyRefreshProof.OccupantFor(slot).Generation == generation
+            && _hostPartyRefreshProof.OccupantFor(slot).Template.Length != 0) return false;
+        if (TryReadWorldLoadSerial(out uint serial) && TryReadLivenessEpoch(out uint epoch)
+            && (_partyAdoptionProof?.Allows(slot, _publishedHostPartyRoster, serial, epoch, generation) ?? false)) return false;
         return !_memory.TryReadUInt32(row + 4, out uint replaced) || replaced != 0
             || !_memory.TryReadUInt32(row + 8, out uint firstTemplateBytes) || firstTemplateBytes == 0;
     }

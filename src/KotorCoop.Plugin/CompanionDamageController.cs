@@ -47,6 +47,8 @@ internal sealed unsafe class CompanionDamageController(SharedBlockView block)
     private readonly DamageOwedLedger _owed = new(SharedBlock.CompanionDamageOwedCapacity * 2);
 
     private uint _generation = 1;
+    private readonly uint[] _reportedOccupants = new uint[9];
+    private readonly uint[] _appliedOccupants = new uint[9];
 
     // ---- heals a released companion received here (client side, 2026-09-18) ---------------
     //
@@ -103,6 +105,22 @@ internal sealed unsafe class CompanionDamageController(SharedBlockView block)
     /// agent misses costs nothing.</summary>
     private void PublishTaken()
     {
+        if (!block.HostPartyOccupantsCurrent()) { block.CompanionDamageCount = 0; return; }
+        uint hostSequence = block.HostPartyOccupantSequence;
+        bool changed = false;
+        for (int slot = 0; slot < 9; slot++)
+        {
+            uint current = block.HostPartyOccupantGeneration(slot);
+            if (_reportedOccupants[slot] != current) changed = true;
+            _reportedOccupants[slot] = current;
+        }
+        if (changed)
+        {
+            _generation++; if (_generation == 0) _generation++;
+            PhantomHitHook.ResetCompanionCounters();
+            Array.Clear(_healSample); Array.Clear(_healCumulative); Array.Clear(_healSerial);
+        }
+        uint publishSequence = block.BeginCompanionTakenPublish();
         int published = 0;
         for (int i = 0; i < SharedBlock.CompanionDamageSlotCapacity; i++)
         {
@@ -117,7 +135,8 @@ internal sealed unsafe class CompanionDamageController(SharedBlockView block)
                 continue;
             }
 
-            block.SetCompanionDamageTaken(published++, rosterSlotPlusOne, cumulative, serial);
+            block.SetCompanionDamageTaken(published++, rosterSlotPlusOne, cumulative, serial,
+                _reportedOccupants[(int)rosterSlotPlusOne - 1]);
         }
 
         // Heal rows after every damage row, under the flagged key (CompanionDamageSlots): with
@@ -135,7 +154,7 @@ internal sealed unsafe class CompanionDamageController(SharedBlockView block)
                 published++,
                 CompanionDamageSlots.HealSlot(rosterSlotPlusOne),
                 _healCumulative[rosterSlotPlusOne],
-                _healSerial[rosterSlotPlusOne]);
+                _healSerial[rosterSlotPlusOne], _reportedOccupants[(int)rosterSlotPlusOne - 1]);
         }
 
         // Blank the tail before moving the count down, so the agent never reads a row a
@@ -147,6 +166,8 @@ internal sealed unsafe class CompanionDamageController(SharedBlockView block)
 
         block.CompanionDamageGeneration = _generation;
         block.CompanionDamageCount = (uint)published;
+        if (!block.HostPartyOccupantsCurrent() || block.HostPartyOccupantSequence != hostSequence) block.CompanionDamageCount = 0;
+        block.EndCompanionTakenPublish(publishSequence);
     }
 
     /// <summary>
@@ -207,6 +228,7 @@ internal sealed unsafe class CompanionDamageController(SharedBlockView block)
     /// engine delivers.</summary>
     private void ApplyOwed()
     {
+        if (!block.CompanionOwedCurrent(out uint sequence)) return;
         uint count = Math.Min(block.CompanionDamageOwedCount, (uint)SharedBlock.CompanionDamageOwedCapacity);
         if (count == 0)
         {
@@ -242,9 +264,20 @@ internal sealed unsafe class CompanionDamageController(SharedBlockView block)
             bool isHeal = CompanionDamageSlots.IsHeal(slotField);
             uint rosterSlotPlusOne = CompanionDamageSlots.RosterSlotPlusOne(slotField);
             if (rosterSlotPlusOne == 0 || rosterSlotPlusOne > SharedBlock.PartyRosterSlots
-                || !PartyOccupantHook.Captured.LegacySideChannelAllowed((int)rosterSlotPlusOne - 1))
+                || block.CompanionOwedOccupant(i) != PartyOccupantHook.Captured.Generation((int)rosterSlotPlusOne - 1)
+                || (PartyOccupantHook.Captured.Generation((int)rosterSlotPlusOne - 1) != 0
+                    && !PartyOccupantHook.Captured.TemplateKnown((int)rosterSlotPlusOne - 1))
+                || !block.CompanionOwedStillCurrent(sequence))
             {
                 continue;
+            }
+            int occupantSlot = (int)rosterSlotPlusOne - 1;
+            uint occupantGeneration = block.CompanionOwedOccupant(i);
+            if (_appliedOccupants[occupantSlot] != occupantGeneration)
+            {
+                _appliedOccupants[occupantSlot] = occupantGeneration;
+                _owed.Forget(rosterSlotPlusOne);
+                _owed.Forget(CompanionDamageSlots.HealSlot(rosterSlotPlusOne));
             }
 
             int amount = _owed.Pending(slotField, owed);

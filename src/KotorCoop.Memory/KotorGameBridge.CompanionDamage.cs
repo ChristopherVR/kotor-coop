@@ -8,6 +8,7 @@ namespace KotorCoop.Memory;
 
 public sealed partial class KotorGameBridge
 {
+    private const int CompanionTakenMetadata = 0xBE00, CompanionOwedMetadata = 0xBE40;
     public bool SupportsCompanionDamageSync => _pluginBlock != 0;
 
     /// <summary>
@@ -27,7 +28,10 @@ public sealed partial class KotorGameBridge
             return (0, damage);
         }
 
-        _memory.TryReadUInt32(_pluginBlock + BlockCompanionDamageGeneration, out uint generation);
+        if (!_memory.TryReadUInt32(_pluginBlock + CompanionTakenMetadata, out uint sequence) || sequence == 0 || (sequence & 1) != 0
+            || !_memory.TryReadUInt32(_pluginBlock + CompanionTakenMetadata + 4, out uint epoch) || epoch == 0
+            || !_memory.TryReadUInt32(_pluginBlock + CompanionTakenMetadata + 8, out uint serial)
+            || !_memory.TryReadUInt32(_pluginBlock + BlockCompanionDamageGeneration, out uint generation)) return (0, []);
         _memory.TryReadUInt32(_pluginBlock + BlockCompanionDamageCount, out uint count);
 
         for (int i = 0; i < Math.Min(count, BlockCompanionDamageSlotCapacity); i++)
@@ -41,10 +45,14 @@ public sealed partial class KotorGameBridge
 
             if (_memory.TryReadUInt32(slot + 0x04, out uint cumulative) && cumulative > 0)
             {
-                damage.Add(new CompanionDamageEntry(rosterSlotPlusOne, cumulative));
+                if (!_memory.TryReadUInt32(_pluginBlock + CompanionTakenMetadata + 20 + i * 4, out uint occupant)) return (0, []);
+                damage.Add(new CompanionDamageEntry(rosterSlotPlusOne, cumulative, occupant));
             }
         }
 
+        if (!_memory.TryReadUInt32(_pluginBlock + CompanionTakenMetadata, out uint after) || after != sequence
+            || !TryReadLivenessEpoch(out uint currentEpoch) || currentEpoch != epoch
+            || !TryReadWorldLoadSerial(out uint currentSerial) || currentSerial != serial) return (0, []);
         return (generation, damage);
     }
 
@@ -59,24 +67,37 @@ public sealed partial class KotorGameBridge
     /// companion, not merely cost a frame of a stale position.
     /// </summary>
     public bool TryPublishCompanionDamageOwed(IReadOnlyList<CompanionDamageEntry> owed)
+        => TryReadWorldLoadSerial(out uint serial) && TryReadLivenessEpoch(out uint epoch)
+            && TryPublishCompanionDamageOwed(owed, serial, epoch);
+
+    public bool TryPublishCompanionDamageOwed(IReadOnlyList<CompanionDamageEntry> owed, uint capturedSerial, uint capturedEpoch)
     {
         if (_pluginBlock == 0)
         {
             return false;
         }
 
-        bool ok = _memory.TryWrite(_pluginBlock + BlockCompanionDamageOwedCount, 0u);
+        if (capturedEpoch == 0 || !TryReadLivenessEpoch(out uint epoch) || epoch != capturedEpoch
+            || !TryReadWorldLoadSerial(out uint serial) || serial != capturedSerial
+            || !_memory.TryReadUInt32(_pluginBlock + CompanionOwedMetadata, out uint sequence)
+            || !_memory.TryWrite(_pluginBlock + CompanionOwedMetadata, (sequence + 1) | 1u)) return false;
+        bool ok = _memory.TryWrite(_pluginBlock + CompanionOwedMetadata + 4, capturedEpoch);
+        ok &= _memory.TryWrite(_pluginBlock + CompanionOwedMetadata + 8, capturedSerial);
+        ok &= _memory.TryWrite(_pluginBlock + BlockCompanionDamageOwedCount, 0u);
         int count = Math.Min(owed.Count, BlockCompanionDamageOwedCapacity);
 
         for (int i = 0; i < count; i++)
         {
             nint slot = _pluginBlock + BlockCompanionDamageOwedSlots + (i * BlockCompanionDamageOwedStride);
+            ok &= _memory.TryWrite(_pluginBlock + CompanionOwedMetadata + 16 + i * 4, owed[i].OccupantGeneration);
             ok &= _memory.TryWrite(slot + 0x04, owed[i].CumulativeDamage);
             ok &= _memory.TryWrite(slot + 0x00, owed[i].RosterSlotPlusOne);
         }
 
         ok &= _memory.TryWrite(_pluginBlock + BlockCompanionDamageOwedCount, (uint)count);
-        return ok;
+        return ok && TryReadLivenessEpoch(out uint afterEpoch) && afterEpoch == capturedEpoch
+            && TryReadWorldLoadSerial(out uint afterSerial) && afterSerial == capturedSerial
+            && _memory.TryWrite(_pluginBlock + CompanionOwedMetadata, (sequence + 2) & ~1u);
     }
 
     /// <summary>How many companion-damage applications the plugin has actually run —

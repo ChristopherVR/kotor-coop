@@ -338,10 +338,22 @@ internal static unsafe partial class Odyssey
     private static KotorCoop.Protocol.ModSupportProfile RecruitmentProfile =
         KotorCoop.Protocol.ModSupportProfile.Empty;
     private static bool RecruitmentProfileValid = true;
+    private static bool _bosReplacementSlotPresent;
+    public static bool LegacyPartySlotSafe(int slot, string module)
+    {
+        if (!RecruitmentProfileValid || (slot == 0 && _bosReplacementSlotPresent)) return false;
+        var resolution = RecruitmentProfile.Resolve(slot, module, out string template, RecruitmentNumberReader);
+        return resolution == KotorCoop.Protocol.ModSupportProfile.Resolution.Unclaimed
+            || (resolution == KotorCoop.Protocol.ModSupportProfile.Resolution.Template
+                && PartyRosterTemplateTable.TryGetTemplate(slot, out string stock)
+                && template.Equals(stock, StringComparison.OrdinalIgnoreCase));
+    }
     private static readonly Func<string, int?> RecruitmentNumberReader = ReadRecruitmentNumber;
 
     public static void LoadRecruitmentProfile(string directory)
     {
+        _bosReplacementSlotPresent = File.Exists(Path.Combine(directory, "modules", "bos_orion.mod"))
+            && File.Exists(Path.Combine(directory, "Override", "p_channa.utc"));
         RecruitmentProfileValid = KotorCoop.Protocol.ModSupportProfile.TryLoad(
             directory, out RecruitmentProfile, out string error);
         if (!RecruitmentProfileValid)

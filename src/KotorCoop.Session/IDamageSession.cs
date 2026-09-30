@@ -96,6 +96,9 @@ public interface IDamageSession
     /// whenever the sender's own totals restart, which is how the host tells a reset from a
     /// stale datagram.
     /// </summary>
+    void ReportCompanionDamage(uint generation, IReadOnlyList<CompanionDamageEntry> damage, uint localEpoch)
+        => ReportCompanionDamage(generation, damage);
+
     void ReportCompanionDamage(uint generation, IReadOnlyList<CompanionDamageEntry> damage)
     {
     }

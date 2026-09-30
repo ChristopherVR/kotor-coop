@@ -332,6 +332,12 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
         _occupantWorldModule = occupantModule; _occupantWorldSerial = occupantSerial; _occupantWorldEpoch = occupantEpoch;
 
         _lastLocalAvailable = available;
+        for (int slot = 0; slot < 9; slot++)
+        {
+            PartyOccupantHook.Captured.ObserveCachedBody(slot, Odyssey.GetPartyRosterObjectId(slot));
+            if ((available & (1u << slot)) != 0 && !Odyssey.LegacyPartySlotSafe(slot, occupantModule))
+                PartyOccupantHook.Captured.HoldUnprovenLoadedSlot(slot);
+        }
         block.SetLocalPartyRoster(available, party);
         block.PublishLocalPartyOccupants(SharedBlock.PartyRosterValid
             | (available << SharedBlock.PartyRosterAvailableShift) | (party << SharedBlock.PartyRosterPartyShift));
@@ -427,7 +433,9 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
         {
             uint bit = 1u << slot;
             if ((hostAvailable & bit) == 0 || !block.TryGetHostPartyOccupant(slot, out uint generation, out string template)) continue;
-            if (generation != 0 && !block.HostPartyOccupantReplaced(slot))
+            if (generation != 0 && template.Length > 0 && block.HostPartyOccupantAdopted(slot))
+                PartyOccupantReconcileState.Commit(slot, block.HostPartyOccupantSession, generation);
+            if (generation != 0 && !block.HostPartyOccupantRequiresBinding(slot) && PartyOccupantHook.Captured.FixedStockIdentity(slot))
             {
                 Span<byte> localTemplate = stackalloc byte[16];
                 PartyOccupantHook.Captured.CopyTemplate(slot, localTemplate);
@@ -435,7 +443,7 @@ internal sealed unsafe class PartyRosterController(SharedBlockView block)
                 if (template.Length > 0 && template.Equals(System.Text.Encoding.ASCII.GetString(localTemplate[..localLength]), StringComparison.OrdinalIgnoreCase))
                     PartyOccupantReconcileState.Commit(slot, block.HostPartyOccupantSession, generation);
             }
-            if (block.HostPartyOccupantReplaced(slot) && ((localParty | hostParty) & bit) != 0)
+            if (block.HostPartyOccupantRequiresBinding(slot) && !block.HostPartyOccupantAdopted(slot) && ((localParty | hostParty) & bit) != 0)
             { heldOccupants |= bit; continue; }
             PartyOccupantAction action = PartyOccupantRule.Decide(generation, template.Length > 0,
                 PartyOccupantReconcileState.IsApplied(slot, block.HostPartyOccupantSession, generation),

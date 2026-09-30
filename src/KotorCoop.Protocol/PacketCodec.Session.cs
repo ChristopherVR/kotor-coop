@@ -300,6 +300,7 @@ public static partial class PacketCodec
         w.WriteUInt32(packet.Digest.ScriptRefreshRevision);
         w.WriteUInt32(packet.Digest.ScriptRefreshSaveIdentity);
         w.WriteUInt32(packet.Digest.NativeWorldEpoch);
+        w.WriteUInt32(packet.Digest.ScriptRefreshReason);
         return w.Failed ? 0 : w.Position;
     }
 
@@ -322,10 +323,11 @@ public static partial class PacketCodec
         uint scriptRefreshRevision = r.ReadUInt32();
         uint scriptRefreshIdentity = r.ReadUInt32();
         uint nativeWorldEpoch = r.ReadUInt32();
+        uint scriptRefreshReason = r.ReadUInt32();
         return r.Failed
             ? null
             : new WorldDigestPacket(peerId,
                 new WorldDigest(globals, saveIdentity, module, moduleGit, loadSerial, difficultyLevel,
-                    scriptRefreshRevision, scriptRefreshIdentity, nativeWorldEpoch));
+                    scriptRefreshRevision, scriptRefreshIdentity, nativeWorldEpoch, scriptRefreshReason));
     }
 }

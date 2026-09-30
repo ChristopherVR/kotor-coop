@@ -13,6 +13,7 @@ public sealed partial class CoopClient
     private ushort _companionXpMask;
     private uint[] _companionXp = new uint[ProtocolConstants.PartyRosterSlots];
     private bool _hasCompanionXp;
+    private CompanionXpSnapshotPacket? _companionXpContext;
 
     /// <summary>Only the host is authoritative for companion experience; a client's own view
     /// is dropped.</summary>
@@ -25,14 +26,26 @@ public sealed partial class CoopClient
         lock (_gate)
         {
             presentMask = _companionXpMask;
+            if (_companionXpContext is not { } context || !PartyNamespaceMatches(context.HostSessionId, context.HostLoadSerial, context.HostNativeEpoch)) presentMask = 0;
+            else for (int slot = 0; slot < 9; slot++)
+                if (context.OccupantGenerations is not { } gens || gens[slot] != _partyRoster.OccupantFor(slot).Generation)
+                    presentMask &= (ushort)~(1 << slot);
             xpBySlot = _companionXp;
             return _hasCompanionXp;
         }
     }
 
+    public void ReportCompanionExperience(ushort presentMask, IReadOnlyList<uint> xpBySlot, PartyRoster captured, uint localEpoch)
+    {
+        lock (_gate)
+            if (localEpoch != 0 && localEpoch == _localWorld.NativeWorldEpoch && captured == _partyRoster)
+                ReportCompanionExperience(presentMask, xpBySlot);
+    }
+
     public void ReportCompanionExperience(ushort presentMask, IReadOnlyList<uint> xpBySlot)
     {
-        if (_localPeerId == 0)
+        if (_localPeerId == 0 || _livenessLocalLoadQuarantined || !_hasPartyRoster
+            || !PartyNamespaceMatches(_partyRoster.HostSessionId, _partyRoster.HostLoadSerial, _partyRoster.HostNativeEpoch))
         {
             return;
         }
@@ -48,7 +61,8 @@ public sealed partial class CoopClient
         // repeat applies nothing extra.
         // Caller's thread, not the tick thread — see CoopClient._apiBuffer.
         SendFromCaller(
-            new CompanionXpReportPacket(_localPeerId, presentMask, xp),
+            new CompanionXpReportPacket(_localPeerId, presentMask, xp, _hostSessionId, _hostWorld.LoadSerial,
+                _hostWorld.NativeWorldEpoch, Enumerable.Range(0, 9).Select(slot => _partyRoster.OccupantFor(slot).Generation).ToArray()),
             static (buffer, packet) => PacketCodec.Write(buffer, packet));
     }
 
@@ -61,6 +75,8 @@ public sealed partial class CoopClient
         {
             lock (_gate)
             {
+                if (!PartyNamespaceMatches(snapshot.HostSessionId, snapshot.HostLoadSerial, snapshot.HostNativeEpoch)) return;
+                _companionXpContext = snapshot;
                 _companionXpMask = snapshot.PresentMask;
                 _companionXp = snapshot.Xp;
                 _hasCompanionXp = true;

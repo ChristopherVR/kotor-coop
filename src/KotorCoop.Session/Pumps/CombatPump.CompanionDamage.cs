@@ -38,6 +38,8 @@ internal sealed partial class CombatPump
 
         if (session.IsEnemyAuthority)
         {
+            if (!bridge.TryReadLocalPartyRoster(out PartyRoster currentRoster)) return;
+            _companionDamage.ObserveRoster(currentRoster);
             // The host: turn every peer's reported rise against our own companions into real
             // damage on our own engine. Published every pass, even when empty — the total is a
             // LEVEL the plugin diffs against what it has already applied, so a pass the plugin
@@ -47,7 +49,7 @@ internal sealed partial class CombatPump
             bridge.TryPublishCompanionDamageOwed(CompanionDamageOwedWindow.Slice(
                 _companionDamage.Merge(session.GetCompanionDamage()),
                 ProtocolConstants.PartyRosterSlots,
-                ref _companionOwedWindowStart));
+                ref _companionOwedWindowStart), currentRoster.HostLoadSerial, currentRoster.HostNativeEpoch);
 
             if (_companionDamage.RefusedRises != _companionRefusedLogged)
             {
@@ -66,10 +68,12 @@ internal sealed partial class CombatPump
         // applied to whichever companion(s) companion_local_combat has released to us. Empty
         // is not published — nothing is released, or nothing has been hit yet — the same
         // "only report a genuine contribution" rule PumpEnemies' own dealt-report half follows.
+        if (!bridge.TryReadLivenessEpoch(out uint beforeEpoch) || beforeEpoch == 0) return;
         (uint generation, List<CompanionDamageEntry> taken) = bridge.ReadCompanionDamageTaken();
+        if (!bridge.TryReadLivenessEpoch(out uint afterEpoch) || afterEpoch != beforeEpoch) return;
         if (taken.Count > 0)
         {
-            session.ReportCompanionDamage(generation, taken);
+            session.ReportCompanionDamage(generation, taken, beforeEpoch);
         }
     }
 }

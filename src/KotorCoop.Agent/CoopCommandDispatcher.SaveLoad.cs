@@ -1374,6 +1374,7 @@ public sealed partial class CoopCommandDispatcher
             return;
         }
 
+        PartyRoster adoptedParty = expectedSession.TryGetPartyRoster(out PartyRoster requestedParty) ? requestedParty : PartyRoster.Empty;
         Log?.Invoke($"session-save: starting rejoin ({trigger})");
 
         // A queued worker carries the manager epoch captured synchronously with this trigger,
@@ -1551,6 +1552,7 @@ public sealed partial class CoopCommandDispatcher
                             bridge.SaveIdentityDigest, adoptedLoadSerial);
 
                         bridge.ForgetWorldShadows();
+                        bridge.RecordPartyAdoptionProof(adoptedParty, adoption.World.CompanionCacheFingerprints ?? [], adoption.World.SaveIdentity);
                         onCompleted?.Invoke();
                     }))
                 {

@@ -13,6 +13,8 @@ public sealed partial class CoopCommandDispatcher
     private long _scriptRetryAtMs;
     private long _scriptCompletedToken;
     private ScriptSaveCapture? _scriptSaveCapture;
+    private readonly uint[] _companionRefreshGeneration = new uint[9];
+    private uint _scriptHostRefreshReason;
 
     private sealed class ScriptSaveCapture(ICoopSession session, long generation, string module,
         uint loadSerial, uint hostLoadSerial, long token, string source, DateTime stampBefore, long nowMs)
@@ -30,6 +32,9 @@ public sealed partial class CoopCommandDispatcher
         public long StableSinceMs;
         public bool Answered;
         public bool Refused;
+        public PartyRoster Party;
+        public uint Reason;
+        public PartyRoster NativeParty;
     }
 
     private bool JftsDetected() => !string.IsNullOrEmpty(gameDirectory)
@@ -71,21 +76,38 @@ public sealed partial class CoopCommandDispatcher
             _scriptHostRefreshWanted = false;
             _scriptSaveCapture = null;
             _scriptRetryAtMs = 0;
+            _scriptHostRefreshReason = 0;
+            Array.Clear(_companionRefreshGeneration);
         }
-        if (session is null || !JftsDetected()) return;
+        if (session is null) return;
 
         if (session is CoopHost && bridge.TryReadWorldLoadSerial(out uint hostSerial))
         {
             bridge.TryReadClassGrant(out uint classSerial, out int classId);
             string module = bridge.TryReadCurrentModule(out string currentModule) ? currentModule : string.Empty;
             (bool refresh, JftsClassRefreshState next) = ScriptWorldRefreshRule.ObserveHostClass(
-                _scriptClassWatch, classSerial, classId, hostSerial, module, true);
+                _scriptClassWatch, classSerial, classId, hostSerial, module, JftsDetected());
             _scriptClassWatch = next;
             if (refresh)
             {
                 _scriptHostRefreshWanted = true;
                 _scriptHostLoadSerial = hostSerial;
+                _scriptHostRefreshReason |= 1;
                 Log?.Invoke("script-world: host JFTS class changed; waiting for script and level-up to finish before saving");
+            }
+            if (bridge.TryReadLocalPartyRoster(out PartyRoster roster))
+            {
+                for (int slot = 0; slot < 9; slot++)
+                {
+                    PartyOccupantIdentity occupant = roster.OccupantFor(slot);
+                    if (!roster.IsInParty(slot) || !PartySavedOccupantRule.RequiresBinding(slot, occupant) || occupant.Generation == 0
+                        || occupant.Template.Length == 0 || _companionRefreshGeneration[slot] == occupant.Generation) continue;
+                    _companionRefreshGeneration[slot] = occupant.Generation;
+                    _scriptHostRefreshWanted = true;
+                    _scriptHostLoadSerial = hostSerial;
+                    _scriptHostRefreshReason |= 2;
+                    Log?.Invoke($"script-world: verified active companion replacement in slot {slot}; waiting for a safe saved refresh");
+                }
             }
             if (_scriptHostRefreshWanted && hostSerial != _scriptHostLoadSerial)
             {
@@ -115,8 +137,9 @@ public sealed partial class CoopCommandDispatcher
         {
             token = ScriptWorldRefreshRule.Token(client.HostSessionId, client.RemoteWorldDigest);
             if (!AutoAdoptWorldEnabled || token == 0 || token == Interlocked.Read(ref _scriptCompletedToken)
-                || !ScriptWorldRefreshRule.CanCaptureCharacter(
-                    manager.Agent?.ClassGrantSyncEnabled ?? true, bridge.ReadLocalClassIds())
+                || (client.RemoteWorldDigest.ScriptRefreshReason & 1) != 0
+                    && !ScriptWorldRefreshRule.CanCaptureCharacter(
+                        manager.Agent?.ClassGrantSyncEnabled ?? true, bridge.ReadLocalClassIds())
                 || client.GetRemotePeers().FirstOrDefault(p => p.PeerId == CoopHost.HostPeerId)?.State
                     is not { } hostState || !ManualWorldRefreshRule.IsSafe(hostState)
                 || !HostWorldReplacedRule.IsHostReady(hostState, client.RemoteWorldDigest.Module)) return;
@@ -131,11 +154,33 @@ public sealed partial class CoopCommandDispatcher
         string source = Path.Combine(saves, folder);
         ScriptSaveCapture pending = new(session, generation, state.Module, loadSerial,
             remoteLoadSerial, token, source, SaveStamp(source), nowMs);
+        pending.Reason = session is CoopClient refreshClient ? refreshClient.RemoteWorldDigest.ScriptRefreshReason : _scriptHostRefreshReason;
+        if ((pending.Reason & 2) != 0)
+        {
+            if (session is CoopHost refreshHost)
+            {
+                if (!bridge.TryReadLocalPartyRoster(out pending.NativeParty)
+                    || !refreshHost.TryCaptureCompanionRefreshRoster(out pending.Party)
+                    || !SameNativeParty(pending.NativeParty, pending.Party)
+                    || Enumerable.Range(0, 9).Any(slot => pending.Party.IsInParty(slot)
+                        && PartySavedOccupantRule.RequiresBinding(slot, pending.Party.OccupantFor(slot))
+                        && !ModSupportProfile.IsResref(pending.Party.OccupantFor(slot).Template))) return;
+            }
+            else if (session is CoopClient partyClient)
+            {
+                if (!partyClient.TryGetPartyRoster(out pending.Party)
+                    || pending.Party.RefreshSaveIdentity != partyClient.RemoteWorldDigest.ScriptRefreshSaveIdentity
+                    || pending.Party.RefreshRevision != partyClient.RemoteWorldDigest.ScriptRefreshRevision
+                    || Enumerable.Range(0, 9).Any(slot => pending.Party.IsInParty(slot)
+                        && PartySavedOccupantRule.RequiresBinding(slot, pending.Party.OccupantFor(slot))
+                        && pending.Party.OccupantFor(slot).CacheFingerprint.Length != 64)) return;
+            }
+        }
         if (RequestDedicatedCoopSave(quiet: true, pending) is null) return;
         _scriptSaveCapture = pending;
         Log?.Invoke(session is CoopHost
-            ? "script-world: requesting fresh host Co-op save after JFTS"
-            : "script-world: requesting fresh own-character Co-op save before adopting post-JFTS world");
+            ? "script-world: requesting fresh host Co-op save after verified script changes"
+            : "script-world: requesting fresh own-character Co-op save before adopting script changes");
     }
 
     private bool IsScriptSaveCaptureCurrent(ScriptSaveCapture capture) =>
@@ -147,6 +192,14 @@ public sealed partial class CoopCommandDispatcher
             || ScriptWorldRefreshRule.MatchesCapturedHost(capture.HostLoadSerial, capture.Token,
                 client.HostSessionId, client.RemoteWorldDigest,
                 client.GetRemotePeers().FirstOrDefault(p => p.PeerId == CoopHost.HostPeerId)?.State));
+
+    private static bool SameNativeParty(PartyRoster native, PartyRoster host) =>
+        native.HostLoadSerial == host.HostLoadSerial && native.HostNativeEpoch == host.HostNativeEpoch
+        && native.AvailableMask == host.AvailableMask && native.PartyMask == host.PartyMask
+        && Enumerable.Range(0, 9).All(slot => native.ObjectIdFor(slot) == host.ObjectIdFor(slot)
+            && native.OccupantFor(slot).Generation == host.OccupantFor(slot).Generation
+            && native.OccupantFor(slot).Template == host.OccupantFor(slot).Template
+            && native.OccupantFor(slot).Replaced == host.OccupantFor(slot).Replaced);
 
     private void RetryScriptSaveCapture(long nowMs, string reason)
     {
@@ -174,6 +227,7 @@ public sealed partial class CoopCommandDispatcher
             || !ClientCharacterPersistence.IsCaptureSourceReady(capture.Source)
             || !SaveDigest.TryReadActiveModuleName(capture.Source, out string savedModule)
             || !savedModule.Equals(capture.Module, StringComparison.OrdinalIgnoreCase)
+            || !ClientCharacterPersistence.TryHashSave(capture.Source, out string verifiedHash, out long verifiedLength)
             || !SaveDigest.TryComputeSaveIdentity(capture.Source, out uint savedIdentity)) return;
 
         if (capture.Session is CoopHost host)
@@ -183,10 +237,30 @@ public sealed partial class CoopCommandDispatcher
                 RetryScriptSaveCapture(nowMs, "host world changed while checking the save");
                 return;
             }
+            string[] savedCompanions = (capture.Reason & 2) != 0 ? PartyCacheFingerprint.ReadSave(capture.Source) : [];
+            if (!IsScriptSaveCaptureCurrent(capture) || SaveStamp(capture.Source) != stamp
+                || !ClientCharacterPersistence.TryHashSave(capture.Source, out string finalHash, out long finalLength)
+                || verifiedLength != finalLength || !verifiedHash.Equals(finalHash, StringComparison.Ordinal))
+            {
+                RetryScriptSaveCapture(nowMs, "saved bytes changed while verifying companion payloads");
+                return;
+            }
+            if ((capture.Reason & 2) != 0 && (!bridge.TryReadLocalPartyRoster(out PartyRoster currentParty)
+                || !SameNativeParty(currentParty, capture.Party)
+                || Enumerable.Range(0, 9).Any(slot => capture.Party.IsInParty(slot)
+                    && PartySavedOccupantRule.RequiresBinding(slot, capture.Party.OccupantFor(slot))
+                    && (capture.Party.OccupantFor(slot).Template.Length == 0 || savedCompanions[slot].Length != 64))
+                || !host.PublishCompanionRefreshProof(capture.Party, savedCompanions, savedIdentity, capture.Reason)))
+            {
+                RetryScriptSaveCapture(nowMs, "saved companion identity no longer matches its captured native occupant");
+                return;
+            }
+            if ((capture.Reason & 2) != 0) bridge.RecordHostPartyRefreshProof(capture.Party);
             _scriptHostRefreshWanted = false;
             _scriptSaveCapture = null;
-            host.PublishScriptWorldRefresh(savedIdentity);
-            Log?.Invoke($"script-world: post-JFTS host save ready (0x{savedIdentity:X8}); announcing refresh");
+            _scriptHostRefreshReason = 0;
+            if ((capture.Reason & 2) == 0) host.PublishScriptWorldRefresh(savedIdentity, capture.Reason);
+            Log?.Invoke($"script-world: post-script host save ready (0x{savedIdentity:X8}); announcing refresh");
         }
         else if (ClientCharacterPersistence.TryHashSave(capture.Source, out string hash, out long length)
             && ClientCharacterPersistence.TryCaptureVerifiedLoadSource(
@@ -201,10 +275,16 @@ public sealed partial class CoopCommandDispatcher
                 RetryScriptSaveCapture(nowMs, "world changed while capturing the character");
                 return;
             }
+            if ((capture.Reason & 2) != 0 && (capture.Session is not CoopClient partyClient
+                || !partyClient.TryGetPartyRoster(out PartyRoster currentParty) || currentParty != capture.Party))
+            {
+                RetryScriptSaveCapture(nowMs, "companion occupant changed while capturing the character");
+                return;
+            }
             _scriptSaveCapture = null;
             _scriptRetryAtMs = nowMs + 30_000;
             _skipNextDisconnectCapture = true;
-            Reply("Jedi story changes are ready - rejoining the host with your own character");
+            Reply("Host script changes are ready - rejoining with your own character");
             TriggerRejoin(RejoinTrigger.ScriptWorldRefresh, capture.Session,
                 () => Interlocked.Exchange(ref _scriptCompletedToken, capture.Token));
         }

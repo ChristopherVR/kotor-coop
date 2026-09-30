@@ -24,13 +24,10 @@ namespace KotorCoop.Session;
 ///    without it, rule 1 would read that restart as staleness and ignore everything the
 ///    companion does from then on.
 ///
-/// UNLIKE <see cref="PeerDamageLedger"/>, there is no MODULE concept here and so no epoch to
-/// publish back: an NPC roster slot names the same companion identity for the whole session,
-/// module transition or not — <c>PartyPresenceController</c> already resolves companions by
-/// roster slot for exactly that reason (identical across two instances of the same save). A
-/// module change on the CLIENT bumps ITS OWN generation (the companion is reclaimed the moment
-/// the world changes — see docs/research/companion-state-sync.md §13), which rule 2 already
-/// handles; there is nothing module-shaped for the host side to track.
+/// Every report is bound to the authenticated process incarnation, the current native
+/// world and its verified occupant generation. A real load or occupant replacement
+/// retires the old run and clears its owed damage/healing before another body can use
+/// the slot. Ordinary retransmission preserves the cumulative high-water mark.
 ///
 /// HEALS (2026-09-18) ride the same channel as a second cumulative total per roster slot,
 /// keyed by <see cref="CompanionDamageSlots.HealSlot"/> — bit 7 of the slot field, which a
@@ -47,10 +44,30 @@ public sealed class CompanionDamageLedger
 {
     /// <summary>The last total seen from one peer for one roster slot, and the generation it
     /// belonged to.</summary>
-    private readonly Dictionary<(uint Peer, uint RosterSlotPlusOne), (uint Generation, uint Total)> _seen = [];
+    private readonly Dictionary<(uint Peer, uint Incarnation, uint RosterSlotPlusOne), (uint Generation, uint Total)> _seen = [];
 
     /// <summary>Everything every peer has ever dealt to one companion's roster slot.</summary>
     private readonly Dictionary<uint, uint> _owed = [];
+    private PartyRoster? _roster;
+    private readonly DamageGenerationWatch _generationWatch = new();
+
+    public void ObserveRoster(PartyRoster roster)
+    {
+        if (_roster is { } before)
+        {
+            if (before.HostLoadSerial != roster.HostLoadSerial || before.HostNativeEpoch != roster.HostNativeEpoch)
+            { _generationWatch.RetireCurrentWorld(); _seen.Clear(); _owed.Clear(); }
+            else for (int slot = 0; slot < 9; slot++)
+                if (before.OccupantFor(slot).Generation != roster.OccupantFor(slot).Generation)
+                {
+                    _generationWatch.RetireCurrentWorld();
+                    uint key = (uint)slot + 1;
+                    _owed.Remove(key); _owed.Remove(CompanionDamageSlots.HealSlot(key));
+                    foreach (var seen in _seen.Keys.Where(k => CompanionDamageSlots.RosterSlotPlusOne(k.RosterSlotPlusOne) == key).ToArray()) _seen.Remove(seen);
+                }
+        }
+        _roster = roster;
+    }
 
     /// <summary>How many rises were refused as implausible (PeerDamageLedger.MaxPlausibleRise).</summary>
     public uint RefusedRises { get; private set; }
@@ -76,13 +93,17 @@ public sealed class CompanionDamageLedger
     {
         foreach (PeerCompanionDamage report in reports)
         {
+            if (_roster is { } roster && (report.OccupantGeneration != roster.OccupantFor((int)CompanionDamageSlots.RosterSlotPlusOne(report.RosterSlotPlusOne) - 1).Generation
+                || report.HostLoadSerial != roster.HostLoadSerial || report.HostNativeEpoch != roster.HostNativeEpoch)) continue;
+            if (!_generationWatch.Bind(report.PeerId, report.Incarnation)
+                || !_generationWatch.Observe(report.PeerId, report.Incarnation, report.Generation)) continue;
             // A heal row still has to name a roster slot: the flag alone is no companion.
             if (CompanionDamageSlots.RosterSlotPlusOne(report.RosterSlotPlusOne) == 0)
             {
                 continue;
             }
 
-            (uint Peer, uint RosterSlotPlusOne) key = (report.PeerId, report.RosterSlotPlusOne);
+            (uint Peer, uint Incarnation, uint RosterSlotPlusOne) key = (report.PeerId, report.Incarnation, report.RosterSlotPlusOne);
 
             uint previous = 0;
             if (_seen.TryGetValue(key, out (uint Generation, uint Total) seen))
@@ -92,7 +113,8 @@ public sealed class CompanionDamageLedger
                 previous = seen.Generation == report.Generation ? seen.Total : 0;
             }
 
-            _seen[key] = (report.Generation, report.CumulativeDamage);
+            if (report.CumulativeDamage > previous || seen.Generation != report.Generation)
+                _seen[key] = (report.Generation, report.CumulativeDamage);
 
             if (report.CumulativeDamage <= previous)
             {
@@ -125,7 +147,7 @@ public sealed class CompanionDamageLedger
         List<CompanionDamageEntry> table = new(_owed.Count);
         foreach (KeyValuePair<uint, uint> entry in _owed)
         {
-            table.Add(new CompanionDamageEntry(entry.Key, entry.Value));
+            table.Add(new CompanionDamageEntry(entry.Key, entry.Value, _roster?.OccupantFor((int)CompanionDamageSlots.RosterSlotPlusOne(entry.Key) - 1).Generation ?? 0));
         }
 
         return table;

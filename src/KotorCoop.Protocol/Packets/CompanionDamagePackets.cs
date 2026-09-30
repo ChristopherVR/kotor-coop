@@ -17,7 +17,7 @@ namespace KotorCoop.Protocol;
 /// the same companion for the whole session, transition or not, so there is nothing to
 /// invalidate when the world changes.
 /// </summary>
-public readonly record struct CompanionDamageEntry(uint RosterSlotPlusOne, uint CumulativeDamage);
+public readonly record struct CompanionDamageEntry(uint RosterSlotPlusOne, uint CumulativeDamage, uint OccupantGeneration = 0);
 
 /// <summary>
 /// A client's report of what its own engine's damage pipeline has actually done to each
@@ -32,9 +32,10 @@ public readonly record struct CompanionDamageEntry(uint RosterSlotPlusOne, uint 
 /// legitimate restart from a stale, reordered datagram.
 /// </summary>
 public sealed record CompanionDamagePacket(
-    uint PeerId, uint Generation, IReadOnlyList<CompanionDamageEntry> Damage);
+    uint PeerId, uint Generation, IReadOnlyList<CompanionDamageEntry> Damage, uint Incarnation = 0, uint HostSessionId = 0,
+    uint HostLoadSerial = 0, uint HostNativeEpoch = 0);
 
 /// <summary>One peer's cumulative damage against one of ITS OWN companions, as the host sees
 /// it after freshness filtering.</summary>
 public readonly record struct PeerCompanionDamage(
-    uint PeerId, uint Generation, uint RosterSlotPlusOne, uint CumulativeDamage);
+    uint PeerId, uint Generation, uint RosterSlotPlusOne, uint CumulativeDamage, uint OccupantGeneration = 0, uint Incarnation = 0, uint HostLoadSerial = 0, uint HostNativeEpoch = 0);

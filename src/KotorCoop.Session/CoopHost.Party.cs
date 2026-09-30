@@ -35,6 +35,43 @@ public sealed partial class CoopHost
     private PartyRoster _partyRoster = PartyRoster.Empty;
 
     private bool _hasPartyRoster;
+    private PartyRoster _companionRefreshProof;
+
+    /// <summary>Bind exact saved UTC bytes to the native identity captured before this save.
+    /// Later roster publications carry this fixed proof, never a hash of mutated live HP.</summary>
+    public bool TryCaptureCompanionRefreshRoster(out PartyRoster roster)
+    {
+        lock (_gate) { roster = _partyRoster; return _hasPartyRoster
+            && roster.HostSessionId == _sessionId && roster.HostLoadSerial == _localWorld.LoadSerial
+            && roster.HostNativeEpoch == _localWorld.NativeWorldEpoch; }
+    }
+
+    public bool PublishCompanionRefreshProof(PartyRoster captured, IReadOnlyList<string> fingerprints, uint saveIdentity, uint reason)
+    {
+        lock (_gate)
+        {
+            if (saveIdentity == 0 || captured.HostSessionId != _sessionId || !_hasPartyRoster || captured.HostLoadSerial != _localWorld.LoadSerial
+                || captured.HostNativeEpoch != _localWorld.NativeWorldEpoch) return false;
+            PartyOccupantIdentity[] identities = new PartyOccupantIdentity[9];
+            bool known = false;
+            for (int slot = 0; slot < 9; slot++)
+            {
+                PartyOccupantIdentity occupant = captured.OccupantFor(slot);
+                PartyOccupantIdentity current = _partyRoster.OccupantFor(slot);
+                if (occupant.Generation != current.Generation || occupant.Template != current.Template
+                    || occupant.Replaced != current.Replaced) return false;
+                string fingerprint = slot < fingerprints.Count ? fingerprints[slot] : "";
+                if (fingerprint.Length != 0 && !KotorCoop.Memory.PartyCacheFingerprint.IsValid(fingerprint)) return false;
+                identities[slot] = occupant with { CacheFingerprint = fingerprint };
+                known |= PartySavedOccupantRule.RequiresBinding(slot, occupant) && occupant.Template.Length > 0 && fingerprint.Length == 64;
+            }
+            if (!known) return false;
+            PublishScriptWorldRefresh(saveIdentity, reason);
+            _companionRefreshProof = _partyRoster with { Occupants = identities, RefreshSaveIdentity = saveIdentity, RefreshRevision = _scriptRefreshRevision };
+            _partyRoster = _companionRefreshProof;
+            return true;
+        }
+    }
 
     public void PublishPartyRoster(PartyRoster roster)
     {
@@ -44,6 +81,20 @@ public sealed partial class CoopHost
                 || roster.HostLoadSerial != _localWorld.LoadSerial)) return;
             _partyRoster = roster with { HostSessionId = _sessionId,
                 HostLoadSerial = _localWorld.LoadSerial, HostNativeEpoch = _localWorld.NativeWorldEpoch };
+            if (_companionRefreshProof.HostSessionId == _sessionId
+                && _companionRefreshProof.HostLoadSerial == _localWorld.LoadSerial
+                && _companionRefreshProof.HostNativeEpoch == _localWorld.NativeWorldEpoch)
+            {
+                PartyOccupantIdentity[] identities = Enumerable.Range(0, 9).Select(_partyRoster.OccupantFor).ToArray();
+                for (int slot = 0; slot < 9; slot++)
+                {
+                    PartyOccupantIdentity proof = _companionRefreshProof.OccupantFor(slot), current = identities[slot];
+                    if (proof.Generation == current.Generation && proof.Template == current.Template && proof.Replaced == current.Replaced)
+                        identities[slot] = current with { CacheFingerprint = proof.CacheFingerprint };
+                }
+                _partyRoster = _partyRoster with { Occupants = identities, RefreshSaveIdentity = _companionRefreshProof.RefreshSaveIdentity,
+                    RefreshRevision = _companionRefreshProof.RefreshRevision };
+            }
             _hasPartyRoster = true;
         }
     }

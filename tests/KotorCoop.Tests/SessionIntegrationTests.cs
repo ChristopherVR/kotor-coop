@@ -1247,6 +1247,10 @@ public class SessionIntegrationTests
         {
             host.PublishLocalState(state);
             client.PublishLocalState(state);
+            WorldDigest world = new(1, 1, state.Module, 1, NativeWorldEpoch: 1);
+            host.PublishWorldDigest(world);
+            client.PublishWorldDigest(world);
+            host.PublishPartyRoster(new PartyRoster(1, 1, HostNativeEpoch: 1));
             host.PublishCompanionExperience(mask, hostXp);
         }
 
