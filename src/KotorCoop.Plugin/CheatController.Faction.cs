@@ -31,6 +31,13 @@ internal sealed unsafe partial class CheatController
             return;
         }
 
+        if (!NativeMethods.IsReadable(target, 8) || *(uint*)target != 0x007470C8
+            || !NativeMethods.IsReadable(vs, 8) || *(uint*)vs != 0x007470C8)
+        {
+            Answer(SharedBlock.CheatStatusNoTarget, "faction: both ids must be live creatures on this instance");
+            return;
+        }
+
         int targetFaction = Odyssey.GetCreatureFaction(target);
         int vsFaction = Odyssey.GetCreatureFaction(vs);
         int targetVsVs = Odyssey.GetAIStateReputation(target, vsId);

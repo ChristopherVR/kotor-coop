@@ -74,8 +74,12 @@ internal static unsafe partial class Odyssey
             return -1;
         }
 
+        // A diagnostic verb can hand this any object id, including a non-creature or a stale
+        // one (live 2026-10-01: `faction 0x71 me` with a peer's id faulted here).
+        if (!NativeMethods.IsReadable(creature + CreStats, 4)) return -1;
         nint stats = Deref(creature + CreStats);
-        return stats == 0 ? -1 : (int)*(uint*)(stats + StatsFactionId);
+        return stats == 0 || !NativeMethods.IsReadable(stats + StatsFactionId, 4)
+            ? -1 : (int)*(uint*)(stats + StatsFactionId);
     }
 
     /// <summary>
