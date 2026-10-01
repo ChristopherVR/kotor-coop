@@ -75,6 +75,7 @@ internal static unsafe partial class PluginHost
     private static PartyRosterController? _partyRoster;
     private static PartySelectSuppressionController? _partySelectSuppression;
     private static PartySelectHostRequestController? _partySelectHostRequest;
+    private static HostConversationRequestController? _hostConversationRequest;
     private static CompanionEquipSuppressionController? _companionEquipSuppression;
     private static ControlReturnController? _controlReturn;
     private static MenuLoadController? _menuLoad;
@@ -432,7 +433,8 @@ internal static unsafe partial class PluginHost
         //      gap. See SharedBlock.Combat.cs, SharedBlock.TotalSize's own remarks and
         //      docs/research/creature-liveness.md.
         // 89: verified companion occupant banks BC00/BD00, allocation BE00.
-        _block->Version = 96;
+        // 97: host-start conversation relay mailboxes at 0x5C50..0x5CB0 (SharedBlock.HostConversation.cs).
+        _block->Version = 97;
         *(uint*)((byte*)_block + SharedBlock.OffsetDamageDealtIncarnation) = PhantomHitHook.Dealt.Incarnation;
 
         // A guard dword after the version. Magic plus version alone was not selective

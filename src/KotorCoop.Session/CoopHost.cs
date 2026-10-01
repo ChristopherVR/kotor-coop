@@ -267,6 +267,7 @@ public sealed partial class CoopHost : ICoopSession
             [PacketType.WorldTransferChunkStatus] = HandleWorldTransferChunkStatus,
             [PacketType.WorldTransferComplete] = HandleWorldTransferComplete,
             [PacketType.PartySelectRequest] = HandlePartySelectRequest,
+            [PacketType.HostConversationRequest] = HandleHostConversationRequest,
             [PacketType.None] = HandleNone,
         };
     }

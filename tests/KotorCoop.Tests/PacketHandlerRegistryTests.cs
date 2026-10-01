@@ -57,6 +57,9 @@ public class PacketHandlerRegistryTests
         // client's suppressed panel becomes a request to the host; the host never receives its
         // own response.
         PacketType.PartySelectRequest,
+        // Host-start conversation relay (docs/research/dialogue-sync.md): a client's refused
+        // host-only conversation start, asked of the host instead.
+        PacketType.HostConversationRequest,
         PacketType.None,
     ];
 

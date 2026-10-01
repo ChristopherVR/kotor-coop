@@ -991,6 +991,19 @@ public sealed partial class KotorGameBridge
     private const int BlockPartySelectClientTriggerId = 0x5C48;
     private const int BlockPartySelectHostTriggerId = 0x5C4C;
 
+    // Host-start conversation relay (shared block version 97, region 0x5C50..0x5CB0, no
+    // TotalSize growth). Mirrors SharedBlock.OffsetHostConversation*. Plugin -> agent: a
+    // host-only start this joiner's engine refused. Agent -> plugin (HOST only): start it.
+    private const int BlockHostConversationClientSerial = 0x5C50;
+    private const int BlockHostConversationClientTag = 0x5C54;
+    private const int BlockHostConversationClientResref = 0x5C6C;
+    private const int BlockHostConversationHostSerial = 0x5C80;
+    private const int BlockHostConversationHostPeerId = 0x5C84;
+    private const int BlockHostConversationHostTag = 0x5C88;
+    private const int BlockHostConversationHostResref = 0x5CA0;
+    private const int BlockHostConversationTagLength = 24;
+    private const int BlockHostConversationResrefLength = 16;
+
     // Class-grant relay (shared block version 68, region 0x4C20..0x4C38, inside the galaxy
     // region's free tail — TotalSize stays 0x4D00). Mirrors SharedBlock.OffsetClassGrant*.
     // Plugin -> agent: a script added a class to my player (serial + class). Agent -> plugin:

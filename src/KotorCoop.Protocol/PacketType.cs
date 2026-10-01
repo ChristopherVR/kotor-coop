@@ -783,4 +783,13 @@ public enum PacketType : byte
     /// (confirmed or cancelled).
     /// </summary>
     PartySelectResponse = 106,
+
+    /// <summary>
+    /// client -&gt; host, one-shot (no response packet; the sender's own debounce covers a lost
+    /// datagram): "my own engine refused a conversation only the host may start (the dark-side
+    /// temple's Bastila scene, the Manaan airlock) - please start it for yourself" -
+    /// <see cref="HostConversationRequestPacket"/>. See docs/research/dialogue-sync.md's
+    /// host-start relay section.
+    /// </summary>
+    HostConversationRequest = 107,
 }

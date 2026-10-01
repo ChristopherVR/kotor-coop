@@ -218,4 +218,28 @@ public interface ITravelBridge
         outcome = 0;
         return false;
     }
+
+    // ---- host-start conversation relay ------------------------------------------------------
+
+    /// <summary>
+    /// The host-only conversation start THIS instance's own engine most recently refused (a
+    /// joiner's click on the dark-side temple's Bastila, the Manaan airlock):
+    /// <paramref name="serial"/> bumps once per published capture (0 = never); the tag is the
+    /// target object's, the resref the dialogue the engine was asked to run (empty for the
+    /// default conversation). De-duplicate on the serial. Default false with no plugin.
+    /// </summary>
+    bool TryReadHostConversationClientCapture(out uint serial, out string tag, out string resref)
+    {
+        serial = 0;
+        tag = string.Empty;
+        resref = string.Empty;
+        return false;
+    }
+
+    /// <summary>
+    /// HOST only: hands a peer's relayed conversation start to the plugin, which starts it for
+    /// the host's own player (retrying briefly while the host is busy). Fire-and-forget; the
+    /// plugin logs the outcome. Default false when there is no plugin.
+    /// </summary>
+    bool TryRequestHostConversation(uint peerId, string tag, string resref) => false;
 }

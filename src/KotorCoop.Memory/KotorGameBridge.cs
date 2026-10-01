@@ -46,7 +46,8 @@ public sealed partial class KotorGameBridge : IGameBridge
     private int _consecutiveFailures;
     private nint _pluginBlock;
 
-    /// <summary>16-byte signature: "KOCOOP01" + version 86 + guard 0xC0FFEE01 (76: the exact
+    /// <summary>16-byte signature: "KOCOOP01" + version 97 (host-start conversation relay at
+    /// 0x5C50..0x5CB0) + guard 0xC0FFEE01 (76: the exact
     /// enemy-health baseline channel 0x5400..0x5800; 77: the local_var_sync region
     /// 0x5800..0x5A00, KotorGameBridge.LocalVars.cs; 78: party-placed mine replication,
     /// 0x5A00..0x5C00; 79: another in-flight stream's own reservation; 80: the "no cap really"
@@ -66,7 +67,7 @@ public sealed partial class KotorGameBridge : IGameBridge
     /// enforced the warning above. ⚠ TransitionMovieTests.TheBlockVersionMovedInBothHalves
     /// (an existing test this split does not touch) also reads this constant straight out of
     /// THIS file's text, by its literal path — keep it declared here, not in a partial.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 60 00 00 00 01 EE FF C0";
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 61 00 00 00 01 EE FF C0";
 
     /// <summary>
     /// True when the in-process plugin is present. Changes the strategy completely: instead

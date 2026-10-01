@@ -486,7 +486,23 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
 
     private uint _seenSoloBlocked;
     private long _soloNoticeUntilMs;
-    private readonly byte[] _soloNotice = "Only the host can start this - wait for them"u8.ToArray();
+    private readonly byte[] _soloNotice = "Asked the host to start this"u8.ToArray();
+
+    // Host-start relay: one request per 3 s (a player hammering the click must not flood the host).
+    private static int StringLength(byte* text, int capacity)
+    {
+        int length = 0;
+        while (length < capacity && text[length] != 0)
+        {
+            length++;
+        }
+
+        return length;
+    }
+
+    private uint _seenHostLedCapture;
+    private long _nextHostLedRelayMs;
+    private const long HostLedRelayDebounceMs = 3000;
 
     private void ReportCounters()
     {
@@ -495,7 +511,26 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         {
             _seenSoloBlocked = DialogueGateHook.SoloBlockedCount;
             _soloNoticeUntilMs = Environment.TickCount64 + 2500;
-            LogFew("dialogue: refused a joiner starting a solo-section conversation; the host leads it");
+            LogFew("dialogue: refused a joiner starting a host-only conversation; asking the host to start it");
+        }
+
+        // Publish the refused start to the agent (fields first, serial last) so it reaches the
+        // host. The detour only stashed bytes; the allocation lives here, in the frame hook.
+        if (DialogueGateHook.HostLedCaptureCount != _seenHostLedCapture)
+        {
+            _seenHostLedCapture = DialogueGateHook.HostLedCaptureCount;
+            long now = Environment.TickCount64;
+            if (now >= _nextHostLedRelayMs)
+            {
+                _nextHostLedRelayMs = now + HostLedRelayDebounceMs;
+                byte* tag = stackalloc byte[SharedBlock.HostConversationTagLength];
+                byte* resref = stackalloc byte[SharedBlock.HostConversationResrefLength];
+                DialogueGateHook.CopyHostLedCapture(tag, resref);
+                string tagText = System.Text.Encoding.ASCII.GetString(tag, StringLength(tag, SharedBlock.HostConversationTagLength));
+                string resrefText = System.Text.Encoding.ASCII.GetString(resref, StringLength(resref, SharedBlock.HostConversationResrefLength));
+                block.PublishHostConversationCapture(tagText, resrefText);
+                LogFew($"dialogue: relayed a refused host-only start to the host (tag='{tagText}', resref='{resrefText}')");
+            }
         }
 
         if (Environment.TickCount64 < _soloNoticeUntilMs)

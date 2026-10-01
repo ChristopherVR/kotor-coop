@@ -33,6 +33,7 @@ public interface ICoopSession :
     IStoreSession,
     ICreditGrantSession,
     IPartySelectSession,
+    IHostConversationSession,
     IDisposable
 {
 }

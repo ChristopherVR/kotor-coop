@@ -2062,3 +2062,44 @@ click-pixel-certified confirmation) is recommended follow-up, not attempted here
 count — `ControlReturnController`'s own behaviour when `control_return_diag_only` is unset is
 byte-for-byte unchanged (the new field defaults false and only ever short-circuits one boolean
 inside the already-existing `NoteClaim` branch), so no regression was expected or found.
+
+## Host-start conversation relay (2026-10-02, protocol 86, shared block 97)
+
+**Problem.** A few conversations may only be started by the host: the dark-side temple's Bastila scene
+(tag `bastilae` / dialogue `unk44_evilbast`) is driven by an event on the engine that owns her AI, and the
+Manaan airlock (`man28_airlock`, a door) walks one player into a solo module. `DialogueGateHook` already
+refuses a *joiner's* start of these locally. Refusing alone left the scene un-startable whenever the joiner
+happened to be the one standing next to the NPC, so the refusal is now also a request to the host.
+
+**Flow.**
+1. Joiner clicks. `DialogueGateHook.OnStartDialog` matches the target's tag and the engine's dialogue resref
+   against `HostLedConversationRule` (Protocol, compiled into the plugin by source; precomputed byte arrays,
+   allocation-free), returns 0 and stashes the tag/resref bytes plus a counter in static fields.
+2. `DialogueSpectateController.ReportCounters` (frame hook, may allocate) publishes the stash to the shared
+   block's client mailbox (0x5C50, fields first, serial last) and posts "Asked the host to start this".
+   One publish per 3 s.
+3. The joiner's agent (`TransitionPump.HostConversation.cs`) baselines the serial on attach (a leftover serial
+   is not a request), re-checks the shared list, debounces 3 s and sends `HostConversationRequestPacket`
+   (type 107: peer id, serial, module, tag, resref), one-shot, no response.
+4. The host's session queues it (known peers only, queue bounded at 16). The host pump drops it when the
+   request's module differs from the host's current module (the sender or host already moved on) or when the
+   pair is not in the shared list, otherwise writes the host mailbox (0x5C80, serial last).
+5. `HostConversationRequestController` (host plugin, same frame section as the party-select host controller)
+   re-checks the list, then calls `Odyssey.StartDialogueWith(tag, resref, forced: true, partner)`. The target
+   is found by tag across creatures, doors and placeables (`FindDialoguePartnerByTag`). `forced` takes the
+   ignore-start-range branch, so the host's player need not be near; no join-teleport is involved.
+6. The host now owns the conversation token and the existing auto-join/spectate machinery takes the joiner
+   along. The Manaan airlock stays in `DialogueAutoJoinRule.SoloEntryConversations`, so the joiner does NOT
+   follow it (intended); the Bastila scene is not in that list, so the joiner watches it.
+
+**Edge cases.** Host busy (already in a conversation, minigame, combat, or no HUD while loading): retry every
+250 ms for 5 s, then give up with a log line. Target not yet loaded on the host: same retry. Module change:
+`Invalidate()` marks the current serial applied and drops the pending request. Host's own gate: the host-only
+refusal requires `JoinerIsClient`, false on a host, and a forced start returns before any gate. A second
+request while one is pending replaces it. The plugin and pump both debounce, so a player hammering the click
+produces at most one packet per 3 s.
+
+**Not verified live (no rig this pass).** That a `forced` start on a door/placeable/Bastila actually opens
+for a host standing far away; that the temple scene then plays through for the host; that the joiner's
+auto-join takes the forced conversation. Unit tests cover the codec, the shared list, mailbox offsets and both
+pump halves only.

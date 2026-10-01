@@ -808,6 +808,7 @@ public sealed partial class CoopAgent
         // request to open here. Independent of the travel/announce timing above — no ordering
         // rule needed against PumpTravel.
         _transitionPump.PumpPartySelect(local, peers);
+        _transitionPump.PumpHostConversation(local, peers);
 
         // Pause and travel are cheap flag checks and must feel immediate.
         _transitionPump.PumpTravel(local, peers, _changedModule, _moduleSettledAtMs);

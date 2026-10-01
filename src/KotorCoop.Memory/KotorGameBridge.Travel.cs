@@ -312,4 +312,47 @@ public sealed partial class KotorGameBridge
             && _memory.TryReadUInt32(_pluginBlock + BlockPartySelectHostOutcomeSerial, out serial)
             && _memory.TryReadUInt32(_pluginBlock + BlockPartySelectHostOutcome, out outcome);
     }
+
+    // ---- host-start conversation relay ------------------------------------------------------
+
+    /// <inheritdoc />
+    public bool TryReadHostConversationClientCapture(out uint serial, out string tag, out string resref)
+    {
+        serial = 0;
+        tag = string.Empty;
+        resref = string.Empty;
+
+        // Serial first, then the strings - the reverse of the plugin's write order.
+        if (_pluginBlock == 0
+            || !_memory.TryReadUInt32(_pluginBlock + BlockHostConversationClientSerial, out serial)
+            || serial == 0)
+        {
+            return false;
+        }
+
+        return _memory.TryReadAsciiString(
+                _pluginBlock + BlockHostConversationClientTag, BlockHostConversationTagLength, out tag)
+            && _memory.TryReadAsciiString(
+                _pluginBlock + BlockHostConversationClientResref, BlockHostConversationResrefLength, out resref);
+    }
+
+    /// <inheritdoc />
+    public bool TryRequestHostConversation(uint peerId, string tag, string resref)
+    {
+        if (_pluginBlock == 0)
+        {
+            return false;
+        }
+
+        bool ok = _memory.TryWrite(_pluginBlock + BlockHostConversationHostPeerId, peerId);
+        ok &= _memory.TryWriteAsciiString(
+            _pluginBlock + BlockHostConversationHostTag, tag ?? string.Empty, BlockHostConversationTagLength);
+        ok &= _memory.TryWriteAsciiString(
+            _pluginBlock + BlockHostConversationHostResref, resref ?? string.Empty, BlockHostConversationResrefLength);
+
+        // Serial last, continuing from whatever the block holds.
+        ok &= _memory.TryReadUInt32(_pluginBlock + BlockHostConversationHostSerial, out uint serial);
+        ok &= _memory.TryWrite(_pluginBlock + BlockHostConversationHostSerial, serial + 1);
+        return ok;
+    }
 }

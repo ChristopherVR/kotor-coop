@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using KotorCoop.Protocol;
 
 namespace KotorCoop.Plugin;
 
@@ -313,6 +314,7 @@ internal static unsafe class DialogueGateHook
             // the joiner twice in the original engine (live 2026-10-01). Host-only.
             if (Enabled && JoinerIsClient && IsHostOnlyConversation(target))
             {
+                StashHostLedCapture(target);
                 _soloBlockedCount++;
                 return 1;
             }
@@ -353,36 +355,76 @@ internal static unsafe class DialogueGateHook
     /// (crashed the joiner twice); the dark-side temple's Bastila scene is driven by an event on
     /// the engine that owns her AI, so a joiner-led start ran the scene's opening and then did
     /// nothing (live 2026-10-01).</summary>
-    private static bool IsHostOnlyConversation(nint target) =>
-        ResrefIs("man28_airlock"u8) || ResrefIs("unk44_evilbast"u8) || TargetTagIs(target, "bastilae"u8);
-
-    private static bool ResrefIs(ReadOnlySpan<byte> want)
+    private static bool IsHostOnlyConversation(nint target)
     {
-        for (int i = 0; i < want.Length; i++)
-        {
-            byte c = LastStartResref[i];
-            if (c is >= (byte)'A' and <= (byte)'Z') c = (byte)(c + 32);
-            if (c != want[i]) return false;
-        }
-
-        return LastStartResref.Length == want.Length || LastStartResref[want.Length] == 0;
+        // The list lives in Protocol (HostLedConversationRule) so this gate and the host's
+        // relay controller cannot drift; only the matching is done here, allocation-free.
+        byte* tag = stackalloc byte[SharedBlock.HostConversationTagLength];
+        int length = ReadTargetTag(target, tag, SharedBlock.HostConversationTagLength);
+        return HostLedConversationRule.IsHostLed(
+            new ReadOnlySpan<byte>(LastStartResref), new ReadOnlySpan<byte>(tag, length));
     }
 
-    private static bool TargetTagIs(nint target, ReadOnlySpan<byte> want)
+    /// <summary>Copies the target's tag (at most capacity-1 bytes, NUL-terminated) into
+    /// <paramref name="into"/>; 0 when unreadable or too long to be in the host-led list.
+    /// Raw reads with hard bounds, like <see cref="TargetIsPeersPartner"/>.</summary>
+    private static int ReadTargetTag(nint target, byte* into, int capacity)
     {
-        if (target is <= 0x10000 or >= 0x7FFF_0000) return false;
+        if (target is <= 0x10000 or >= 0x7FFF_0000) return 0;
         nint chars = *(nint*)(target + ObjTag);
         int length = *(int*)(target + ObjTag + 4);
-        if (chars is <= 0x10000 or >= 0x7FFF_0000 || length is <= 0 or > MaxTagBytes) return false;
+        if (chars is <= 0x10000 or >= 0x7FFF_0000 || length is <= 0 or > MaxTagBytes) return 0;
         byte* actual = (byte*)chars;
-        if (actual[length - 1] == 0) length--;
-        if (length != want.Length) return false;
+        if (actual[length - 1] == 0) length--; // the CExoString length includes the NUL
+        if (length <= 0 || length >= capacity) return 0;
         for (int i = 0; i < length; i++)
         {
-            if (Lower(actual[i]) != want[i]) return false;
+            into[i] = actual[i];
         }
 
-        return true;
+        into[length] = 0;
+        return length;
+    }
+
+    // The most recent refused host-only start, for DialogueSpectateController.ReportCounters to
+    // relay to the host. Plain static byte buffers filled in place (no allocation in the
+    // detour); the count is bumped LAST. Detour and reader both run on the engine's main thread.
+    private static readonly byte[] _hostLedTag = new byte[SharedBlock.HostConversationTagLength];
+    private static readonly byte[] _hostLedResref = new byte[SharedBlock.HostConversationResrefLength];
+    private static uint _hostLedCaptureCount;
+
+    /// <summary>Bumped once per refused host-only start, after its tag/resref are stashed.</summary>
+    public static uint HostLedCaptureCount => _hostLedCaptureCount;
+
+    /// <summary>Copies the stashed tag and resref (NUL-terminated ASCII) out for publishing.</summary>
+    public static void CopyHostLedCapture(byte* tag, byte* resref)
+    {
+        for (int i = 0; i < _hostLedTag.Length; i++) tag[i] = _hostLedTag[i];
+        for (int i = 0; i < _hostLedResref.Length; i++) resref[i] = _hostLedResref[i];
+    }
+
+    private static void StashHostLedCapture(nint target)
+    {
+        fixed (byte* tag = _hostLedTag)
+        {
+            for (int i = 0; i < _hostLedTag.Length; i++) tag[i] = 0;
+            ReadTargetTag(target, tag, _hostLedTag.Length);
+        }
+
+        for (int i = 0; i < _hostLedResref.Length; i++)
+        {
+            // LastStartResref is wider than the published field; stop at its first NUL or the field's end.
+            byte c = LastStartResref[i];
+            _hostLedResref[i] = c;
+            if (c == 0) break;
+        }
+
+        // Clear any tail of a previous, longer capture.
+        int n = 0;
+        while (n < _hostLedResref.Length && _hostLedResref[n] != 0) n++;
+        for (int i = n; i < _hostLedResref.Length; i++) _hostLedResref[i] = 0;
+
+        _hostLedCaptureCount++;
     }
 
     private static uint _soloBlockedCount;

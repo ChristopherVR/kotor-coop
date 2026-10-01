@@ -1053,6 +1053,8 @@ internal static unsafe partial class PluginHost
                     // for its outcome. Never races the suppression controller above — one only ever
                     // fires on a client, the other only ever on a host.
                     _partySelectHostRequest?.OnFrame();
+                    // A joiner's refused host-only conversation start, started here for the host.
+                    _hostConversationRequest?.OnFrame();
                     // Same footing as the party-select screen: a client's companion Equipment page is
                     // closed, never reconciled — companion gear is the host's (companion_equip_host_only).
                     _companionEquipSuppression?.OnFrame();

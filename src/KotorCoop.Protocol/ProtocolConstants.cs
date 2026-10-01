@@ -341,7 +341,8 @@ public static class ProtocolConstants
     /// <summary>Version 77 appends durable saved-script-world refresh fields to WorldDigest.</summary>
     // 82: companion occupant generations/templates plus host-world namespaces.
     // Version85 binds reliable enemy effects and ACKs to host world and native capture incarnation.
-    public const byte Version = 85;
+    // 86: HostConversationRequest (107), the host-start conversation relay.
+    public const byte Version = 86;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

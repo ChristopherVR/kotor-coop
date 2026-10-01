@@ -232,6 +232,7 @@ internal static unsafe partial class PluginHost
         _partyRoster?.Invalidate();
         _partySelectSuppression?.Invalidate();
         _partySelectHostRequest?.Invalidate();
+        _hostConversationRequest?.Invalidate();
         _companionEquipSuppression?.Invalidate();
 
         // ⚠ THIS LINE WAS MISSING, so the spectate controller's ENTIRE teardown had never run
