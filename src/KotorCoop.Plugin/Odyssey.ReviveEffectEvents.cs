@@ -141,6 +141,37 @@ internal static unsafe partial class Odyssey
         }
     }
 
+    private static sbyte _expiryFenceContract;
+
+    /// <summary>
+    /// An effect is about to be freed: retire every queued event-14 (remove-effect) that still
+    /// borrows it. The engine frees the effect and leaves the event queued; when the event runs,
+    /// CSWSCreature::EventHandler reads payload+4 of freed memory (Manaan crash, 0x4FED74, probe
+    /// run 2026-10-01: poison enqueue, effect freed by 0x4D07BB 2 ms later, event due after).
+    /// A null payload is the handler's own explicit no-op. In the normal path the event has
+    /// already been dequeued when the handler frees the effect, so nothing matches.
+    /// </summary>
+    internal static int RetireQueuedEffectExpiries(nint effect)
+    {
+        if (effect == 0) return 0;
+        if (_expiryFenceContract == 0) _expiryFenceContract = (sbyte)(ReviveRemovalContractMatches() ? 1 : -1);
+        if (_expiryFenceContract < 0) return 0;
+        nint queue = ReviveEventQueue();
+        if (!NativeMethods.IsReadable(queue, 12)) return 0;
+        int retired = 0;
+        var walk = new ReviveQueueWalker<ReviveQueueNativeReader>(*(nint*)queue, ReviveQueueLimit, default);
+        while (walk.TryMoveNext(out nint record))
+        {
+            if (!TryReadReviveEvent(record, out var pending)) break;
+            if (pending.Type != 14 || pending.Payload != effect
+                || !NativeMethods.IsWritable(record + 20, 4)) continue;
+            *(nint*)(record + 20) = 0;
+            retired++;
+        }
+
+        return retired;
+    }
+
     private static void ObserveReviveEffectLifetime(nint body, uint target, bool after)
     {
         if (!ReviveEffectLifetimeProbe.Enabled) return;

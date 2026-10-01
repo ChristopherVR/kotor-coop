@@ -135,3 +135,11 @@ install thread; foreign-thread callbacks are ignored. No callback dereferences
 a payload already witnessed as freed. Ninety focused configuration/context/fence
 tests passed, including flag preservation and original ESP adjustment/overflow
 refusal, and the managed native build remains warning-clean.
+
+## Root cause and fix (live, 2026-10-01)
+
+With `revive_effect_probe=1` and the probe flushing each record at once, the crashing event was captured: a type-35 poison effect (subtype 2) was queued for removal by `OnApplyPoison` (caller `0x4DB7EB`), the effect was freed about 2 ms later by the removal routine called from `0x4D07BB`, and the queued event ran afterwards with `freedseen=True`, `pagereadable=False` and faulted at `0x4FED74` (payload `0x539EDF70`). The 43 earlier events all ran first and were freed after. So the trigger is not the revive path: any removal that frees an effect between a queued remove-event and its dispatch crashes the engine, and a downed player taking poison hits makes that common.
+
+Fix: `EffectExpiryFence` splices the effect destructor (`0x503590`) and, before the effect is freed, nulls the payload of every queued event 14 that still borrows it (null payload is the handler's own no-op, verified). In the normal path the event is already dequeued, so nothing matches. On by default; `effect_expiry_fence = 0` opts out. Restricted to the game thread, bounded walk, native layout verified before use.
+
+Live: two runs on the same staged Manaan entry (`artifacts/manaan-underwater-v96/fence-run-20261001-140625`) made 84 and 66 genuine downs and rescues with both games alive each time and 26 `effect fence: retired` lines in total; the old build crashed within 8 to 70 seconds. The probe's immediate flush (`revive_effect_probe=1`) is kept.

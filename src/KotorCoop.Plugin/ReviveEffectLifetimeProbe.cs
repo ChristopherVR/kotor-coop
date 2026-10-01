@@ -27,7 +27,18 @@ internal static unsafe class ReviveEffectLifetimeProbe
         if (!OnObservedThread || _count++ >= 20000) return;
         Ring[_write] = value; _write = (_write + 1) % Capacity;
         if (_write == _drained) _drained = (_drained + 1) % Capacity;
+        // The fault this probe chases kills the process within the frame that enqueued and
+        // dispatched the event (live 2026-10-01: all 43 earlier events enqueued and ran in the
+        // same millisecond, and the fatal one left no record because the frame-hook drain never
+        // came). Opt-in diagnostic only, so write each enqueue/due record out immediately.
+        if (value.Kind is 1 or 3 && !_flushing)
+        {
+            _flushing = true;
+            try { Drain(); } catch { }
+            _flushing = false;
+        }
     }
+    private static bool _flushing;
     private static Entry Snapshot(uint kind, uint target, uint source, uint payload, uint caller, uint body)
     {
         if (!NativeProbeContextRule.MayReadEffectPayload(kind))
@@ -105,8 +116,9 @@ internal static unsafe class ReviveEffectLifetimeProbe
         try
         {
             uint sp = OriginalStack(context);
-            if (!OnObservedThread || !NativeMethods.IsReadable((nint)sp, 4)) return;
             uint effect = *(uint*)(context + NativeProbeContextRule.SavedEcx);
+            EffectExpiryFence.Retire(effect);
+            if (!OnObservedThread || !NativeMethods.IsReadable((nint)sp, 4)) return;
             int index = FindPending(effect);
             if (index < 0 || Freed[index]) return;
             if (!NativeMethods.IsReadable((nint)effect, 12)) return;

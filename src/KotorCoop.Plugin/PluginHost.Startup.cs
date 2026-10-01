@@ -500,10 +500,19 @@ internal static unsafe partial class PluginHost
                 Log($"minigame: delayed-event probe NOT installed: {delayProbeDiagnostic}");
             }
         }
+        EffectExpiryFence.Active = PluginConfig.ReadBool("effect_expiry_fence", true);
         if (ReviveEffectLifetimeProbe.Enabled)
         {
             bool installed = ReviveEffectLifetimeProbe.InstallDestructor(out string effectProbeDiagnostic);
+            EffectExpiryFence.SetThread();
             Log($"reviveprobe: destructor observer installed={installed}: {effectProbeDiagnostic}");
+            if (!installed) EffectExpiryFence.Active = false;
+        }
+        else if (EffectExpiryFence.Active)
+        {
+            bool fenced = EffectExpiryFence.Install(out string fenceDiagnostic);
+            EffectExpiryFence.Active = fenced;
+            Log($"effect fence: installed={fenced}: {fenceDiagnostic}");
         }
 
         // A default-OFF diagnostic (coop.ini gui_probe=1): a splice on Show/HideSWInGameGui
