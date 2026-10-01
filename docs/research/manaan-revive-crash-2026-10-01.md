@@ -128,8 +128,9 @@ payload address. Dispatch/discard use that captured fingerprint rather than read
 the payload again; a matching destructor marks it freed before the engine frees it.
 Known-freed current/queue rows also use the captured fingerprint. `pagereadable`
 is only an OS memory-region query and does not mean the allocation is alive;
-`fingerprintreadable` describes the captured snapshot. Unknown payload snapshots
-are explicitly uncaptured. All ring/history access is restricted to the native
+`fingerprintreadable` describes the captured snapshot. Unknown queued/dispatch
+payloads are explicitly uncaptured metadata only (UID0/type unknown); no payload
+bytes are read. All ring/history access is restricted to the native
 install thread; foreign-thread callbacks are ignored. No callback dereferences
 a payload already witnessed as freed. Ninety focused configuration/context/fence
 tests passed, including flag preservation and original ESP adjustment/overflow

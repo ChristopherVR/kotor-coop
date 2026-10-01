@@ -96,6 +96,12 @@ internal sealed unsafe partial class PhantomController
     {
         uint objectId = _phantomIds[slot];
 
+        if (_phantoms[slot] == 0 || !IsCurrentBody(_phantoms[slot], objectId))
+        {
+            ForgetStaleSlot(slot);
+            return true;
+        }
+
         if (_phantoms[slot] != 0)
         {
             Odyssey.ForgetGait(_phantoms[slot]);
@@ -286,18 +292,26 @@ internal sealed unsafe partial class PhantomController
         // CreateObject returns an id, not a pointer. Resolve it by locating the creature
         // whose object id matches; the plugin is in-process so this is a direct read.
         nint creature = CreatureFinder.FindByObjectId(objectId);
-        if (creature == 0)
+        if (creature == 0 || !IsCurrentBody(creature, objectId))
         {
             PluginHost.Log($"spawned id 0x{objectId:X} but could not resolve its object");
             return;
         }
 
         Odyssey.ClaimCreature(creature);
+        if (!IsCurrentBody(creature, objectId))
+        {
+            return;
+        }
 
         // A phantom belongs to a remote player, so this instance must not be able to fight
         // it or kill it. Done before the creature is ever driven, because the window where
         // a fresh creature stands next to the party is exactly when something shoots it.
         Odyssey.MarkAsRemotePlayer(creature);
+        if (!IsCurrentBody(creature, objectId))
+        {
+            return;
+        }
 
         // Dress the phantom as its remote player immediately, so it never renders a single
         // frame as the commoner blueprint. This is a HALF measure by construction — the client
@@ -312,6 +326,11 @@ internal sealed unsafe partial class PhantomController
         if (owner.Active)
         {
             ApplyAppearance(slot, creature, owner.Appearance);
+            if (!IsCurrentBody(creature, objectId))
+            {
+                ForgetStaleSlot(slot);
+                return;
+            }
         }
 
         // Name it after its player, same reasoning: set before the twin exists so every
@@ -327,6 +346,12 @@ internal sealed unsafe partial class PhantomController
         if (nameLength > 0)
         {
             Odyssey.SetCreatureFirstName(creature, name, nameLength);
+        }
+
+        if (!IsCurrentBody(creature, objectId))
+        {
+            ForgetStaleSlot(slot);
+            return;
         }
 
         _phantoms[slot] = creature;

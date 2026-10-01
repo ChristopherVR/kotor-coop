@@ -153,6 +153,14 @@ internal sealed unsafe partial class PhantomController
         {
             RemoteView remote = i < wanted ? block.GetRemote(i) : default;
 
+            // A module/script can retire a body after it was spawned. Validate before
+            // the inactive-peer destroy branch as well as before the drive reads.
+            if (_phantoms[i] != 0 && !IsCurrentBody(_phantoms[i], _phantomIds[i]))
+            {
+                ForgetStaleSlot(i);
+                continue;
+            }
+
             if (!remote.Active)
             {
                 // The peer that owned this slot is gone. Destroy the body rather than leaving
@@ -212,8 +220,23 @@ internal sealed unsafe partial class PhantomController
             }
 
             ApplyAppearance(i, phantom, remote.Appearance);
+            if (!IsCurrentBody(phantom, _phantomIds[i]))
+            {
+                ForgetStaleSlot(i);
+                continue;
+            }
             ApplyEquipment(i);
+            if (!IsCurrentBody(phantom, _phantomIds[i]))
+            {
+                ForgetStaleSlot(i);
+                continue;
+            }
             ApplyName(i, phantom);
+            if (!IsCurrentBody(phantom, _phantomIds[i]))
+            {
+                ForgetStaleSlot(i);
+                continue;
+            }
 
             // The peer left combat: release every local creature still locked onto their
             // phantom. The phantom is min-1-hp, so it never reads dead and an attacker
@@ -930,7 +953,11 @@ internal sealed unsafe partial class PhantomController
         uint chosen = PeerIdentityRule.ChooseAppearance(published, _appearanceCache[slot]);
 
         ushort* field = (ushort*)(phantom + CreAppearanceType);
-        ushort onBody = *field;
+        ushort onBody = 0;
+        if (!CreatureFinder.TryReadSelf((nint)field, (byte*)&onBody, sizeof(ushort)))
+        {
+            return;
+        }
         if (!PeerIdentityRule.ShouldApply(chosen, onBody, _twinDressed[slot]))
         {
             return;

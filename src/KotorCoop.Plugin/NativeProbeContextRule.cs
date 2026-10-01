@@ -9,6 +9,9 @@ internal static class NativeProbeContextRule
     public const int SavedEsp = 12;
     public const int SavedEcx = 24;
     public const int OriginalEspAdjustment = 4;
+    // Only observation points with a live owner may read payload bytes. A queued
+    // or dispatched pointer is borrowed and can already be freed, even if mapped.
+    public static bool MayReadEffectPayload(uint phase) => phase is 1 or 2 or 5 or 6;
     public static bool TryReadOriginalStack(System.ReadOnlySpan<byte> context, out uint original)
     {
         original = 0;

@@ -30,6 +30,8 @@ internal static unsafe class ReviveEffectLifetimeProbe
     }
     private static Entry Snapshot(uint kind, uint target, uint source, uint payload, uint caller, uint body)
     {
+        if (!NativeProbeContextRule.MayReadEffectPayload(kind))
+            return MetadataOnly(kind, target, source, payload, caller, body);
         bool readable = NativeMethods.IsReadable((nint)payload, 8);
         bool header = NativeMethods.IsReadable((nint)payload, 12);
         bool creator = NativeMethods.IsReadable((nint)payload, 28);
@@ -41,6 +43,13 @@ internal static unsafe class ReviveEffectLifetimeProbe
             creator ? *(uint*)(payload + 24) : 0,
             links ? *(uint*)(payload + 40) : 0, links ? *(uint*)(payload + 44) : 0,
             bodyReadable ? *(uint*)(body + 4) : 0, bodyReadable ? *(uint*)body : 0, 0, false, false, readable);
+    }
+    private static Entry MetadataOnly(uint kind, uint target, uint source, uint payload, uint caller, uint body)
+    {
+        bool bodyReadable = NativeMethods.IsReadable((nint)body, 8);
+        return new(kind, target, source, payload, 0, uint.MaxValue, caller, body, false,
+            uint.MaxValue, 0, 0, 0, bodyReadable ? *(uint*)(body + 4) : 0,
+            bodyReadable ? *(uint*)body : 0, 0, false, false, NativeMethods.IsReadable((nint)payload, 8));
     }
     private static bool OnObservedThread => Enabled && _thread != 0 && GetCurrentThreadId() == _thread;
     private static int FindPending(uint payload)
@@ -80,9 +89,9 @@ internal static unsafe class ReviveEffectLifetimeProbe
         int pending = FindPending(payload);
         // A captured fingerprint is enough: never read payload data again here,
         // especially after the matching destructor was seen. Unknown payloads
-        // have no free witness and their guarded snapshot is labelled uncaptured.
+        // receive pointer/target/page metadata only, never payload-byte reads.
         Entry entry = pending < 0
-            ? Snapshot(discarded ? 4u : 3u, *(uint*)(sp + 0x30), *(uint*)(sp + 0x18), payload, 0, body)
+            ? MetadataOnly(discarded ? 4u : 3u, *(uint*)(sp + 0x30), *(uint*)(sp + 0x18), payload, 0, body)
             : Pending[pending] with { Kind = discarded ? 4u : 3u,
                 Target = *(uint*)(sp + 0x30), Source = *(uint*)(sp + 0x18), Caller = 0,
                 Body = body, BodyId = bodyReadable ? *(uint*)(body + 4) : 0,
@@ -136,14 +145,14 @@ internal static unsafe class ReviveEffectLifetimeProbe
     {
         if (!OnObservedThread) return;
         int pending = FindPending(payload);
-        if (pending >= 0 && Freed[pending])
+        if (pending >= 0)
         {
             Record(Pending[pending] with { Kind = after ? 8u : 7u, Target = target,
-                Source = source, Body = body, Caller = 0, FreedSeen = true,
+                Source = source, Body = body, Caller = 0, FreedSeen = Freed[pending],
                 PageReadable = NativeMethods.IsReadable((nint)payload, 8) });
             return;
         }
-        Record(Snapshot(after ? 8u : 7u, target, source, payload, 0, body));
+        Record(MetadataOnly(after ? 8u : 7u, target, source, payload, 0, body));
     }
     public static void Drain()
     {

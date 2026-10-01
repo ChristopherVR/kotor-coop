@@ -5,6 +5,18 @@ namespace KotorCoop.Tests;
 
 public sealed class NativeProbeContextRuleTests
 {
+    [Theory]
+    [InlineData(1u, true)]
+    [InlineData(2u, true)]
+    [InlineData(3u, false)]
+    [InlineData(4u, false)]
+    [InlineData(5u, true)]
+    [InlineData(6u, true)]
+    [InlineData(7u, false)]
+    [InlineData(8u, false)]
+    [InlineData(uint.MaxValue, false)]
+    public void BorrowedQueueAndDispatchPointersNeverAuthorizePayloadReads(uint phase, bool expected) =>
+        Assert.Equal(expected, NativeProbeContextRule.MayReadEffectPayload(phase));
     [Fact]
     public void SavedFlagsAreNotReadAsCallerAndShortOverflowContextsRefuse()
     {
