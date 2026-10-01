@@ -323,6 +323,7 @@ internal sealed unsafe partial class PhantomController
         // mid-transition publishes 0, and 0 must never mean "use whatever the body has".
         RemoteView owner = block.GetRemote(slot);
         _phantomIds[slot] = objectId;
+        ScriptDestroyGuardHook.NotePhantomBody(objectId);
         if (owner.Active)
         {
             ApplyAppearance(slot, creature, owner.Appearance);

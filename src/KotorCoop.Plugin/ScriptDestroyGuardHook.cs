@@ -128,6 +128,20 @@ internal static unsafe class ScriptDestroyGuardHook
         PluginHost.Log($"script destroy guard: protecting {Snapshot.Count} creature(s) of the host's world until the census arrives");
     }
 
+    private static readonly HashSet<uint> PhantomBodies = [];
+
+    /// <summary>A peer stand-in this plugin created: no script may destroy it. Only the
+    /// plugin's own bypassed destroy removes one.</summary>
+    public static void NotePhantomBody(uint id)
+    {
+        if (PhantomBodies.Count > 4096)
+        {
+            PhantomBodies.Clear();
+        }
+
+        PhantomBodies.Add(id);
+    }
+
     private static bool IsProtected(uint id)
     {
         long now = Environment.TickCount64;
@@ -138,6 +152,19 @@ internal static unsafe class ScriptDestroyGuardHook
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvThiscall)])]
     private static void OnDestroyEventPosted(nint aiMaster, uint days, uint time, uint source, uint target, uint eventId, uint data)
     {
+        if (!Bypass && eventId == *(uint*)DestroyEventIdAddress && PhantomBodies.Contains(target))
+        {
+            Refused++;
+            if (_logged < 40)
+            {
+                _logged++;
+                PluginHost.Log($"script destroy guard: refused a script's DestroyObject on peer body 0x{target:X} "
+                    + $"(source 0x{source:X})");
+            }
+
+            return;
+        }
+
         if (!Bypass && eventId == *(uint*)DestroyEventIdAddress && IsProtected(target))
         {
             Refused++;

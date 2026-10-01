@@ -9,3 +9,15 @@ Matching immutable PDB and native instruction decoding identify both faults as p
 The narrow patch validates the cached pointer against the current server object array, typed creature vtable, current ID, readable header and readable appearance field before either inactive-peer destruction or active drive. A stale slot is forgotten without destroying by its old ID, protecting a legitimate replacement occupant. Destruction independently checks identity; the spawn path checks current identity before and after its engine calls. Appearance reads use nonfaulting process-memory copies. The change adds no shared-block or protocol layout.
 
 Focused phantom tests passed43/43 and Plugin Release/x86 built with warnings treated as errors, zero warnings/errors. These prove the decision rules and source compilation; live replay of the exact original transition is still required before claiming repair.
+
+## Live replay, 2026-10-01 (three rounds)
+
+Same checkpoint (`checkpoint-upper-city-before-cantina`), same `usedoor UpperNorth`, private game6 (host) / game7 (joiner). Evidence in `artifacts/natural-campaign-v95/uppernorth-v97*-replay`.
+
+- **v97 (identity guard only):** no crash, but the peer never appeared. Every freshly spawned body was destroyed within about 5 ms and the controller respawned it about twice a second (roughly 150 times per game, in both areas).
+- **v97b (added refusal logging):** every refusal showed `current 0x0`, header and appearance unreadable, vtable 0: the body's memory was already gone, so the guard was correct and something was destroying the body. The first death followed `triggers: fired OnEnter of 0x3F for peer 1` by 5 ms.
+- **v97c:** `ScriptDestroyGuardHook` now also refuses a script's `DestroyObject` aimed at a body this plugin created for a peer (`NotePhantomBody`). Log: `script destroy guard: refused a script's DestroyObject on peer body 0xD7 (source 0x3B)` (one per game per crossing). Result: zero identity refusals, zero `forgot stale` lines, the transition completed on both games, the peer body rendered on both (Rig1/Rig2 labels), and a walk back through the link also survived with one phantom alive on each side.
+
+So the original crash had two parts: a trigger or area script destroying the peer's stand-in body, and our cache then reading the freed body. Both are closed. The guard from the first patch stays as the backstop.
+
+Not yet explained: after the walk back the joiner's body spawned at (221.22, 58.42) while the host's spawned at (187.71, 113.36). Both arrived at 187.7, 113.4 per `where`, so the joiner's body spawn position needs a look. Only this one crossing and one return were replayed; the Carth dialogue interruption seen once on the first attempt was not re-examined.
