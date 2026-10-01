@@ -254,3 +254,7 @@ Built and automatically tested, but nobody has watched them on the running game 
 If you try one of these and it works — or doesn't — that's the most useful bug report there is.
 
 [PLAYTEST.md](../PLAYTEST.md) lists each one with the exact steps and what to look for; run `KotorCoop.Agent.exe logs` afterwards and attach the zip.
+
+## Addendum 2026-10-02: experience, measured live (`artifacts/minigames-xp-live-20261002-0551/`)
+
+Both players connected, no reload, XP read from engine memory. From equal totals (3055/3055): a host kill gave 3255/3255, the Gadon quest conversation 3255 to 3885 on both, the swoop heat win plus Brejik scene 3885 to 4215 to 4915 on both; `grantxp` proxies converged in both directions. From unequal totals (joiner 7765, host 5765): a host-only +300 left host 6065 and joiner 7765, and a joiner +100 did not lift the host. A carried co-op character (host 0, joiner 3005) earned +75 and +50 for one kill because each engine grants by its own level. Cause: `PartyPump.PumpProgression` max-merges, `ExperienceMerge` baselines a peer's first report, and the client writes max(host, own); it never sums. The row "Kill and story experience end up the same on both sides" was true only for equal totals. Not observed: a joiner-led story reward through a real script, a joiner-led kill. Also seen: `grantgold` on the host raised the joiner's wallet too and later totals diverged (host 1380, joiner 1860 to 1900), not investigated.

@@ -162,6 +162,18 @@ internal sealed partial class TransitionPump
             return;
         }
 
+        // ⚠ A PLAYER ON A MINIGAME TRACK DOES NOT FOLLOW ANYONE OFF IT. The guards below refuse
+        // following ONTO a track, but a joiner who is itself racing (a joiner-led race) saw the
+        // host sitting in the shared module, read that as "separated", and was warped back
+        // after about seven seconds on every joiner-led race (live 2026-10-02, Taris, Manaan
+        // and Tatooine; the race ran its full two minutes with --no-follow). The track hands
+        // the player back by itself through its own return script.
+        if (settings.LockPeersDuringMinigame
+            && MinigameModuleRule.IsMinigameModule(local.Module, settings.ExtraMinigameModules))
+        {
+            return;
+        }
+
         RemotePeer? host = FindHostPeer(peers);
         string target = host?.State.Module ?? string.Empty;
 

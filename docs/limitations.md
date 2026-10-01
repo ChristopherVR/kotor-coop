@@ -74,7 +74,7 @@ This page describes the current development version, which may be newer than a d
 | Going down, being rescued, a full wipe | **Works, with a catch** | A downed player watches from a spectator camera and can be rescued by their partner or a companion. After a full wipe the host reloads and the other player recovers on its own, keeping their own character and gear. The catch: repeated rescues used to crash the host in some fights on Manaan (now fixed, and tested through about 150 rescues), but a clean game-over sequence has not been watched start to finish. |
 | Enemies scale with the number of players | **Works** | With more than one player, enemies have more health and hit harder (two players: about half as much health again and slightly harder hits) and shops stock more. Alone, nothing changes. |
 | Placing a mine yourself | **Works, with a catch** | Off by default; you turn it on in the settings. When on, your partner sees the mine where you put it and enemies set it off for both of you. |
-| Experience and levelling | **Works** | Kill and story experience end up the same on both sides. |
+| Experience and levelling | **Works, with a catch** | Kill and story experience are earned by both players' games at the same time. If you both start with the same amount, you stay level with each other. If one character is already ahead (for example you brought a higher-level character), they keep their lead: experience is matched up to the higher total, never added together, so a gain by the one in front does not lift the other. |
 | The Endar Spire and early Taris duels | **Not a mod limitation** | The game's own tutorial stops anyone dropping below 1 hit point there, so nobody can be downed in those fights. |
 
 ## Talking to people

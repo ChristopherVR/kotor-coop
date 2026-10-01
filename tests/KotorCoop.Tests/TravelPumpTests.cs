@@ -315,6 +315,24 @@ public class TravelPumpTests
         Assert.Empty(bridge.Requests);
     }
 
+    [Theory]
+    [InlineData("tar_m03mg")]
+    [InlineData("manm26mg")]
+    [InlineData("tat_m17mg")]
+    public void APlayerOnAMinigameTrackDoesNotFollowTheHostOffIt(string track)
+    {
+        // Joiner-led race: the racer sits on the track while the host stays in the shared
+        // module. That is not "separated"; following would warp the racer off the track a few
+        // seconds in (live 2026-10-02).
+        (CoopAgent agent, TravelBridge bridge, StubSession session) = Build();
+        bridge.Local = new PlayerState(Vector3f.Zero, 0f, track, 20, 0);
+        session.Peers.Add(HostPeer(HostModule));
+
+        agent.PumpOnce();
+
+        Assert.Empty(bridge.Requests);
+    }
+
     [Fact]
     public void StuntModulesAreNeverFollowedInto()
     {
