@@ -149,7 +149,7 @@ internal sealed class HostConversationRequestController(SharedBlockView block)
         return null;
     }
 
-    private bool TryStart()
+    private unsafe bool TryStart()
     {
         byte[] tag = Encoding.ASCII.GetBytes(_pendingTag);
         nint target = Odyssey.FindDialoguePartnerByTag(tag);
@@ -158,7 +158,18 @@ internal sealed class HostConversationRequestController(SharedBlockView block)
             return false;
         }
 
-        // forced: ignore the start range, the host's player is not necessarily near the target.
+        // The same queued ActionStartConversation the `startdialog` dev verb uses, ignoring the
+        // start range: the host's player is not necessarily near the target. This is the path
+        // that opens a DOOR's computer panel (the Manaan airlock); the auto-join start did not
+        // (live 2026-10-02: the host's relay-started airlock had no panel and no replies).
+        nint player = Odyssey.GetPlayerCreaturePointer();
+        if (player != 0 && *(uint*)(target + 4) is uint targetId && targetId != 0
+            && Odyssey.StartConversation(*(uint*)(player + 4), targetId, _pendingResref, out _,
+                ignoreStartRange: true))
+        {
+            return true;
+        }
+
         return Odyssey.StartDialogueWith(tag, _pendingResref, forced: true, partner: target);
     }
 }

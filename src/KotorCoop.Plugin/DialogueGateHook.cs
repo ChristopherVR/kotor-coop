@@ -312,7 +312,12 @@ internal static unsafe class DialogueGateHook
             // A solo-section conversation (the Manaan airlock) must not be started by a
             // joiner: its script walks that one player into a solo module alone, which crashed
             // the joiner twice in the original engine (live 2026-10-01). Host-only.
-            if (Enabled && JoinerIsClient && IsHostOnlyConversation(target))
+            // Only a FRESH start: while the host's conversation holds the token, a joiner's open
+            // is the join/spectate of that very conversation (live 2026-10-02: the gate refused
+            // the joiner's own auto-join and re-relayed it every 4 s, so it never spectated),
+            // and an open this instance asked for itself (BypassGrants) is never refused.
+            if (Enabled && JoinerIsClient && !PeerHoldsConversation && BypassGrants <= 0
+                && IsHostOnlyConversation(target))
             {
                 StashHostLedCapture(target);
                 _soloBlockedCount++;
