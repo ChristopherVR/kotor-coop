@@ -311,7 +311,7 @@ internal static unsafe class DialogueGateHook
             // A solo-section conversation (the Manaan airlock) must not be started by a
             // joiner: its script walks that one player into a solo module alone, which crashed
             // the joiner twice in the original engine (live 2026-10-01). Host-only.
-            if (Enabled && JoinerIsClient && IsSoloOnlyResref())
+            if (Enabled && JoinerIsClient && IsHostOnlyConversation(target))
             {
                 _soloBlockedCount++;
                 return 1;
@@ -347,11 +347,17 @@ internal static unsafe class DialogueGateHook
         }
     }
 
-    /// <summary>Allocation-free match of <see cref="LastStartResref"/> against the solo-only
-    /// conversation (same name as <c>DialogueAutoJoinRule.NeverAutoJoin</c>).</summary>
-    private static bool IsSoloOnlyResref()
+    /// <summary>Conversations only the HOST may start, matched allocation-free on the resref the
+    /// engine was asked for (<see cref="LastStartResref"/>) or, for a default-dialogue start that
+    /// names none, on the target's tag. The Manaan airlock walks one player into a solo module
+    /// (crashed the joiner twice); the dark-side temple's Bastila scene is driven by an event on
+    /// the engine that owns her AI, so a joiner-led start ran the scene's opening and then did
+    /// nothing (live 2026-10-01).</summary>
+    private static bool IsHostOnlyConversation(nint target) =>
+        ResrefIs("man28_airlock"u8) || ResrefIs("unk44_evilbast"u8) || TargetTagIs(target, "bastilae"u8);
+
+    private static bool ResrefIs(ReadOnlySpan<byte> want)
     {
-        ReadOnlySpan<byte> want = "man28_airlock"u8;
         for (int i = 0; i < want.Length; i++)
         {
             byte c = LastStartResref[i];
@@ -360,6 +366,23 @@ internal static unsafe class DialogueGateHook
         }
 
         return LastStartResref.Length == want.Length || LastStartResref[want.Length] == 0;
+    }
+
+    private static bool TargetTagIs(nint target, ReadOnlySpan<byte> want)
+    {
+        if (target is <= 0x10000 or >= 0x7FFF_0000) return false;
+        nint chars = *(nint*)(target + ObjTag);
+        int length = *(int*)(target + ObjTag + 4);
+        if (chars is <= 0x10000 or >= 0x7FFF_0000 || length is <= 0 or > MaxTagBytes) return false;
+        byte* actual = (byte*)chars;
+        if (actual[length - 1] == 0) length--;
+        if (length != want.Length) return false;
+        for (int i = 0; i < length; i++)
+        {
+            if (Lower(actual[i]) != want[i]) return false;
+        }
+
+        return true;
     }
 
     private static uint _soloBlockedCount;
