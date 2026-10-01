@@ -47,6 +47,13 @@ public enum DialogueAutoJoinMode
 /// </summary>
 public static class DialogueAutoJoinRule
 {
+    /// <summary>Conversations whose node scripts walk ONE player into a solo module and strip
+    /// the party. A watcher that auto-joins runs those scripts on its own engine and follows
+    /// (live 2026-10-01, Manaan: the joiner left the station with the host in 3 of 5 airlock
+    /// runs). Matched case-insensitively against the dialogue resref.</summary>
+    public static bool NeverAutoJoin(string resref) =>
+        string.Equals(resref, "man28_airlock", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>
     /// True when this peer should send the same join request a click on the partner NPC would
     /// send (the existing adopt path already carries it from there — see

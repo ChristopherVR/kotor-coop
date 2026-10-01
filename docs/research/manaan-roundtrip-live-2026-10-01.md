@@ -13,3 +13,9 @@ Staged: `tp` inside modules, `setglobal MAN_SHORTCUT true` (station door `28d`),
 | Host disconnect/reconnect mid-trip | Pass. The joiner reconnected as peer 2 and was not stranded; the host was released via the shortcut. |
 
 Leads: the parking lock (`MinigameLockController`, flag set agent-side by `MinigameModuleRule`) never engaged because the host plugin raised no flag, and a joiner that watches the host's airlock conversation executes its transition script locally. `0x63D4B3` is the same retail `GetServerObject` stale-pointer family recorded in transition-crashes.md.
+
+## Retest after fixes (2026-10-01, 18:15 build)
+
+Root causes: (1) `MinigameLockRule.IsRacing` required the minigame flag AND a track module, and the Manaan envirosuit modules (`manm28ab`, `manm28ad`) never set the flag, so the parking lock never engaged; (2) the joiner auto-joined the host's `man28_airlock` conversation and ran its transition script. Fixes: a peer in either solo module now locks without the flag (away peers never lock; a local player in one is never locked), and `man28_airlock` is never auto-joined (`DialogueAutoJoinRule.NeverAutoJoin`).
+
+Result (`artifacts/manaan-roundtrip-live-20261001-1815/`): parking 3 of 3 host-led airlocks plus the Rift, joiner moved 0 units, `minigame lock: Lanik started a minigame - holding control until it ends`, notice "is in a solo section - waiting"; released on every return (`finished - control is yours again`, one phantom each); the black screen after the Rift shortcut return did not recur (a post-load "Item(s) Received" popup needed one click); host disconnect in the Rift: joiner reconnected, stayed held until the host returned. Not repeated: joiner-led trip (two original-engine crashes remain), star map, control-station route.

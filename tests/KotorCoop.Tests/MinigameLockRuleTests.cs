@@ -251,4 +251,48 @@ public class MinigameLockRuleTests
         Assert.False(decision.Locked);
         Assert.Contains("left the session", decision.Reason);
     }
+
+    [Fact]
+    public void APeerInAManaanSoloModuleLocksEvenWithoutTheMinigameFlag()
+    {
+        // Live 2026-10-01: the envirosuit modules never set the minigame bit, so the joiner
+        // was never parked while the host was underwater.
+        MinigameLockPeer diver = new(7, "Malak", false, "manm28ab");
+
+        MinigameLockDecision decision = Rule.Decide(
+            localInMinigame: false, [diver], currentOwnerId: 0, lockStartedAtMs: 0, nowMs: 1000);
+
+        Assert.True(decision.Locked);
+        Assert.Equal(7u, decision.OwnerId);
+    }
+
+    [Fact]
+    public void AnAwayPeerStillRecordedInASoloModuleDoesNotLock()
+    {
+        MinigameLockPeer gone = new(7, "Malak", false, "manm28ad", Away: true);
+
+        MinigameLockDecision decision = Rule.Decide(
+            localInMinigame: false, [gone], currentOwnerId: 0, lockStartedAtMs: 0, nowMs: 1000);
+
+        Assert.False(decision.Locked);
+    }
+
+    [Fact]
+    public void ASoloModuleOwnerWhoLeavesTheModuleReleasesTheLock()
+    {
+        MinigameLockPeer back = new(7, "Malak", false, "manm28aa");
+
+        MinigameLockDecision decision = Rule.Decide(
+            localInMinigame: false, [back], currentOwnerId: 7, lockStartedAtMs: 0, nowMs: 1000);
+
+        Assert.False(decision.Locked);
+    }
+
+    [Theory]
+    [InlineData("man28_airlock", true)]
+    [InlineData("MAN28_AIRLOCK", true)]
+    [InlineData("dan13_dorak", false)]
+    [InlineData("", false)]
+    public void TheManaanAirlockConversationIsNeverAutoJoined(string resref, bool expected) =>
+        Assert.Equal(expected, DialogueAutoJoinRule.NeverAutoJoin(resref));
 }

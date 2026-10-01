@@ -45,6 +45,13 @@ public static class MinigameModuleRule
     public static readonly string[] BuiltIn =
         ["tar_m03mg", "manm26mg", "tat_m17mg", "m12ab", "manm28ab", "manm28ad"];
 
+    /// <summary>The envirosuit modules from <see cref="BuiltIn"/>: solo by design but never flagged
+    /// as a minigame by the engine, so a peer standing in one is waiting-worthy on the module
+    /// alone (live 2026-10-01: with the flag required, the joiner was never parked on Manaan).</summary>
+    public static bool IsSoloEnvironmentModule(string module) =>
+        string.Equals(module, "manm28ab", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(module, "manm28ad", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>True when <paramref name="module"/> is a known single-seat minigame area.
     /// An empty or unreadable name is never a match — a follow decision made on a placeholder
     /// is the caller's own separate guard (<c>ModuleNameGuard</c>).</summary>

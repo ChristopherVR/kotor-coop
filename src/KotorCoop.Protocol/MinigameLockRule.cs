@@ -142,7 +142,9 @@ public readonly record struct MinigameLockRule(bool Enabled, int TimeoutMs)
     /// they can simply ignore? See the class remarks for why the module test carries as much
     /// weight as the flag.</summary>
     private static bool IsRacing(MinigameLockPeer peer, IReadOnlyList<string>? extraModules) =>
-        peer.InMinigame && MinigameModuleRule.IsMinigameModule(peer.Module, extraModules);
+        !peer.Away
+        && (peer.InMinigame || MinigameModuleRule.IsSoloEnvironmentModule(peer.Module))
+        && MinigameModuleRule.IsMinigameModule(peer.Module, extraModules);
 
     private static string Describe(string name) => name.Length == 0 ? "A peer" : name;
 }
@@ -151,4 +153,4 @@ public readonly record struct MinigameLockRule(bool Enabled, int TimeoutMs)
 /// peer the decision actually reads, so a test does not have to build a whole
 /// <c>RemotePeer</c>. <paramref name="Module"/> is the peer's own published module name — the
 /// half of the decision that separates a swoop track from a Pazaak table.</summary>
-public readonly record struct MinigameLockPeer(uint PeerId, string Name, bool InMinigame, string Module);
+public readonly record struct MinigameLockPeer(uint PeerId, string Name, bool InMinigame, string Module, bool Away = false);

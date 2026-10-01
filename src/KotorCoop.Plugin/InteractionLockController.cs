@@ -786,6 +786,11 @@ internal sealed unsafe partial class InteractionLockController(SharedBlockView b
             && TagEquals(tag, length, block.RemoteDialoguePartnerTag)
             ? System.Text.Encoding.ASCII.GetString(block.RemoteDialogueResref, resrefLength)
             : string.Empty;
+        if (DialogueAutoJoinRule.NeverAutoJoin(resref))
+        {
+            return;
+        }
+
         if (Odyssey.StartDialogueWith(new ReadOnlySpan<byte>(tag, length), resref,
                 isForced, partnerCreature))
         {
