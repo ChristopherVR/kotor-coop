@@ -113,6 +113,7 @@ internal static unsafe partial class Odyssey
             return false;
         }
         System.Span<ReviveRemovalEvent> pendingRemovals = stackalloc ReviveRemovalEvent[ReviveRemovalCapacity];
+        ObserveReviveEffectLifetime(reviveBody, objectId, after: false);
         if (!SnapshotReviveRemovalEvents(objectId, reviveBody, pendingRemovals,
             out int pendingRemovalCount, out nint reviveQueue))
         {
@@ -156,6 +157,7 @@ internal static unsafe partial class Odyssey
 
         RetireReviveRemovalEvents(objectId, reviveBody, reviveWorld, reviveQueue,
             pendingRemovals[..pendingRemovalCount]);
+        ObserveReviveEffectLifetime(reviveBody, objectId, after: true);
 
         return true;
     }

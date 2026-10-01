@@ -150,7 +150,7 @@ internal static unsafe class DelayEventProbeHook
         _recordEvents = PluginConfig.ReadBool("delay_probe_events", false);
 
         nint delayCb = (nint)(delegate* unmanaged[Cdecl]<uint, void>)&OnDelayCommand;
-        nint addCb = (nint)(delegate* unmanaged[Cdecl]<uint, uint, uint, uint, void>)&OnAddEvent;
+        nint addCb = (nint)(delegate* unmanaged[Cdecl]<uint, void>)&OnAddEvent;
         nint dueCb = (nint)(delegate* unmanaged[Cdecl]<uint, void>)&OnDue;
         nint dropCb = (nint)(delegate* unmanaged[Cdecl]<uint, void>)&OnDiscard;
 
@@ -163,11 +163,10 @@ internal static unsafe class DelayEventProbeHook
             return false;
         }
 
-        // AddEventDeltaTime(int, int deltaMs, uint objId2, uint objId1, int eventType, void*):
-        // four contiguous stack slots forwarded with the SAME displacement four times, because
-        // every push moves esp down by exactly the 4 bytes that separate the next argument.
+        // The saved context exposes the original caller/arguments for the optional
+        // effect-lifetime trace; the existing four log values keep their meanings.
         if (!Splice(AddEvent, AddEventAnchor, AddEventPrologue, AddEventResume,
-                addCb, PushKind.FourStackArgs, 0x34, out string b))
+                addCb, PushKind.SavedContext, 0, out string b))
         {
             diagnostic = $"AddEventDeltaTime: {b}";
             return false;
@@ -175,7 +174,7 @@ internal static unsafe class DelayEventProbeHook
 
         // The drain, after the resolve succeeded: [esp+0x34] holds the resolved object pointer
         // (0x20 further along once pushad has run).
-        if (!Splice(Due, DueAnchor, DuePrologue, DueResume, dueCb, PushKind.OneStackArg, 0x54, out string c))
+        if (!Splice(Due, DueAnchor, DuePrologue, DueResume, dueCb, PushKind.SavedContext, 0, out string c))
         {
             diagnostic = $"drain due: {c}";
             return false;
@@ -185,7 +184,7 @@ internal static unsafe class DelayEventProbeHook
         // here says "the event's object no longer exists" and a non-zero says "it exists but
         // its type byte matched none of the three dispatch branches".
         if (!Splice(Discard, DiscardAnchor, DiscardPrologue, DiscardResume, dropCb,
-                PushKind.OneStackArg, 0x54, out string d))
+                PushKind.SavedContext, 0, out string d))
         {
             diagnostic = $"drain discard: {d}";
             return false;
@@ -207,8 +206,13 @@ internal static unsafe class DelayEventProbeHook
         /// <summary>Forward four CONTIGUOUS stack slots, highest first, all read through the
         /// same displacement — see <see cref="Install"/>'s own comment.</summary>
         FourStackArgs,
+        SavedContext,
 
     }
+
+    internal static bool SpliceContext(nint site, ReadOnlySpan<byte> anchor,
+        ReadOnlySpan<byte> prologue, nint resume, nint callback, out string diagnostic) =>
+        Splice(site, anchor, prologue, resume, callback, PushKind.SavedContext, 0, out diagnostic);
 
     private static bool Splice(
         nint site,
@@ -251,10 +255,14 @@ internal static unsafe class DelayEventProbeHook
         int n = 0;
         int args;
 
-        s[n++] = 0x60; // pushad
+        foreach (byte code in NativeProbeContextRule.SaveAndPushContext[..2]) s[n++] = code;
 
         switch (push)
         {
+            case PushKind.SavedContext:
+                foreach (byte code in NativeProbeContextRule.SaveAndPushContext[2..]) s[n++] = code;
+                args = 1;
+                break;
             case PushKind.Ecx:
                 s[n++] = 0x51; // push ecx
                 args = 1;
@@ -262,7 +270,7 @@ internal static unsafe class DelayEventProbeHook
 
             case PushKind.OneStackArg:
                 s[n++] = 0xFF; s[n++] = 0xB4; s[n++] = 0x24; // push dword ptr [esp+disp32]
-                *(int*)(s + n) = displacement;
+                *(int*)(s + n) = displacement + 4; // saved flags
                 n += 4;
                 args = 1;
                 break;
@@ -271,7 +279,7 @@ internal static unsafe class DelayEventProbeHook
                 for (int i = 0; i < 4; i++)
                 {
                     s[n++] = 0xFF; s[n++] = 0xB4; s[n++] = 0x24;
-                    *(int*)(s + n) = displacement;
+                    *(int*)(s + n) = displacement + 4;
                     n += 4;
                 }
 
@@ -283,8 +291,15 @@ internal static unsafe class DelayEventProbeHook
         *(int*)(s + n) = (int)(callback - (stub + n + 4));
         n += 4;
 
-        s[n++] = 0x83; s[n++] = 0xC4; s[n++] = (byte)(args * 4); // add esp, N (cdecl cleanup)
-        s[n++] = 0x61;                                           // popad
+        if (args == 1)
+        {
+            foreach (byte code in NativeProbeContextRule.RestoreContext) s[n++] = code;
+        }
+        else
+        {
+            s[n++] = 0x83; s[n++] = 0xC4; s[n++] = (byte)(args * 4);
+            s[n++] = 0x61; s[n++] = 0x9D;
+        }
 
         for (int i = 0; i < prologue.Length; i++)
         {
@@ -350,13 +365,16 @@ internal static unsafe class DelayEventProbeHook
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static void OnAddEvent(uint deltaMs, uint objId2, uint objId1, uint eventType)
+    private static void OnAddEvent(uint context)
     {
         try
         {
+            uint sp = ReviveEffectLifetimeProbe.OriginalStack(context);
+            if (!NativeMethods.IsReadable((nint)sp, 28)) return;
+            ReviveEffectLifetimeProbe.Enqueue(context);
             if (_recordEvents)
             {
-                Record(2, deltaMs, objId2, objId1, eventType);
+                Record(2, *(uint*)(sp + 8), *(uint*)(sp + 12), *(uint*)(sp + 16), *(uint*)(sp + 20));
             }
         }
         catch
@@ -365,10 +383,14 @@ internal static unsafe class DelayEventProbeHook
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static void OnDue(uint objectPointer)
+    private static void OnDue(uint context)
     {
         try
         {
+            uint sp = ReviveEffectLifetimeProbe.OriginalStack(context);
+            if (!NativeMethods.IsReadable((nint)sp, 0x38)) return;
+            uint objectPointer = *(uint*)(sp + 0x34);
+            ReviveEffectLifetimeProbe.Dispatch(context, false);
             if (!_recordEvents)
             {
                 return;
@@ -388,10 +410,14 @@ internal static unsafe class DelayEventProbeHook
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static void OnDiscard(uint objectPointer)
+    private static void OnDiscard(uint context)
     {
         try
         {
+            uint sp = ReviveEffectLifetimeProbe.OriginalStack(context);
+            if (!NativeMethods.IsReadable((nint)sp, 0x38)) return;
+            uint objectPointer = *(uint*)(sp + 0x34);
+            ReviveEffectLifetimeProbe.Dispatch(context, true);
             Record(4, objectPointer, 0, 0, 0);
         }
         catch

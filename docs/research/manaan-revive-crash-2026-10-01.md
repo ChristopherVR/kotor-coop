@@ -86,3 +86,51 @@ exercise a foreign head followed by a matching second event, a cyclic queue and
 an unreadable second node. Twelve focused tests and warning-clean managed native
 compilation passed. A fresh immutable corrected build and matching live witness
 are still pending.
+
+### Corrected traversal still fails; actual effect lifetime is unresolved
+
+The corrected immutable `9e1e957` native DLL (SHA
+`807298C2CD3B2D14EADD0F381B47DB633A2F9CCD9DB745B02C1C86A90376B122`)
+passed 5,592 fast tests and warning-clean AOT publication. The new private4/5
+replay, host56464/client49796, again failed at `0x4FED74`, at09:52:01.044.
+There were no captured/retired type57 event witnesses. The host's sampled native
+revive serial/applied counters progressed through0,1,2,3; its short downed windows
+were visible in native death/NPC logs, not the500ms sampled DownedFlag. The client
+remained alive; its binary crash file contains a Windows thread-name notification,
+not a fatal crash. Artifacts are retained under
+`artifacts/manaan-underwater-v96/revive-events-forward-failure`, and all56 owned
+original files were again restored exactly. The type57 fence is **not a repair of
+the demonstrated crash**.
+
+Further native inspection identifies event14 creation at `0x4DB7E6` as part of
+`OnApplyPoison` (`0x4DB320`, type35). It queues the incoming poison effect when
+the target is plot/dead/temp-dead/already poisoned. This is one candidate producer,
+not an established cause. `AddEventDeltaTime` can also free its payload on a
+rejected time addition. The engine dequeues and frees the event record before
+dispatch, so a queue snapshot cannot observe an already-dispatching payload.
+
+The next diagnostic is default OFF (`revive_effect_probe=1` only in an owned test
+configuration). It reuses the byte-guarded delayed-event splices, preserves flags
+and registers, and adds a guarded effect-destructor observer. Fixed records contain
+the actual enqueue caller/target/source/payload/UID, destructor caller for a matching
+payload+UID, dispatch/discard resolved body and readable payload, and pre/post
+resurrection type35/57 effects and all queued event14 targets. Effect subtype,
+creator and child links are recorded as guarded observations. Callbacks allocate
+no records, call no engine functions, perform no file I/O and change no native
+game state; the frame hook drains the bounded ring. Record kinds1/2/3/4 mean
+enqueue/destructor/due/discard; kinds5/6 are current effects before/after revival,
+and7/8 are queued events before/after revival. The diagnostic does not establish
+ownership or implement a general effect-identifier copy until actual evidence
+shows the creator and freeing path.
+
+The diagnostic keeps the latest captured enqueue sequence/fingerprint for each
+payload address. Dispatch/discard use that captured fingerprint rather than reading
+the payload again; a matching destructor marks it freed before the engine frees it.
+Known-freed current/queue rows also use the captured fingerprint. `pagereadable`
+is only an OS memory-region query and does not mean the allocation is alive;
+`fingerprintreadable` describes the captured snapshot. Unknown payload snapshots
+are explicitly uncaptured. All ring/history access is restricted to the native
+install thread; foreign-thread callbacks are ignored. No callback dereferences
+a payload already witnessed as freed. Ninety focused configuration/context/fence
+tests passed, including flag preservation and original ESP adjustment/overflow
+refusal, and the managed native build remains warning-clean.

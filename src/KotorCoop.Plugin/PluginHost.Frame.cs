@@ -429,6 +429,7 @@ internal static unsafe partial class PluginHost
             // records on the game's thread inside four engine splices and must be turned into log
             // lines from somewhere file I/O is safe. Inert — and free — unless the probe installed.
             DelayEventProbeHook.Drain();
+            ReviveEffectLifetimeProbe.Drain();
             if (ShowInGameGuiProbeHook.IsInstalled)
             {
                 ShowInGameGuiProbeHook.Drain();

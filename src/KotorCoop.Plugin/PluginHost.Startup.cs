@@ -488,7 +488,8 @@ internal static unsafe partial class PluginHost
         // A default-OFF diagnostic, not a feature: four read-only splices on the delayed-
         // script-situation path (DelayCommand -> AddEventDeltaTime -> the AI master's drain),
         // for docs/research/minigames.md §24's root-cause question. See DelayEventProbeHook.
-        if (PluginConfig.ReadBool("delay_probe", false))
+        ReviveEffectLifetimeProbe.Enabled = PluginConfig.ReadBool("revive_effect_probe", false);
+        if (PluginConfig.ReadBool("delay_probe", false) || ReviveEffectLifetimeProbe.Enabled)
         {
             if (DelayEventProbeHook.Install(out string delayProbeDiagnostic))
             {
@@ -498,6 +499,11 @@ internal static unsafe partial class PluginHost
             {
                 Log($"minigame: delayed-event probe NOT installed: {delayProbeDiagnostic}");
             }
+        }
+        if (ReviveEffectLifetimeProbe.Enabled)
+        {
+            bool installed = ReviveEffectLifetimeProbe.InstallDestructor(out string effectProbeDiagnostic);
+            Log($"reviveprobe: destructor observer installed={installed}: {effectProbeDiagnostic}");
         }
 
         // A default-OFF diagnostic (coop.ini gui_probe=1): a splice on Show/HideSWInGameGui

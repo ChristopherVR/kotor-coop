@@ -112,7 +112,7 @@ internal static class PluginConfig
         "companion_local_combat", "companion_local_combat_range", "companion_xp_sync",
         "connect_timeout_ms", "container_fast_pump", "container_lock_arbitration",
         "container_locks", "damage_creator_attribution", "debug_hello_version", "dejitter",
-        "delay_probe", "delay_probe_events", "dialog_state_watch", "dialogue_exclusive",
+        "delay_probe", "delay_probe_events", "revive_effect_probe", "dialog_state_watch", "dialogue_exclusive",
         "dialogue_fast_join", "dialogue_item_sync", "dialogue_join_teleport", "script_destroy_guard",
         "dialogue_recruit_sync", "disguise_sync", "effect_sync", "enemy_drive",
         "enemy_effect_sync", "enemy_materialise",

@@ -140,4 +140,28 @@ internal static unsafe partial class Odyssey
             }
         }
     }
+
+    private static void ObserveReviveEffectLifetime(nint body, uint target, bool after)
+    {
+        if (!ReviveEffectLifetimeProbe.Enabled) return;
+        if (TryReadReviveEffects(body, out nint effects, out int count))
+        {
+            for (int i = 0; i < count; i++)
+            {
+                nint effect = *(nint*)(effects + i * 4);
+                ReviveEffectLifetimeProbe.ObserveCurrentEffect((uint)body, target, (uint)effect, after);
+            }
+        }
+        nint queue = ReviveEventQueue();
+        if (!NativeMethods.IsReadable(queue, 12)) return;
+        var walk = new ReviveQueueWalker<ReviveQueueNativeReader>(*(nint*)queue, ReviveQueueLimit, default);
+        while (walk.TryMoveNext(out nint record))
+        {
+            if (!TryReadReviveEvent(record, out var entry)) return;
+            if (entry.Type != 14) continue;
+            nint currentTarget = ResolveServerObject(entry.Target);
+            ReviveEffectLifetimeProbe.ObserveCurrentQueued(entry.Target, entry.Sender,
+                (uint)entry.Payload, (uint)currentTarget, after);
+        }
+    }
 }
