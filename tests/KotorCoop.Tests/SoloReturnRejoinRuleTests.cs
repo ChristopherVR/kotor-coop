@@ -23,6 +23,43 @@ public sealed class SoloReturnRejoinRuleTests
     }
 
     [Fact]
+    public void ALocalExcursionFiresAfterTheReturnWhenTheWorldsDifferWithoutNeedingAHostSave()
+    {
+        // Joiner-led race: the LOCAL player is on the track while the host holds the origin.
+        SoloReturnRejoinState state = Baseline(5, 9);
+        (state, bool fire) = Step(state, "manm26mg", 2, "manm28aa", 2, 6, 9, 100, true);
+        Assert.False(fire);
+        Assert.True(state.InSoloLeg);
+        Assert.True(state.LocalLeg);
+        (state, fire) = Step(state, "manm26mg", 2, "manm28aa", 2, 6, 9, 500, true);
+        Assert.True(state.InSoloLeg);
+        (state, fire) = Step(state, "manm28aa", 7, "manm28aa", 2, 6, 9, 1000, true);
+        Assert.False(fire);
+        (state, fire) = Step(state, "manm28aa", 7, "manm28aa", 2, 6, 9, 3200, true);
+        Assert.True(fire);
+    }
+
+    [Fact]
+    public void ALocalExcursionThatReturnsWithMatchingWorldsDoesNotFire()
+    {
+        SoloReturnRejoinState state = Baseline(5, 9);
+        (state, _) = Step(state, "manm26mg", 2, "manm28aa", 2, 6, 9, 100, true);
+        (state, bool fire) = Step(state, "manm28aa", 2, "manm28aa", 2, 6, 9, 3000, true);
+        Assert.False(fire);
+        Assert.False(state.InSoloLeg);
+    }
+
+    [Fact]
+    public void ALocalExcursionEndsIfTheHostLeavesTheOrigin()
+    {
+        SoloReturnRejoinState state = Baseline(5, 9);
+        (state, _) = Step(state, "manm26mg", 2, "manm28aa", 2, 6, 9, 100, true);
+        (state, bool fire) = Step(state, "manm26mg", 2, "tar_m02aa", 2, 6, 9, 300, true);
+        Assert.False(fire);
+        Assert.False(state.InSoloLeg);
+    }
+
+    [Fact]
     public void MatchingReturnResetsAndAllowsASecondExcursion()
     {
         SoloReturnRejoinState state = Baseline();

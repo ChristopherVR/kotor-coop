@@ -13,7 +13,8 @@ public readonly record struct SoloReturnRejoinState(
     uint BaselineHostLoadSerial,
     uint BaselineHostSaveIdentity,
     bool LocalLoadSerialKnown,
-    bool HostLoadSerialKnown)
+    bool HostLoadSerialKnown,
+    bool LocalLeg = false)
 {
     public static SoloReturnRejoinState Initial => new(string.Empty, false, false, 0, 0, 0, 0, 0, false, false);
 }
@@ -66,10 +67,20 @@ public static class SoloReturnRejoinRule
                 return (current with { InSoloLeg = true, MismatchSinceMs = 0 }, false);
             }
 
+            // The LOCAL player is the one on the track (a joiner-led race) while the host stays in
+            // the origin: the same "return, then a mismatch that persists" decision applies to the
+            // local player's freshly reloaded world.
+            if (current.OriginModule.Length > 0
+                && MinigameModuleRule.IsMinigameModule(localModule)
+                && string.Equals(hostModule, current.OriginModule, StringComparison.OrdinalIgnoreCase))
+            {
+                return (current with { InSoloLeg = true, LocalLeg = true, MismatchSinceMs = 0 }, false);
+            }
+
             return (SoloReturnRejoinState.Initial, false);
         }
 
-        bool serialChanged = (current.LocalLoadSerialKnown && localLoadSerial.HasValue
+        bool serialChanged = (!current.LocalLeg && current.LocalLoadSerialKnown && localLoadSerial.HasValue
                 && current.BaselineLocalLoadSerial != localLoadSerial.Value)
             || (current.HostLoadSerialKnown && hostLoadSerial.HasValue
                 && current.BaselineHostLoadSerial != hostLoadSerial.Value);
@@ -80,6 +91,16 @@ public static class SoloReturnRejoinRule
 
         bool returned = string.Equals(localModule, current.OriginModule, StringComparison.OrdinalIgnoreCase)
             && string.Equals(hostModule, current.OriginModule, StringComparison.OrdinalIgnoreCase);
+        if (!returned && current.LocalLeg)
+        {
+            // Still on the track while the host holds the origin: keep waiting. Anything else
+            // (the host moved on, or the local player left for somewhere else) ends the excursion.
+            return MinigameModuleRule.IsMinigameModule(localModule)
+                && string.Equals(hostModule, current.OriginModule, StringComparison.OrdinalIgnoreCase)
+                ? (current with { MismatchSinceMs = 0, ReturnCandidateSinceMs = 0 }, false)
+                : (SoloReturnRejoinState.Initial, false);
+        }
+
         if (!returned)
         {
             // A normal module change ends the observed excursion. Do not retain a stale
@@ -92,9 +113,11 @@ public static class SoloReturnRejoinRule
             return (current with { MismatchSinceMs = 0, ReturnCandidateSinceMs = 0 }, false);
         }
 
-        bool refreshedSave = hostSaveIdentity != 0
-            && current.BaselineHostSaveIdentity != 0
-            && hostSaveIdentity != current.BaselineHostSaveIdentity;
+        // A local excursion never changes the HOST's save identity, so it cannot be required.
+        bool refreshedSave = current.LocalLeg
+            || (hostSaveIdentity != 0
+                && current.BaselineHostSaveIdentity != 0
+                && hostSaveIdentity != current.BaselineHostSaveIdentity);
         if (!refreshedSave)
         {
             // Module/GIT values may still be served from the pre-excursion cache. Wait for
