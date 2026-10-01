@@ -20,4 +20,7 @@ Same checkpoint (`checkpoint-upper-city-before-cantina`), same `usedoor UpperNor
 
 So the original crash had two parts: a trigger or area script destroying the peer's stand-in body, and our cache then reading the freed body. Both are closed. The guard from the first patch stays as the backstop.
 
-Not yet explained: after the walk back the joiner's body spawned at (221.22, 58.42) while the host's spawned at (187.71, 113.36). Both arrived at 187.7, 113.4 per `where`, so the joiner's body spawn position needs a look. Only this one crossing and one return were replayed; the Carth dialogue interruption seen once on the first attempt was not re-examined.
+Resolved follow-ups (checked in the v97c logs):
+
+- **Differing spawn positions after the walk back:** a body is spawned at the peer's last published position. In the first frames after arrival that is still the previous area's coordinates (joiner: 221.22, 58.42; host: 221.09, 64.26 from the other area). On the host the agent briefly reported 0 remote peers right after the transition, which destroyed that body (`peer left`) and rebuilt it 0.8 s later at 187.71, 113.36, once the peer's new position arrived. On the joiner the first body was kept and driven to the right place, and the screenshot after the return shows the partner standing beside the player. A transient, not a defect, and it self-corrects within a second.
+- **Carth dialogue on the first attempt:** the stock scripted Carth conversation fired while walking to the door; the replay chose "Don't speak" and crossed on the second `usedoor`. Normal game behaviour, not a co-op fault.
