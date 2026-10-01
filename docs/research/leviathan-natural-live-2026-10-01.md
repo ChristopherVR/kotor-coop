@@ -11,8 +11,10 @@ Capture trigger: `setglobal K_STAR_MAP 40`, `K_CAPTURED_LEV 5`, `K_CURRENT_PLANE
 | Interrogation (Saul) | Pass. Same `lev40_saul403` lines on both. |
 | Control swap | Pass with caveat. Host `solo segment: began ... SwitchPlayerCharacter`; joiner `spectating ... input parked`, W moved 0.0; released with `the fight ended - control is yours again`. Combat was skipped (host teleported to the terminal); the joiner screen was mostly black while spectating and it was still in its cage afterwards. |
 | Gear | Host pass (6 rows in the locker). The joiner started with no gear, so private-gear loss was not tested; real locker retrieval GUI not exercised. |
-| Ghost bodies | Partial. After release the joiner held stale `sithcommander`, `sithtrooper1`, a second `carth` and a `bastila` in the cage that the host did not have. |
+| Ghost bodies | Unconfirmed. Per the run report, after release the joiner held stale `sithcommander`, `sithtrooper1`, a second `carth` and a `bastila` in the cage that the host did not have. |
 | Host save and load mid-scene | Pass. Host `loadgame` 21:27:01; joiner re-adopted and rendered by 21:27:11; one click on the "Item(s) Received" popup, then it moved 8.1 m. |
 | Gate (elevator to `lev_m40ab`) | Intermittent fail. Run 1: joiner crashed 100 ms after the host took the elevator, AV `0x4D7E44` in `CServerExoAppInternal::UnloadModule` / `CGameObjectArray` (`run2-evidence/game5-kotorcoop-crash.bin`), while the joiner was in its post-reload scene state. Two repeats transitioned together without a crash. |
 
 Not reached: command deck, Saul on the bridge, hangar, Malak reveal, escape to the Hawk. Real combat and the gear-retrieval GUI were staged around. Open items: stale joiner-side copies after release, the elevator crash (needs an owner), and a pre-capture Hawk save with Bastila in the party.
+
+Note on the ghost-body row: re-checking the preserved inspections (`saves-inspect/*.json`) found none of those tags, so the observation rests on the joiner's raw mid-scene save and was not verified as visible in the game. Both engines ran the capture scripts locally, so the joiner's world holding its own scene actors is expected unless they render; treat as open, not as a confirmed sync defect.
