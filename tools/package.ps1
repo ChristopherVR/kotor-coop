@@ -48,6 +48,22 @@ if (-not $Version) {
     $Version = (git -C $repo describe --tags --match 'v*' --always 2>$null)
     if (-not $Version) { $Version = 'dev' }
     $Version = $Version.Trim()
+
+    # The VERSION file is the release number. The build is named exactly VERSION on the commit
+    # that last changed that file, and "<VERSION>-<commits since>-g<sha>" after it, so the first
+    # green build of a bumped VERSION is the numbered release and later ones are clearly newer
+    # snapshots of it (the release workflow cuts the GitHub release from this).
+    $versionFile = Join-Path $repo 'VERSION'
+    if (Test-Path $versionFile) {
+        $declared = (Get-Content $versionFile -Raw).Trim()
+        $bumped = (git -C $repo log -1 --format=%H -- VERSION 2>$null)
+        if ($declared -and $bumped) {
+            $since = [int](git -C $repo rev-list --count "$($bumped.Trim())..HEAD" 2>$null)
+            $sha = (git -C $repo rev-parse --short=7 HEAD 2>$null)
+            $Version = if ($since -eq 0) { $declared } else { "$declared-$since-g$($sha.Trim())" }
+        }
+        elseif ($declared) { $Version = $declared }
+    }
 }
 $Version = $Version -replace '^v', ''
 

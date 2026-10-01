@@ -91,50 +91,79 @@ jobs:
           tgz_size=$(du -k "$tgz" | cut -f1)
           zip_sha256=$(sha256sum "$zip" | cut -d' ' -f1)
           tgz_sha256=$(sha256sum "$tgz" | cut -d' ' -f1)
-          tag=$([ "$kind" = tag ] && echo "$ref" || echo latest)
-          base="https://github.com/${{ github.repository }}/releases/download/$tag"
           version=${zip_name#kotor-coop-}; version=${version%-windows.zip}
 
           # The notes lead with the one thing a visitor is here for: which file is for their
           # machine, a direct link to it, and how to install it. GitHub lists assets below the
           # notes, but nothing there says which file is which or what to do with it.
-          {
-            echo "## Download"
-            echo
-            echo "| Platform | File | Install |"
-            echo "| --- | --- | --- |"
-            echo "| Windows | **[$zip_name]($base/$zip_name)** (${zip_size} KB) | extract into your KOTOR folder, or double-click \`KotorCoop.Agent.exe\` from anywhere |"
-            echo "| Linux / Steam Deck (Proton) | **[$tgz_name]($base/$tgz_name)** (${tgz_size} KB) | extract, run \`install.sh\`, add the launch option below |"
-            echo
-            echo "No SDK, runtime or toolchain needed on either. The same mod is inside both: KOTOR is a Windows program on every platform, only the installer differs."
-            echo
-            echo "**Windows, pick one:**"
-            echo "- **Portable:** extract the zip straight into the folder that has \`swkotor.exe\` (for GOG usually \`C:\\GOG Games\\Star Wars KOTOR (GOG)\`) and start the game. The zip *is* the install."
-            echo "- **Installer:** extract anywhere and double-click \`KotorCoop.Agent.exe\`. It finds your GOG install (or asks you to pick the folder), copies everything in, and offers to launch. No PowerShell needed."
-            echo
-            echo "(A \`pwsh .\\install.ps1 -GameDir '...'\` script is also included for scripted/CLI installs, but neither of the two options above needs it.)"
-            echo
-            echo '```bash'
-            echo "# Linux / Steam Deck (Desktop Mode): finds the Steam, Heroic or Lutris install itself"
-            echo "tar -xzf $tgz_name && ./kotor-coop-$version/install.sh"
-            echo '# then in Steam: game -> Properties -> Launch Options (Heroic/Lutris: DLL override dinput8=n,b)'
-            echo 'WINEDLLOVERRIDES="dinput8=n,b" %command%'
-            echo '```'
-            echo
-            echo "Each contains the plugin (\`dinput8.dll\`), the chain loader for sharing \`dinput8.dll\` with another mod, the agent, the override assets, \`coop.ini\` and a README that covers install, play and troubleshooting. Linux support is new and awaiting its first field report: [docs/research/proton.md](https://github.com/${{ github.repository }}/blob/$sha/docs/research/proton.md)."
-            echo
-            echo "SHA-256 \`$zip_sha256\` ($zip_name) · \`$tgz_sha256\` ($tgz_name) · built by CI run [${{ steps.what.outputs.run_id }}](https://github.com/${{ github.repository }}/actions/runs/${{ steps.what.outputs.run_id }}) from \`${sha:0:7}\`."
-            echo
-            if [ "$kind" = latest ]; then
-              echo "> Rolling build of \`main\`: every push that passes build + test replaces this release. Tagged releases are the stable ones."
+          # $1 = the release tag the download links point at, $2 = tag | latest.
+          make_notes() {
+            local tag="$1" kind="$2"
+            local base="https://github.com/${{ github.repository }}/releases/download/$tag"
+            {
+              echo "## Download"
               echo
+              echo "| Platform | File | Install |"
+              echo "| --- | --- | --- |"
+              echo "| Windows | **[$zip_name]($base/$zip_name)** (${zip_size} KB) | extract into your KOTOR folder, or double-click \`KotorCoop.Agent.exe\` from anywhere |"
+              echo "| Linux / Steam Deck (Proton) | **[$tgz_name]($base/$tgz_name)** (${tgz_size} KB) | extract, run \`install.sh\`, add the launch option below |"
+              echo
+              echo "No SDK, runtime or toolchain needed on either. The same mod is inside both: KOTOR is a Windows program on every platform, only the installer differs."
+              echo
+              echo "**Windows, pick one:**"
+              echo "- **Portable:** extract the zip straight into the folder that has \`swkotor.exe\` (for GOG usually \`C:\\GOG Games\\Star Wars KOTOR (GOG)\`) and start the game. The zip *is* the install."
+              echo "- **Installer:** extract anywhere and double-click \`KotorCoop.Agent.exe\`. It finds your GOG install (or asks you to pick the folder), copies everything in, and offers to launch. No PowerShell needed."
+              echo
+              echo "(A \`pwsh .\\install.ps1 -GameDir '...'\` script is also included for scripted/CLI installs, but neither of the two options above needs it.)"
+              echo
+              echo '```bash'
+              echo "# Linux / Steam Deck (Desktop Mode): finds the Steam, Heroic or Lutris install itself"
+              echo "tar -xzf $tgz_name && ./kotor-coop-$version/install.sh"
+              echo '# then in Steam: game -> Properties -> Launch Options (Heroic/Lutris: DLL override dinput8=n,b)'
+              echo 'WINEDLLOVERRIDES="dinput8=n,b" %command%'
+              echo '```'
+              echo
+              echo "Each contains the plugin (\`dinput8.dll\`), the chain loader for sharing \`dinput8.dll\` with another mod, the agent, the override assets, \`coop.ini\` and a README that covers install, play and troubleshooting. Linux support is new and awaiting its first field report: [docs/research/proton.md](https://github.com/${{ github.repository }}/blob/$sha/docs/research/proton.md)."
+              echo
+              echo "SHA-256 \`$zip_sha256\` ($zip_name) · \`$tgz_sha256\` ($tgz_name) · built by CI run [${{ steps.what.outputs.run_id }}](https://github.com/${{ github.repository }}/actions/runs/${{ steps.what.outputs.run_id }}) from \`${sha:0:7}\`."
+              echo
+              if [ "$kind" = latest ]; then
+                echo "> Rolling build of \`main\`: every push that passes build + test replaces this release. Numbered releases (v0.x.y) are the stable ones."
+                echo
+              fi
+            } > notes.md
+          }
+
+          # A numbered release. Plain-language notes live in docs/release-notes/<tag>.md when
+          # present (written by hand for players); otherwise GitHub's generated change list is
+          # appended. --latest makes it the repository's "Latest" release.
+          create_numbered() {
+            local vtag="$1"
+            make_notes "$vtag" tag
+            local extra=(--generate-notes)
+            if git cat-file -e "$sha:docs/release-notes/$vtag.md" 2>/dev/null; then
+              git show "$sha:docs/release-notes/$vtag.md" > human-notes.md
+              { cat human-notes.md; echo; echo "---"; echo; cat notes.md; } > notes-final.md
+              mv notes-final.md notes.md
+              extra=()
             fi
-          } > notes.md
+            gh release create "$vtag" "$zip" "$tgz" --target "$sha" --title "$vtag" \
+              --notes-file notes.md "${extra[@]}" --latest
+          }
 
           if [ "$kind" = tag ]; then
-            # --generate-notes appends the auto-generated changelog after --notes-file.
-            gh release create "$ref" "$zip" "$tgz" --title "$ref" --notes-file notes.md --generate-notes --verify-tag
+            create_numbered "$ref"
           else
+            # The VERSION file names the release this commit belongs to. The first green build
+            # of a VERSION nobody has released yet becomes a real, numbered GitHub release
+            # (marked Latest), so bumping VERSION is all it takes to publish one. Every build
+            # also refreshes the rolling pre-release below.
+            ver=$(git show "$sha:VERSION" 2>/dev/null | tr -d '[:space:]' || true)
+            if [ -n "$ver" ] && ! gh release view "v$ver" >/dev/null 2>&1; then
+              create_numbered "v$ver"
+            fi
+
+            make_notes latest latest
             # One rolling pre-release that always points at the newest green main build.
             # Delete + recreate rather than upload --clobber so the tag moves to the new sha
             # and the notes say which commit it is.

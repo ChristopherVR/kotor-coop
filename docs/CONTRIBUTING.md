@@ -119,9 +119,14 @@ rules belongs in both.
 
 `.github/workflows/release.yml` runs **after CI succeeds** (`workflow_run`) and publishes
 the very two packages that run produced — it never rebuilds. Every green push to `main` replaces the
-rolling `latest` pre-release; a `v*` tag (`git tag v0.1.0 && git push origin v0.1.0`) goes
-through the same CI run and then becomes a full release named after the tag, with
-auto-generated notes. A manual dispatch publishes the newest successful CI packages for the chosen
+rolling `latest` pre-release. **The release number is the `VERSION` file at the repo root.** The first
+green build of a `VERSION` that has no GitHub release yet also becomes a numbered release `v<VERSION>`,
+marked Latest, with `docs/release-notes/v<VERSION>.md` as its notes when that file exists (plain
+language, for players) and GitHub's generated change list otherwise. So to ship: write the notes file,
+bump `VERSION`, push. `tools/package.ps1` names a build exactly `<VERSION>` on the commit that changed
+the file and `<VERSION>-<commits since>-g<sha>` after it. A hand-pushed `v*` tag
+(`git tag v0.1.0 && git push origin v0.1.0`) still goes through the same CI run and becomes a full
+release named after the tag. A manual dispatch publishes the newest successful CI packages for the chosen
 ref. Both contain a `README.txt` (`tools/package-README.txt`,
 version-stamped by `package.ps1`) that explains install, play, chain mode and troubleshooting
 to someone who has never seen this repo.
