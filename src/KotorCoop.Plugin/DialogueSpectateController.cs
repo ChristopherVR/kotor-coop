@@ -484,8 +484,28 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
     /// </summary>
     private readonly byte[] _notice = "Another player is in a conversation - click the same character to join"u8.ToArray();
 
+    private uint _seenSoloBlocked;
+    private long _soloNoticeUntilMs;
+    private readonly byte[] _soloNotice = "Only the host can start this - wait for them"u8.ToArray();
+
     private void ReportCounters()
     {
+        DialogueGateHook.JoinerIsClient = block.TryGetLocalSessionRole(out bool isHostRole) && !isHostRole;
+        if (DialogueGateHook.SoloBlockedCount != _seenSoloBlocked)
+        {
+            _seenSoloBlocked = DialogueGateHook.SoloBlockedCount;
+            _soloNoticeUntilMs = Environment.TickCount64 + 2500;
+            LogFew("dialogue: refused a joiner starting a solo-section conversation; the host leads it");
+        }
+
+        if (Environment.TickCount64 < _soloNoticeUntilMs)
+        {
+            fixed (byte* p = _soloNotice)
+            {
+                Odyssey.PostTextLine(p, 8, 5, 0.5f);
+            }
+        }
+
         // A refused click deserves a visible answer, not silence: keep a short notice on
         // screen after each blocked attempt.
         if (DialogueGateHook.BlockedCount != _seenBlocked)

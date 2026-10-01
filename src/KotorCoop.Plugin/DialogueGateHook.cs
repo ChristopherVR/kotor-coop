@@ -308,6 +308,15 @@ internal static unsafe class DialogueGateHook
                 return 0;
             }
 
+            // A solo-section conversation (the Manaan airlock) must not be started by a
+            // joiner: its script walks that one player into a solo module alone, which crashed
+            // the joiner twice in the original engine (live 2026-10-01). Host-only.
+            if (Enabled && JoinerIsClient && IsSoloOnlyResref())
+            {
+                _soloBlockedCount++;
+                return 1;
+            }
+
             if (!Enabled || !PeerHoldsConversation)
             {
                 return 0;
@@ -337,6 +346,29 @@ internal static unsafe class DialogueGateHook
             return 0;
         }
     }
+
+    /// <summary>Allocation-free match of <see cref="LastStartResref"/> against the solo-only
+    /// conversation (same name as <c>DialogueAutoJoinRule.NeverAutoJoin</c>).</summary>
+    private static bool IsSoloOnlyResref()
+    {
+        ReadOnlySpan<byte> want = "man28_airlock"u8;
+        for (int i = 0; i < want.Length; i++)
+        {
+            byte c = LastStartResref[i];
+            if (c is >= (byte)'A' and <= (byte)'Z') c = (byte)(c + 32);
+            if (c != want[i]) return false;
+        }
+
+        return LastStartResref.Length == want.Length || LastStartResref[want.Length] == 0;
+    }
+
+    private static uint _soloBlockedCount;
+
+    /// <summary>Refused joiner starts of solo-only conversations, for the on-screen notice.</summary>
+    public static uint SoloBlockedCount => _soloBlockedCount;
+
+    /// <summary>Set every frame by the dialogue controller: this instance is a session joiner.</summary>
+    public static volatile bool JoinerIsClient;
 
     private static int _joinsAllowed;
 
