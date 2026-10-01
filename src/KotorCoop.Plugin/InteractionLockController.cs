@@ -786,7 +786,8 @@ internal sealed unsafe partial class InteractionLockController(SharedBlockView b
             && TagEquals(tag, length, block.RemoteDialoguePartnerTag)
             ? System.Text.Encoding.ASCII.GetString(block.RemoteDialogueResref, resrefLength)
             : string.Empty;
-        if (DialogueAutoJoinRule.NeverAutoJoin(resref))
+        if (DialogueAutoJoinRule.NeverAutoJoin(resref)
+            || DialogueAutoJoinRule.NeverAutoJoinTag(System.Text.Encoding.ASCII.GetString(tag, length)))
         {
             return;
         }

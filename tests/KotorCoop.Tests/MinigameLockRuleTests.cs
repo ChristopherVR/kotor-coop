@@ -291,8 +291,24 @@ public class MinigameLockRuleTests
     [Theory]
     [InlineData("man28_airlock", true)]
     [InlineData("MAN28_AIRLOCK", true)]
+    [InlineData("tar03_announcer", true)]
+    [InlineData("TAR03_ANNOUNCER", true)]
+    [InlineData("man26_swoop1", true)]
+    [InlineData("tat17_04race_01", true)]
+    [InlineData("tar03_mechanic", false)]
     [InlineData("dan13_dorak", false)]
     [InlineData("", false)]
-    public void TheManaanAirlockConversationIsNeverAutoJoined(string resref, bool expected) =>
+    public void SoloEntryConversationsAreNeverAutoJoined(string resref, bool expected) =>
         Assert.Equal(expected, DialogueAutoJoinRule.NeverAutoJoin(resref));
+
+    [Theory]
+    [InlineData("raceannoun031", true)]
+    [InlineData("RACEANNOUN031", true)]
+    [InlineData("man26_swoop002", true)]
+    [InlineData("tat17_04race_01", true)]
+    [InlineData("tar03_mechanic", false)]
+    [InlineData("gadonthek112", false)]
+    [InlineData("", false)]
+    public void RaceNpcTagsAreNeverAutoJoined(string tag, bool expected) =>
+        Assert.Equal(expected, DialogueAutoJoinRule.NeverAutoJoinTag(tag));
 }

@@ -107,7 +107,7 @@ Historical dates below describe the scope of each check, not a guarantee for eve
 | | Status | What to expect |
 | --- | --- | --- |
 | Pazaak | **Works** | One player plays; the other is told they're waiting and is held out of the table until the hand ends. |
-| Swoop racing | **Works, with a catch** | One player races; the other is held safely off the track with a "racing — waiting" message. Rewards reach everyone. A live check on the real track blocked two seconds of parked joiner keyboard movement and released it after return. Natural race entry, completion and scripted return still need playthrough checks. See [keyboard lock evidence](research/solo-keyboard-lock-live-2026-09-30.md). |
+| Swoop racing | **Works, with a catch (checked 2026-10-02)** | One player races; the other is held off the track with a "<name> is in a minigame - waiting" line and cannot move, then released a second after the race ends. Checked on the Taris track through the shipped dialogue: the host won the race and the real return and Brejik scene followed; a joiner-led race parked the host the same way; the parked player was also released when the racer quit to the menu or the host's game was killed mid-race. Two defects found and fixed in the same check: a partner standing near the announcer, or the host during a joiner-led race, used to replay the race-start conversation and get pulled onto the track. The catch: race rewards were not shown to reach both players (the joiner's state came from re-adopting the host's world, so quest XP differs), the Manaan and Tatooine tracks were not run, and the first race attempt could not be repeated once won. See [live evidence](research/swoop-natural-live-2026-10-02.md). |
 
 ## Controls and interface
 

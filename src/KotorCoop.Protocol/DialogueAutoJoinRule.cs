@@ -47,12 +47,41 @@ public enum DialogueAutoJoinMode
 /// </summary>
 public static class DialogueAutoJoinRule
 {
-    /// <summary>Conversations whose node scripts walk ONE player into a solo module and strip
-    /// the party. A watcher that auto-joins runs those scripts on its own engine and follows
-    /// (live 2026-10-01, Manaan: the joiner left the station with the host in 3 of 5 airlock
-    /// runs). Matched case-insensitively against the dialogue resref.</summary>
-    public static bool NeverAutoJoin(string resref) =>
-        string.Equals(resref, "man28_airlock", StringComparison.OrdinalIgnoreCase);
+    /// <summary>Conversations whose node scripts move ONE player into a solo module: the
+    /// Manaan airlock (strips the party), and the swoop-race announcers/entry talks, whose
+    /// start node loads the single-seat track. A watcher that auto-joins runs those scripts on
+    /// its own engine and follows (live 2026-10-01: the Manaan joiner left the station with the
+    /// host; 2026-10-02 the Taris swoop joiner, and the host in a joiner-led race, were pulled
+    /// onto the track). Matched case-insensitively against the dialogue resref.</summary>
+    private static readonly string[] SoloEntryConversations =
+    [
+        "man28_airlock",
+        "tar03_announcer",
+        "man26_swoop1", "man26_swoop1a", "man26_swoop1q", "man26_swoop1r", "man26_swoop2", "man26_swoopgen01",
+        "tat17_xracer_01", "tat17_04race_01", "tat17_04swoop_01",
+    ];
+
+    /// <summary>The same conversations by the speaker's TAG, for the case where no resref is
+    /// known: a default-dialogue start (BeginConversation with an empty name) publishes an empty
+    /// resref, so the host never saw it for a joiner-led race (live 2026-10-02, tag
+    /// <c>raceannoun031</c>). Exact for the Taris announcer, prefix for the other tracks'
+    /// race NPCs (their placed tags follow the template names).</summary>
+    public static bool NeverAutoJoinTag(string tag) =>
+        string.Equals(tag, "raceannoun031", StringComparison.OrdinalIgnoreCase)
+        || tag.StartsWith("man26_swoop", StringComparison.OrdinalIgnoreCase)
+        || tag.StartsWith("tat17_04race", StringComparison.OrdinalIgnoreCase)
+        || tag.StartsWith("tat17_04swoop", StringComparison.OrdinalIgnoreCase)
+        || tag.StartsWith("tat17_xracer", StringComparison.OrdinalIgnoreCase);
+
+    public static bool NeverAutoJoin(string resref)
+    {
+        foreach (string known in SoloEntryConversations)
+        {
+            if (string.Equals(resref, known, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// True when this peer should send the same join request a click on the partner NPC would
