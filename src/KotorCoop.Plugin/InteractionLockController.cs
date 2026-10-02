@@ -725,6 +725,17 @@ internal sealed unsafe partial class InteractionLockController(SharedBlockView b
         bool isForced = block.RemoteDialogueActive && block.RemoteDialogueForced
             && TagEquals(tag, length, block.RemoteDialoguePartnerTag);
 
+        // A host-led scene (Bastila's temple conversation) is the host's to run wherever the
+        // joiner stands, so it joins like an engine-forced one: no range, no mode switch. Without
+        // this the host's relay-started conversation was never joined from a distance
+        // (live 2026-10-02: the joiner kept walking free while the host talked).
+        if (!isForced && block.RemoteDialogueActive
+            && TagEquals(tag, length, block.RemoteDialoguePartnerTag)
+            && HostLedConversationRule.IsHostLed(string.Empty, System.Text.Encoding.ASCII.GetString(tag, length)))
+        {
+            isForced = true;
+        }
+
         if (_autoJoinMode == DialogueAutoJoinMode.Off && !isForced)
         {
             return;

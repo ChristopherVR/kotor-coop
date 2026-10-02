@@ -28,7 +28,7 @@ public sealed partial class KotorGameBridge
     /// <summary>Whether the last <see cref="TryWriteMinigameLock"/> asserted a lock, so a
     /// no-change tick costs nothing: the flag is a LEVEL the plugin re-reads every frame, and
     /// rewriting the same value several times a second would be pure syscall waste.</summary>
-    private bool _minigameLockWritten;
+    private bool? _minigameLockWritten;
 
     private string _minigameLockName = string.Empty;
 
@@ -47,7 +47,7 @@ public sealed partial class KotorGameBridge
 
         ownerName ??= string.Empty;
 
-        if (locked == _minigameLockWritten
+        if (_minigameLockWritten is { } writtenBefore && locked == writtenBefore
             && (!locked || string.Equals(ownerName, _minigameLockName, StringComparison.Ordinal)))
         {
             return true;

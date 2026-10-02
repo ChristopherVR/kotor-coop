@@ -488,6 +488,12 @@ public sealed partial class KotorGameBridge
         // of its own replies forever.
         ("remote dialogue", BlockRemoteDialogueActive),
 
+        // Level-written by the agent like the remote-dialogue flag above, and the player-visible
+        // result of leaving it up is worse: a stranded "a peer is racing" holds the keyboard
+        // until the plugin's own watchdog. A restarted agent starts with no owner and so never
+        // wrote a release (live 2026-10-02: held for 15 minutes after an agent restart).
+        ("minigame lock", BlockMinigameLockActive),
+
         // A leftover request would keep offering an encounter on behalf of a peer that is no
         // longer in the session.
         ("encounter requests", BlockEncounterRequestCount),
@@ -586,6 +592,7 @@ public sealed partial class KotorGameBridge
                 // Lowering a level without lowering its latch is worse than not lowering it at
                 // all: the next session never raises it again.
                 _encounterWatchWritten = false;
+                _minigameLockWritten = null;
                 _damageDealtEnabled = false;
             }
 

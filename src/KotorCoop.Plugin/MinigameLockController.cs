@@ -60,6 +60,10 @@ internal sealed unsafe class MinigameLockController(SharedBlockView block)
 
     private int _countdown;
 
+    private const long StrandedFlagMs = 11 * 60 * 1000;
+    private long _assertedSinceTick;
+    private bool _watchdogTripped;
+
     private bool _locked;
 
     /// <summary>True while THIS instance is held for a peer's minigame. Static for the same
@@ -104,6 +108,35 @@ internal sealed unsafe class MinigameLockController(SharedBlockView block)
                 is AgentLivenessState.Live;
 
         bool wanted = agentAlive && block.MinigameLockActive != 0;
+
+        // Backstop independent of the agent: nothing in a real session holds a peer longer than
+        // the agent's own timeout (minigame_lock_timeout_s, default 600 s), so a flag asserted
+        // for much longer than that is stranded (a restarted agent never lowers a level it did
+        // not raise) and is dropped here. It re-arms only if the flag is cleared and re-raised.
+        long nowTick = Environment.TickCount64;
+        if (!wanted)
+        {
+            _assertedSinceTick = 0;
+            _watchdogTripped = false;
+        }
+        else
+        {
+            if (_assertedSinceTick == 0)
+            {
+                _assertedSinceTick = nowTick;
+            }
+
+            if (nowTick - _assertedSinceTick > StrandedFlagMs)
+            {
+                if (!_watchdogTripped)
+                {
+                    _watchdogTripped = true;
+                    PluginHost.Log("minigame lock: held longer than any real minigame; treating the flag as stranded and releasing");
+                }
+
+                wanted = false;
+            }
+        }
 
         if (!wanted)
         {

@@ -102,6 +102,13 @@ public sealed partial class CoopAgent
             {
                 ReleaseMinigameLock(decision.Reason);
             }
+            else
+            {
+                // Idempotent on the bridge (one write the first time after an agent start or a
+                // session teardown, nothing afterwards): a level a PREVIOUS agent left asserted
+                // would otherwise hold this player forever, since this agent never owned it.
+                _bridge.TryWriteMinigameLock(false, string.Empty);
+            }
 
             return;
         }
