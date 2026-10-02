@@ -22,7 +22,6 @@ This page describes the current development version, which may be newer than a d
 | **Works, with a catch** | Works, but there is a real gap you will notice. The catch is spelled out. |
 | **Not shared, by design** | The mod chooses not to do this, and says why. |
 | **Untested** | Built, and the automatic tests pass, but nobody has watched it on a running game. Treat it as "probably". |
-| **Should work, untested** | Same, for a whole platform (Linux and the Steam Deck). |
 | **Not supported** | Don't do this. It can break the game, and that is a limit of the original game. |
 | **Not a mod limitation** | The base game already behaves this way, with or without the mod. |
 
@@ -112,17 +111,9 @@ This page describes the current development version, which may be newer than a d
 | | Status | What to expect |
 | --- | --- | --- |
 | Keyboard and mouse | **Works** | Everything the game already does, plus `~` for the console and Enter to chat. |
-| Gamepad | **Works, with a catch** | Any Xbox-style pad plays the game and the menus. Typing (address, password, chat, console) uses an on-screen letter grid. It has only been tried with a simulated pad, not a real one. |
 | Connecting by typing an address | **Works** | Choose **Connect to an address...** at the bottom of the server list and type the address the host gave you. |
 | Seeing that you are connected | **Works** | A line of text at the top left shows the connection and fades out when it is not needed. |
 | Pausing | **Works, with a catch** | The pause key pauses both games. Opening a menu only pauses *your* game, but for a few seconds your character cannot be hit on your partner's screen. Stay in a menu too long and that protection lapses, so it is a cushion, not a way to sit out a fight. |
-
-## Linux and Steam Deck
-
-| | Status | What to expect |
-| --- | --- | --- |
-| Playing through Proton or Wine | **Should work, untested** | Built to run with one launch option added. Nobody has tried it on real hardware. |
-| The Deck's built-in controls | **Should work, untested** | They reach the game as an Xbox pad. |
 
 ## Story paths
 
@@ -157,8 +148,6 @@ Built and tested automatically, but nobody has watched them on a running game:
 - The Windows firewall rule making the difference on a second real PC.
 - Very long sessions: the longest was about three and a half hours with two copies.
 - Wide-screen resolutions (1280x720 and 1920x1080 fell back to the game's own 800x600 when tried).
-- Linux and the Steam Deck, from the mod loading under Wine to a session with a Windows PC.
-- A real gamepad, including typing with one.
 - Parts of the story that were skipped when testing: the Manaan star map and control-station puzzle, the Leviathan command deck and escape, and a story script locking a door or chest again (the Sith base).
 - A complete two-player campaign past Taris and through the ending.
 

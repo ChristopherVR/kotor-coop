@@ -106,9 +106,8 @@ jobs:
               echo "| Platform | File | Install |"
               echo "| --- | --- | --- |"
               echo "| Windows | **[$zip_name]($base/$zip_name)** (${zip_size} KB) | extract into your KOTOR folder, or double-click \`KotorCoop.Agent.exe\` from anywhere |"
-              echo "| Linux / Steam Deck (Proton) | **[$tgz_name]($base/$tgz_name)** (${tgz_size} KB) | extract, run \`install.sh\`, add the launch option below |"
               echo
-              echo "No SDK, runtime or toolchain needed on either. The same mod is inside both: KOTOR is a Windows program on every platform, only the installer differs."
+              echo "No SDK, runtime or toolchain needed."
               echo
               echo "**Windows, pick one:**"
               echo "- **Portable:** extract the zip straight into the folder that has \`swkotor.exe\` (for GOG usually \`C:\\GOG Games\\Star Wars KOTOR (GOG)\`) and start the game. The zip *is* the install."
@@ -116,14 +115,7 @@ jobs:
               echo
               echo "(A \`pwsh .\\install.ps1 -GameDir '...'\` script is also included for scripted/CLI installs, but neither of the two options above needs it.)"
               echo
-              echo '```bash'
-              echo "# Linux / Steam Deck (Desktop Mode): finds the Steam, Heroic or Lutris install itself"
-              echo "tar -xzf $tgz_name && ./kotor-coop-$version/install.sh"
-              echo '# then in Steam: game -> Properties -> Launch Options (Heroic/Lutris: DLL override dinput8=n,b)'
-              echo 'WINEDLLOVERRIDES="dinput8=n,b" %command%'
-              echo '```'
-              echo
-              echo "Each contains the plugin (\`dinput8.dll\`), the chain loader for sharing \`dinput8.dll\` with another mod, the agent, the override assets, \`coop.ini\` and a README that covers install, play and troubleshooting. Linux support is new and awaiting its first field report: [docs/research/proton.md](https://github.com/${{ github.repository }}/blob/$sha/docs/research/proton.md)."
+              echo "It contains the plugin (\`dinput8.dll\`), the chain loader for sharing \`dinput8.dll\` with another mod, the agent, the override assets, \`coop.ini\` and a README that covers install, play and troubleshooting."
               echo
               echo "SHA-256 \`$zip_sha256\` ($zip_name) · \`$tgz_sha256\` ($tgz_name) · built by CI run [${{ steps.what.outputs.run_id }}](https://github.com/${{ github.repository }}/actions/runs/${{ steps.what.outputs.run_id }}) from \`${sha:0:7}\`."
               echo

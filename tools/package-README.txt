@@ -19,8 +19,7 @@ One conversation runs at a time: whoever starts it picks the replies and the oth
 it live. Pazaak and the swoop race are single-seat -- the other player is told they're waiting.
 If somebody saves, loads, quits to the menu, or the host's game crashes, the other side notices
 and rejoins on its own. The first time you join you create a co-op character through the normal
-New Game screen; the mod keeps it and uses it on every join after. Mouse and keyboard, or any
-Xbox-style controller -- see "Controller" below.
+New Game screen; the mod keeps it and uses it on every join after. Mouse and keyboard.
 The full list -- what works, what has a catch, and what is deliberately left to the host -- is
 docs/limitations.md in the full repository (link at the bottom).
 
@@ -105,14 +104,6 @@ default). If a companion is missing on one side, leave and rejoin and they will 
 dialogue_recruit_sync = 0 in coop.ini restores the old behaviour where only whoever ran the
 conversation keeps them.
 
-Controller: plug in any Xbox-style (XInput) pad and it works, in the menus and in the
-world -- left stick walks and turns, right stick is the cursor, A is the default action / click,
-B is Escape, X cancels combat / right-clicks, Y switches character, LB/RB cycle targets or
-pages, LT pauses, RT clicks, the D-pad is action slots 1-4 (scrolls on a menu), Back is the
-map, RS click forces cursor mode. Your swkotor.ini bindings are respected. A pad can't type:
-the address box and the password box (their titles say so), chat and the ~ console still
-need a keyboard. gamepad = 0 in coop.ini turns it off.
-
 Console commands
 -----------------
 
@@ -139,9 +130,6 @@ whoever joined; "Both" behaves the same on either side.
   steamstatus                Both    Report whether Steam invites are working. While hosting,
                                      also prints the exact string a friend's Join Game carries.
   steaminvite <steamid64>    Host    Invite one friend by SteamID64. Refused when not hosting.
-  gamepad status             Both    Report what the controller support is doing (pad found,
-                                     mode, held keys). gamepad on/off toggles it without editing
-                                     coop.ini.
   clear                      Both    Clear the on-screen chat/status overlay.
   help                       Both    List every console command, including internal diagnostic/
                                      testing verbs not covered here (see `cheats` for those) -
@@ -201,8 +189,7 @@ see docs/research/network-topology.md if you want the full picture.
 Requirements
 ------------
 
-- Windows -- or Linux / Steam Deck with the game running under Proton or Wine, see "Linux and
-  Steam Deck" below. Nothing else to install: KotorCoop.Agent.exe carries its own .NET
+- Windows. Nothing else to install: KotorCoop.Agent.exe carries its own .NET
   runtime (that is why it is ~40 MB).
 - KOTOR 1, v1.0.3. A DRM-free (GOG) copy is what this is developed and tested against.
   Steam's copy is the same binary under a DRM wrapper -- the engine addresses are correct on
@@ -244,62 +231,6 @@ Steam will show you as playing KOTOR. Once it's active:
   "Copy Player ID", or the digits at the end of the profile URL).
 
 Set steam_invites = 0 to stop the agent talking to Steam at all.
-
-Linux and Steam Deck
----------------------
-
-The mod is two Windows programs that live inside the game's own Wine/Proton prefix: the
-dinput8.dll the game loads, and KotorCoop.Agent.exe, which the DLL starts and stops for
-you. Neither needs anything installed into the prefix (the agent carries its own .NET). What
-you need to do differently from Windows is two things:
-
-1. Put the files in the game folder. Get the Linux package
-   (kotor-coop-<version>-linux.tar.gz; the Windows zip has the same files minus the script)
-   and run its installer -- it runs natively, no Wine involved:
-
-       tar -xzf kotor-coop-<version>-linux.tar.gz
-       ./kotor-coop-<version>/install.sh           # finds the game, installs, prints step 2
-
-   It looks in every Steam library (including a Steam Deck's SD card and the Flatpak client),
-   ~/Games/Heroic and ~/Games; pass --game-dir /path/to/swkotor if it finds none or
-   several. It does exactly what the Windows installer does: if another mod already owns
-   dinput8.dll (ReShade, an ASI loader, a widescreen fix) it keeps that mod and chains it
-   behind kotor-coop (see "Sharing dinput8.dll with another mod"), it never overwrites an
-   existing coop.ini, and install.sh --check / install.sh --uninstall report and undo.
-   Manual alternative: extract the archive straight into the game folder -- Steam:
-   ~/.local/share/Steam/steamapps/common/swkotor/ (on a Steam Deck in Desktop Mode, or
-   right-click the game -> Manage -> Browse local files); Heroic / Lutris: "Open install
-   folder" -- which is a plain install with no chaining. The Windows installer also works from
-   inside the prefix (protontricks-launch --appid 32370 KotorCoop.Agent.exe, Heroic's
-   "Run EXE on prefix", Lutris' "Run EXE inside Wine prefix"); it finds the game under
-   Z:\home\... the same way.
-2. Tell Wine to load our dinput8.dll, not its own. Wine ships a built-in DirectInput
-   and prefers it over a DLL beside the exe unless told otherwise:
-   - Steam / Steam Deck: right-click the game -> Properties -> Launch Options:
-     WINEDLLOVERRIDES="dinput8=n,b" %command%
-   - Heroic: game settings -> Advanced -> Environment variables: WINEDLLOVERRIDES = dinput8=n,b
-   - Lutris: Configure -> Runner options -> DLL overrides: dinput8 -> n,b
-
-   Without it the game runs fine and the mod simply never loads. kotorcoop-plugin.log
-   appearing in the game folder is the sign it worked; it logs "running under Wine x.y".
-
-Then play as on Windows -- the same host/join, the same coop.ini. A few things to know:
-
-- Firewall. If your distribution runs one (ufw, firewalld), the host has to open the
-  UDP port (27140 by default) like a Windows host would; UPnP works the same way. A Steam
-  Deck has no firewall out of the box.
-- Controller. The Deck's built-in controls (and any pad Steam Input presents as an Xbox
-  controller) drive the game through the mod's controller support; the address box, chat and
-  the console still want a keyboard -- on a Deck, the on-screen keyboard (STEAM + X).
-- Copying the address to the clipboard from the agent's console may do nothing under
-  Wine; the address is always printed on screen and in the log.
-- Two copies on one Linux machine (launch --instance 2) has not been tried.
-
-Proton 9 or newer (or the current Proton Experimental / GE) is what to expect this to work
-with. None of this has been run on a Linux machine by the developers yet -- it is built to
-work under Wine and checked against Wine's documented behaviour, and the first reports from
-real Decks and desktops are what will turn "should work" into "works". Please send them,
-with kotorcoop-plugin.log and the agent's log.
 
 Configure
 ---------

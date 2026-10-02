@@ -36,11 +36,6 @@ The plugin did not load. `dinput8.dll` must sit in the same directory as `swkoto
 (not a subfolder), and must be the x86 build (`build.ps1` checks this). In chain mode, read
 `dinput8-chain.log`: it lists every entry the loader tried and which one it forwards to.
 
-**On Linux / Steam Deck (Proton, Wine)** this is almost always the missing DLL override: Wine
-loads its own built-in `dinput8` instead of ours unless the game is launched with
-`WINEDLLOVERRIDES="dinput8=n,b" %command%` (Heroic: environment variable; Lutris: runner DLL
-overrides). With the override in place the log's first lines include `running under Wine x.y`.
-See [research/proton.md](research/proton.md) §3 and §7.
 
 ## Another mod already uses `dinput8.dll` (ReShade, an ASI loader, ...)
 
@@ -175,9 +170,6 @@ datagram ever arrives. Since 2026-09-18 the installer handles this (`WindowsFire
   'KotorCoop Agent' exists` or a `NOTE:` with the commands (a NOTE, not a FAIL — a LAN-only
   host whose partner is on the same PC never needs it).
 - `uninstall` removes the rule when elevated, or prints the `delete rule` command.
-- Linux / Steam Deck: no Windows Firewall inside the Proton prefix; if your distribution
-  runs one (ufw, firewalld) open the UDP port there, as the package README says. A Deck has
-  no firewall out of the box.
 
 ## Internet play: what the status line's reachability wording means
 

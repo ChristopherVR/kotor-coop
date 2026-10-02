@@ -57,8 +57,6 @@ log; "the joiner's log" means the joining player's copy.
 | --- | --- | --- | --- |
 | 21 | Host on a **home connection with UPnP** and read the status line. | It reports local self-test evidence or possible additional NAT. Internet access stays unconfirmed until an outside friend connects. | The status wording and a real connection from another network; a local probe cannot prove WAN ingress. |
 | 22 | Install on a fresh Windows PC as a normal user, host once. | A Windows Firewall prompt or the rule is added; a LAN friend can join. | Whether the game freezes behind a hidden prompt. |
-| 23 | Run the game on **Linux / Steam Deck** (see the package README). | It loads and connects. | The `running under Wine` line and how far it got. |
-| 24 | Plug in a **physical Xbox pad**. | Walk, fight, menus. | Anything that double-drives on Steam Input. |
 
 
 ## Added 2026-09-24
@@ -68,11 +66,9 @@ log; "the joiner's log" means the joining player's copy.
 | 25 | With `placed_mine_sync = 1` on both sides, place a mine from the radial menu as the joiner, then **recover** it from the radial menu. | The mine appears on both screens; recovering it removes it on both and gives the item back once. | Whether both copies go away and where the recovered mine item lands. A console-driven recover does nothing yet. |
 | 26 | Walk past a door the story **re-locks** (the Taris Sith Base lab door, or the door Trask seals on the Endar Spire) with your partner elsewhere. | Your partner's copy closes and locks too. | Try the door on the partner's side afterwards: it should say locked. Already proven with the lab door on the rig. |
 | 27 | Disconnect and reconnect (console `disconnect`, then `reconnect`) without loading anything. | Enemies, doors and items keep syncing; no "different save" warning. | Joiner log: `same world, not rejoining`. Already proven on the rig. |
-| 28 | With a **physical pad**, open **Connect to an address...** on the server browser and type an address with it: D-pad/stick picks a character, A types it, B backspaces, X is space, Y or Start sends, Back cancels. Then, in a loaded module, press Enter to open chat and type a line the same way. | An on-screen character grid appears under the box (or the console) and typing with the pad puts the right characters in it; sending it connects (or sends the chat line) exactly as if typed on a keyboard; Back closes the grid without changing the box. The grid must NOT appear or react while walking/fighting with no text box open. | `kotorcoop-plugin.log`: `text entry: target address/password/chat/console, row R col C shift B, selected 'x'` lines while the grid is up. The rig-only equivalent (no physical pad needed) is docs/research/gamepad.md §7's `gamepad sim` recipe. |
 
 | 29 | As a Jedi with Force points, cast **Cure** or **Heal** on your hurt partner (`partner_buffs`, on by default). | Your partner's real health goes up once. | Partner's log: an `effect: applied` heal line. Proven on the rig: a host Cure healed the joiner 4 -> 12. |
 | 30 | Both players fight the same enemy; the joiner out-damages the host clearly. | The enemy turns on the joiner and stays on them instead of flipping back and forth. | Host log: `threat` retarget lines; whether the enemy keeps switching. The joiner-only case and the alternating equal-damage case are proven on the rig with the `attack` verb. |
-| 31 | With a controller, open the server browser's **Connect to an address...** and type an address with the on-screen keyboard; then chat with Enter. | Characters appear as you press A; Y/Start confirms, Back cancels. | Plugin log: `text entry:` lines. |
 
 If something here crashes the game, `KotorCoop.Agent.exe logs` includes the crash record that survives a hard crash.
 

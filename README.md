@@ -41,8 +41,7 @@ players, and it is the page to read before you plan a long session.
 
 ## Requirements
 
-- Windows, or Linux and the Steam Deck through Proton or Wine ([details](#linux-and-steam-deck)). The
-  download needs nothing else installed.
+- Windows. The download needs nothing else installed.
 - **KOTOR 1, version 1.0.3**, from GOG or Steam. KOTOR 2 is not touched.
 - To run two copies on one PC you need a second copy of the game folder, and at least one of the two
   must be the GOG version (Steam allows only one running copy).
@@ -57,7 +56,6 @@ checks.
 - **Windows:** `kotor-coop-<version>-windows.zip`. Either extract it straight into the folder that
   contains `swkotor.exe`, or extract it anywhere and double-click `KotorCoop.Agent.exe`. It finds
   your KOTOR install (GOG or Steam, including other drives), copies everything in and offers to launch.
-- **Linux and Steam Deck:** `kotor-coop-<version>-linux.tar.gz`, then see [below](#linux-and-steam-deck).
 
 If another mod already uses the same helper file (ReShade, an ASI loader and similar), the installer
 notices and sets the two up side by side automatically. See [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
@@ -76,8 +74,6 @@ character. That character is yours on every later join, and your single-player s
 While connected, the mod keeps a save called **Co-op** in your Load Game list. Load that one to keep
 your progress, not Auto Save.
 
-**Controller:** plug in any Xbox-style pad and it works in menus and in the world. Typing an address,
-password or chat line brings up an on-screen letter grid.
 
 **Console and chat:** press `~` for the console and **Enter** to chat with your partner. The full list
 is in [docs/CONSOLE.md](docs/CONSOLE.md).
@@ -94,7 +90,6 @@ is in [docs/CONSOLE.md](docs/CONSOLE.md).
 | Minigames (Pazaak, swoop racing, turrets) | Works, with catches | [limitations § Minigames](docs/limitations.md#minigames) |
 | Story paths (Dantooine Jedi training, the Leviathan, the dark-side temple, Manaan) | Works, with catches; tried in staged scenes, not a full run | [limitations § Story paths](docs/limitations.md#story-paths) |
 | Controls | Works, with catches | [limitations § Controls and interface](docs/limitations.md#controls-and-interface) |
-| Linux and Steam Deck | Should work; not yet run on real hardware | [limitations § Linux and Steam Deck](docs/limitations.md#linux-and-steam-deck) |
 
 **Mods do not have to match.** When you connect, the two installs compare notes and the mod tells
 you on screen what differs and what it switched off because of it.
@@ -105,23 +100,6 @@ The Steam copy is the same game wrapped in a copy-protection layer, so installin
 Steam-to-Steam and Steam-to-GOG sessions both work. Two copies on one PC need at least one GOG copy.
 Details, including the optional Steam friends-list "Join Game" invite:
 [docs/research/steam-support.md](docs/research/steam-support.md).
-
-## Linux and Steam Deck
-
-Both halves of the mod are Windows programs that run inside the game's Wine or Proton prefix with
-nothing extra to install. Extract the Linux download, run its installer, then add one launch option so
-Wine loads the mod's helper file:
-
-```bash
-tar -xzf kotor-coop-<version>-linux.tar.gz && ./kotor-coop-<version>/install.sh
-WINEDLLOVERRIDES="dinput8=n,b" %command%        # Steam / Steam Deck launch options
-```
-
-(Heroic: set the environment variable `WINEDLLOVERRIDES=dinput8=n,b`. Lutris: runner options, DLL
-overrides, `dinput8` set to `n,b`.) After that, hosting and joining work as on Windows.
-
-**Honest status: nobody has run this on a real Linux machine yet.** The first report from a real Deck
-or desktop will tell us where it got to. Details: [docs/research/proton.md](docs/research/proton.md).
 
 ## Settings
 
@@ -153,7 +131,7 @@ Needs the .NET 10 SDK and the Visual Studio 2022 MSVC x86 C++ tools (for the plu
 dotnet build KotorCoop.slnx                     # agent, session, protocol, memory, tests
 dotnet test  tests\KotorCoop.Tests
 pwsh src\KotorCoop.Plugin\build.ps1 -Install    # plugin + agent + overrides into the GOG default folder
-pwsh tools\package.ps1                          # dist\kotor-coop-<version>-windows.zip and -linux.tar.gz
+pwsh tools\package.ps1                          # dist\kotor-coop-<version>-windows.zip
 ```
 
 `build.ps1 -Install` deploys into `C:\GOG Games\Star Wars KOTOR (GOG)` by default (`-GameDir` for
