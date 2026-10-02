@@ -104,7 +104,7 @@ This page describes the current development version, which may be newer than a d
 | | Status | What to expect |
 | --- | --- | --- |
 | Pazaak | **Works** | One player plays; the other is told they are waiting. |
-| Swoop racing | **Works** | One player races and the other is held in place with a "waiting" line, then released a moment after the race ends. Checked on the Taris, Manaan and Tatooine tracks, with either player as the racer, including quitting or crashing mid-race. Very occasionally the shared world state can stay off after a race until the next area change; the game now re-syncs the racer on its own, but that fix has not been watched live. Experience works as described under Experience and levelling. |
+| Swoop racing | **Works** | One player races and the other is held in place with a "waiting" line, then released a moment after the race ends. Checked on the Taris, Manaan and Tatooine tracks, with either player as the racer, including quitting or crashing mid-race. After a race started from a normally loaded game, shared state stayed on and nothing needed re-syncing. Shared state staying off after a race was seen only in test setups that jumped straight to the track, and could not be reproduced from a normal load. Experience works as described under Experience and levelling. |
 | The Ebon Hawk turret ambush | **Works** | The player at the turrets fights for real; the other waits and is released when it is over. |
 
 ## Controls and interface
