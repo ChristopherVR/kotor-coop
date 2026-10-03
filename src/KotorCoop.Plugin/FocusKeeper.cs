@@ -29,6 +29,7 @@ internal sealed class FocusKeeper(SharedBlockView block)
 
     private int _countdown;
     private uint _cleared;
+    private uint _enemyBannersLogged;
 
     /// <summary>Activate the render window on launch so the instance is not black until it
     /// is clicked. Off restores the stock behaviour for anyone who wants it.</summary>
@@ -38,6 +39,8 @@ internal sealed class FocusKeeper(SharedBlockView block)
 
     public void OnFrame()
     {
+        EnemyPausePresentationHook.Suppress = block.KeepAliveUnfocused;
+        DialogueForceFlagHook.DeferForMenus = block.KeepAliveUnfocused;
         if (_countdown > 0)
         {
             _countdown--;
@@ -45,6 +48,14 @@ internal sealed class FocusKeeper(SharedBlockView block)
         }
 
         _countdown = CheckIntervalFrames;
+
+        uint suppressed = EnemyPausePresentationHook.SuppressedCount;
+        if (suppressed != _enemyBannersLogged)
+        {
+            _enemyBannersLogged = suppressed;
+            if (suppressed <= 5)
+                PluginHost.Log($"pause: suppressed enemy-sighted auto-pause banner (#{suppressed}); co-op simulation continues");
+        }
 
         // Recover input only for the foreground game. Rapid switches can leave the
         // render window active while the raw-input latch is still deactivated.

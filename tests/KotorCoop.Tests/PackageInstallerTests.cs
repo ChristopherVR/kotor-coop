@@ -44,6 +44,33 @@ public sealed class PackageInstallerTests : IDisposable
 
     private void Log(string line) => _log.Add(line);
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LockedHelperRefusesBeforeChangingPluginOrChain(bool uninstall)
+    {
+        string root = NewRoot();
+        string package = CreatePackage(root);
+        string game = CreateGameDirectory(root);
+        File.WriteAllBytes(Path.Combine(game, "dinput8.dll"), Pad(PluginMarkerBytes));
+        File.WriteAllText(Path.Combine(game, "KotorCoop.Agent.exe"), "old helper");
+        byte[] before = File.ReadAllBytes(Path.Combine(game, "dinput8.dll"));
+        using var held = new FileStream(Path.Combine(game, "KotorCoop.Agent.exe"),
+            FileMode.Open, FileAccess.Read, FileShare.Read);
+
+        var error = Assert.Throws<PackageInstaller.RefusedException>(() =>
+        {
+            if (uninstall) PackageInstaller.Uninstall(game, Log);
+            else PackageInstaller.Install(new(package, game, Chain: true), Log);
+        });
+
+        Assert.Contains("No files were changed", error.Message);
+        Assert.Equal(before, File.ReadAllBytes(Path.Combine(game, "dinput8.dll")));
+        Assert.False(File.Exists(Path.Combine(game, "dinput8.chain")));
+        Assert.False(File.Exists(Path.Combine(game, "KotorCoop.Plugin.dll")));
+        Assert.Equal("old helper", File.ReadAllText(Path.Combine(game, "KotorCoop.Agent.exe")));
+    }
+
     private string NewRoot()
     {
         string root = Path.Combine(Path.GetTempPath(), "kcoop-pkg-test-" + Guid.NewGuid().ToString("N"));

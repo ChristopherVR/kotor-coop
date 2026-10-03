@@ -9,6 +9,8 @@ internal sealed class NativeSaveIoWatch
     private uint _thread, _written, _closed;
     private bool _failed;
     public bool Active => _thread != 0;
+    internal string CompletionDiagnostic(uint thread)
+        => $"active={Active}, thread={thread == _thread}, failed={_failed}, written=0x{_written:X}, closed=0x{_closed:X}";
     public bool Begin(uint thread, string directory)
     {
         bool nested = Active;

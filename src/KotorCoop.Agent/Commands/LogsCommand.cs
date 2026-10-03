@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -73,7 +74,8 @@ public static class LogsCommand
         string name = fileName.ToLowerInvariant();
         return name.StartsWith("kotorcoop-plugin", StringComparison.Ordinal) && name.Contains(".log", StringComparison.Ordinal)
             || name.StartsWith("kotorcoop-agent", StringComparison.Ordinal) && name.Contains(".log", StringComparison.Ordinal)
-            || name == "kotorcoop-crash.bin";
+            || name == "kotorcoop-crash.bin"
+            || name == "dinput8-chain.log";
     }
 
     /// <summary>Writes the bundle. Returns the number of files added (coop.ini and system.txt
@@ -139,6 +141,7 @@ public static class LogsCommand
         StringBuilder sb = new();
         sb.AppendLine($"generated   {DateTime.UtcNow:u}");
         sb.AppendLine($"agent       {agentVersion}");
+        sb.AppendLine($"installed   {PackageInstaller.ReadVersion(gameDirectory) ?? "unknown"}");
         sb.AppendLine($"os          {Environment.OSVersion} ({(Environment.Is64BitOperatingSystem ? "64" : "32")}-bit)");
         sb.AppendLine($"game dir    {gameDirectory}");
 
@@ -173,7 +176,10 @@ public static class LogsCommand
         string folder = !string.IsNullOrEmpty(desktop) && Directory.Exists(desktop) ? desktop : game;
         string zip = Path.Combine(folder, $"kotorcoop-support-{DateTime.Now:yyyyMMdd-HHmmss}.zip");
 
-        int files = WriteBundle(game, zip, typeof(LogsCommand).Assembly.GetName().Version?.ToString() ?? "unknown");
+        string version = typeof(LogsCommand).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+            ?? typeof(LogsCommand).Assembly.GetName().Version?.ToString() ?? "unknown";
+        int files = WriteBundle(game, zip, version);
         if (files == 0)
         {
             Console.WriteLine($"nothing to collect in {game} (no kotorcoop logs or coop.ini yet - run the game once first).");

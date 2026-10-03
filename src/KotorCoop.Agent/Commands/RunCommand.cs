@@ -97,11 +97,7 @@ internal static class RunCommand
                 return 2;
             }
 
-            Console.WriteLine($"waiting at the main menu ({diagnostic}); player state resolves when a game loads.");
-        }
-        else
-        {
-            Console.WriteLine(diagnostic);
+            Console.WriteLine("Waiting for a game to load.");
         }
 
         using CancellationTokenSource cts = new();
@@ -155,6 +151,10 @@ internal static class RunCommand
             Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Co-op agent closed: session setup failed.");
             return 1;
         }
+
+        session.Dashboard.LogOnly(diagnostic);
+        if (CoopConfig.DeveloperSwitches.Count > 0)
+            session.Dashboard.LogOnly($"coop.ini developer switches: {string.Join(", ", CoopConfig.DeveloperSwitches)}");
 
         try
         {

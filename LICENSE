@@ -1,0 +1,87 @@
+kotor-coop Play and Contribute License 1.0
+
+Copyright (c) 2026 kotor-coop contributors. All rights reserved except as
+expressly granted below. The project name does not transfer ownership;
+the respective copyright holders retain their rights.
+
+1. Scope
+This license applies only to original project material whose copyright holders
+have authorized this license (the "Mod"). It excludes the game, game assets,
+trademarks, third-party dependencies and separately licensed material. Their
+owners' rights and terms remain effective. The official project is
+https://github.com/ChristopherVR/kotor-coop.
+
+2. Play and copying
+Subject to these terms, the copyright holders grant you a nonexclusive,
+worldwide, royalty-free license to download, install, run and back up official,
+unmodified releases for personal, noncommercial play with a lawfully acquired,
+properly licensed game. Supported configuration changes and compiling an
+unmodified copy of official source for that use are permitted. You may share
+an unchanged official release archive free of charge with all accompanying
+license and notices, without bundling the game or claiming to be the project.
+
+3. Direct contributions
+You may inspect, copy, build, modify and test the Mod solely to prepare and
+submit contributions to the official project. Local branches and development
+forks for this purpose are permitted. Patches and test builds may be shared
+with official maintainers for review. This does not permit independent releases
+or general distribution of modified versions. Official maintainers may modify,
+integrate, build and release authorized material within the official project
+under this license.
+
+By intentionally submitting a contribution for inclusion, you represent that
+you have the necessary rights and identify separately licensed material. You
+retain ownership and grant the copyright holders and official maintainers a
+nonexclusive, worldwide, perpetual, irrevocable, royalty-free copyright license
+to use, reproduce, modify, combine and distribute your contribution within the
+official project under this license. You grant recipients this license's
+permissions for that contribution. This does not assign ownership or
+retroactively license earlier contributions.
+
+4. Restrictions
+Without separate written permission from the relevant copyright holders,
+you may not distribute or operate an independent modified version, publish
+a competing derivative project, rebrand the Mod as your own, or reuse covered
+material in another project outside section 3. You may not sell, monetize or
+commercially exploit the Mod, including paid access, paid bundles or paid Mod
+hosting. Required copyright, license and third-party notices must be retained.
+You may not claim another contributor's work as your own.
+
+This license does not authorize distribution of game executables, extracted
+game assets, keys, cracks or unauthorized game copies, or bypassing DRM or
+license controls. The project does not condone piracy.
+
+5. Independent rights and platforms
+Nothing restricts rights that cannot be restricted under applicable law or
+rights independently granted by another rights holder or separate license.
+Public GitHub repository viewing, copying and forking permissions under the
+applicable GitHub Terms of Service remain effective. Platform permissions do
+not themselves authorize independent Mod releases or commercial reuse beyond
+the rights those terms actually grant.
+
+6. Game ownership
+This is an unofficial fan project with no claimed endorsement or affiliation
+with the game's rights holders, developers or publishers. It does not own
+Star Wars: Knights of the Old Republic, its content, characters or trademarks.
+All game rights remain with their owners. This license supplies no game
+license, overrides no game/store terms, and does not establish that game
+modification, reverse engineering or asset distribution is lawful.
+
+7. Termination
+These permissions end if you breach their conditions; stop uses relying on
+them. This does not terminate statutory or independent third-party rights,
+rights validly granted to other recipients, or contribution grants you have
+already made under section 3.
+
+8. Warranty and liability
+To the extent permitted by law, the Mod is provided "AS IS", without warranties,
+including merchantability, fitness for a particular purpose, noninfringement
+or preservation of saves. To that extent, copyright holders and contributors
+are not liable for loss or damage arising from use. No liability or consumer
+right that cannot legally be excluded or limited is excluded or limited here.
+
+9. Additional permission
+All other rights are reserved. Additional permissions require the relevant
+rights holders' authorization; a project name or maintainer role does not
+confer ownership of all material. Contact the official repository owner
+through the repository for permission requests.

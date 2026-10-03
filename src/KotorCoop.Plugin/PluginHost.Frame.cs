@@ -667,8 +667,8 @@ internal static unsafe partial class PluginHost
             {
                 // Pre-store flush: StoreCurrentModule serialises every non-party creature and
                 // item on the way out, so anything the plugin spawned must be gone before the
-                // area is stored or it becomes a permanent resident of the saved module. One
-                // destroy per frame; the window is ~150 frames and there are at most 16 bodies.
+                // area is stored or it becomes a permanent resident of the saved module.
+                // Every registry must get a turn before the engine-owned fade finishes.
                 if (!_transitionPending)
                 {
                     _transitionPending = true;
@@ -688,29 +688,14 @@ internal static unsafe partial class PluginHost
                     }
                 }
 
-                if (_controller is { } phantoms && phantoms.FlushOneBody())
-                {
-                    return;
-                }
-
-                if (_items is { } items && items.FlushOneBody())
-                {
-                    return;
-                }
-
-                if (MaterialisedEnemies.FlushOneBody())
-                {
-                    return;
-                }
-
-                // A client's party-placed mine REPLICAS are session state, not world state
-                // (docs/research/mines.md §14.5); the host's copies are canonical and stay.
-                if (_placedMines is { } placedMines && placedMines.FlushOneReplica())
-                {
-                    return;
-                }
-
+                // A native fade can leave only one rendered frame for cleanup. Give
+                // every registry a turn in that frame; returning after the first pin
+                // or phantom leaves the other kind in the outgoing saved module.
                 _mapMarkers?.FlushOneBody();
+                _controller?.FlushOneBody();
+                _items?.FlushOneBody();
+                MaterialisedEnemies.FlushOneBody();
+                _placedMines?.FlushOneReplica();
                 return;
             }
 
@@ -831,6 +816,13 @@ internal static unsafe partial class PluginHost
                 }
 
                 if (_placedMines is { } placedMines && placedMines.FlushOneReplica())
+                {
+                    return;
+                }
+
+                // A destroy request can be accepted before the engine removes its body.
+                // Flush all registries first, then wait before the plugin-owned warp.
+                if (CountSpawnedBodiesStanding() != 0)
                 {
                     return;
                 }

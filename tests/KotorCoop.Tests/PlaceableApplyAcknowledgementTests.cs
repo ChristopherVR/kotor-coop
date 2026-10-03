@@ -71,6 +71,33 @@ public sealed class PlaceableApplyAcknowledgementTests : IDisposable
         Consume(8, 1);
         Assert.Empty(Shadow);
     }
+
+    [Fact]
+    public void OlderRotatingRowsCannotOverwriteTheNewestAppliedState()
+    {
+        // One object moves between slots as the bounded desired list rotates. Older
+        // completed ACKs remain in the previous slots, exactly as on the live rig.
+        Marshal.WriteInt32(_block + 0xB80C, 0xC6);
+        Marshal.WriteInt32(_block + 0xB810, 3); // old open/unlocked tuple
+        Marshal.WriteInt32(_block + 0xB814, 2);
+        Consume(0, 4); // newest closed/locked tuple, encountered first
+        Assert.Equal(((byte)0, (byte)1, (byte)0), Shadow[0xC6]);
+
+        // A genuine local unlock must survive the next poll of those same rows.
+        Shadow[0xC6] = (0, 0, 0);
+        Consume(0, 4);
+        Assert.Equal(((byte)0, (byte)0, (byte)0), Shadow[0xC6]);
+    }
+
+    [Fact]
+    public void AppliedGenerationWrapAcceptsNewStateAndRejectsOldRows()
+    {
+        Consume(3, uint.MaxValue);
+        Consume(0, 1); // generation zero is reserved
+        Assert.Equal(((byte)0, (byte)1, (byte)0), Shadow[0xC6]);
+        Consume(3, uint.MaxValue);
+        Assert.Equal(((byte)0, (byte)1, (byte)0), Shadow[0xC6]);
+    }
     public void Dispose()
     {
         _bridge.Dispose();

@@ -162,6 +162,36 @@ public static partial class PackageInstaller
         Identify(Path.Combine(gameDirectory, PluginFileName)) is DinputKind.Plugin or DinputKind.Loader
         && File.Exists(Path.Combine(gameDirectory, "KotorCoop.Agent.exe"));
 
+    private static void EnsureFilesAvailable(string game)
+    {
+        // Check before changing the chain or any installed file. A later locked helper
+        // must not leave an already replaced plugin paired with the old helper.
+        IEnumerable<string> files = new[] { GameExecutable, PluginFileName, ChainPluginFileName,
+                PreviousFileName, ChainFileName }
+            .Select(name => Path.Combine(game, name))
+            .Concat(Directory.EnumerateFiles(game, "KotorCoop.*"));
+        string overrides = Path.Combine(game, "Override");
+        if (Directory.Exists(overrides))
+        {
+            files = files.Concat(Directory.EnumerateFiles(overrides, "k_coop_*"));
+        }
+
+        foreach (string file in files.Where(File.Exists))
+        {
+            try
+            {
+                using var probe = new FileStream(file, FileMode.Open, FileAccess.Write,
+                    FileShare.ReadWrite | FileShare.Delete);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                throw new RefusedException($"cannot update or remove {Path.GetFileName(file)}: "
+                    + "close this game's window and its co-op helper, then retry; "
+                    + "if they are closed, check the folder's write permissions. No files were changed.");
+            }
+        }
+    }
+
     /// <summary>
     /// Installs; every file placed is reported through <paramref name="log"/>. Returns
     /// whether the health check run at the end (<see cref="Check"/>) passed — the caller
@@ -198,6 +228,7 @@ public static partial class PackageInstaller
         }
 
         string proxyTarget = Path.Combine(game, PluginFileName);
+        EnsureFilesAvailable(game);
         DinputKind existing = Identify(proxyTarget);
 
         // Whether THIS directory already looks like a chain install (the loader is in the
@@ -578,6 +609,7 @@ public static partial class PackageInstaller
     public static void Uninstall(string gameDirectory, Action<string> log)
     {
         string game = Path.GetFullPath(gameDirectory);
+        EnsureFilesAvailable(game);
         string proxy = Path.Combine(game, PluginFileName);
 
         switch (Identify(proxy))

@@ -34,7 +34,7 @@ This page describes the current development version, which may be newer than a d
 | Starting from the game's own menu | **Works** | There is a **Co-op** button on the main menu. One player presses **Host**; the other picks the server and presses **Connect**. Nothing to launch by hand. |
 | Your own character | **Works** | The first time you join, the normal character-creation screen opens and you make your character. That character comes with you every time you join, and your single-player games are never touched. While you are connected, the mod keeps a save called **Co-op** in your Load Game list; load that one, not Auto Save. |
 | Bringing your own backpack and credits | **Works** | Your items and credits stay yours. If you disconnect and come back, you get your own back, not your partner's. |
-| Playing over the internet | **Works, with a catch** | The reliable way is a free tunnel program such as playit.gg, run by the host. The built-in automatic port opening was tried once on a real home connection and did not work, probably because of the internet provider. If your friend cannot connect, use a tunnel. The installer deals with the Windows firewall. There is no relay server. |
+| Playing over the internet | **Works, with a catch** | The reliable way is a free tunnel program such as playit.gg, run by the host. The built-in automatic port opening was tried once on a real home connection and did not work, probably because of the internet provider. If your friend cannot connect, use a tunnel. The host must allow the agent through Windows Firewall. Setup adds rules when run as Administrator; otherwise it prints the commands to run. There is no relay server. |
 | GOG and Steam copies together | **Works** | Any mix. Two copies on one PC need at least one to be the GOG version. |
 | Saving and loading while connected | **Works** | Either player can save or load, and the other one rejoins by itself in about 10 to 20 seconds. If the host loads a save while the other player is still watching the Endar Spire's opening movie, the other player rejoins as soon as the movie ends. |
 | Reconnecting after a drop | **Works** | You come back into the shared world. If the mod cannot tell your world still matches, it reloads you into the host's world after about 15 seconds, keeping your character, backpack and credits. |
@@ -137,8 +137,10 @@ through the game's own scripts and conversations.
 - **The joining player's click on a Manaan airlock or on Bastila at the dark-side temple hands the
   scene to the host.** That is deliberate: the host runs those scenes so the story stays in one place.
 - **A settings file from an old install keeps its old values.** The installer never overwrites your
-  settings. If something this page says is on seems off, run the installer's "update defaults"
-  option, or compare with the example settings file that ships with the mod.
+  settings. If something this page says is on seems off, compare with
+  `profiles/coop.ini.example` in the repository. The packaged PowerShell wrapper offers
+  `install.ps1 -UpdateDefaults` for selected changed defaults; double-click setup does not
+  offer that migration option.
 
 ## Not yet tried on real hardware
 

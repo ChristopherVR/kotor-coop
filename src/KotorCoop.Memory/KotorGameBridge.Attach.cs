@@ -745,12 +745,21 @@ public sealed partial class KotorGameBridge
 
             if (secondOk && second != first)
             {
-                _pluginBlock = candidate;
-                ResetItemSlots();
-                BaselineTakeSerials();
+                InitializeAttachedPlugin(candidate);
                 return;
             }
         }
+    }
+
+    internal void InitializeAttachedPlugin(nint candidate)
+    {
+        _pluginBlock = candidate;
+        // The game outlives a failed helper. Its replacement owns no session yet, so
+        // withdraw the old session levels before its heartbeat resumes plugin writes.
+        // The command falls last through the normal teardown, releasing native bodies.
+        ClearCoopState();
+        ResetItemSlots();
+        BaselineTakeSerials();
     }
 
     private static readonly byte[] AttachedPluginSignature = Convert.FromHexString(PluginSignature.Replace(" ", ""));

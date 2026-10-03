@@ -61,7 +61,7 @@ internal sealed class PauseController(SharedBlockView block)
         // one missed edge otherwise leaves a permanent PAUSED banner and a dead pause key.
         // Runs whether or not a session is active — the stuck state comes from the login
         // chain and from mirror races, and both exist before a peer connects.
-        if (Odyssey.HasPlayer && Odyssey.ReconcilePause(out string what))
+        if (Odyssey.HasPlayer && Odyssey.ReconcilePause(block.KeepAliveUnfocused, out string what))
         {
             LogFew($"pause: reconciler {what}");
         }

@@ -13,6 +13,72 @@ blanked, and a short note on the game and mod files present. Attach that one fil
 still show IP addresses and character names, so open the zip first if that matters. `crashbin.ps1` and `crashlog.ps1`
 are developer tools and are not needed for a report.
 
+Use the [bug report form](https://github.com/ChristopherVR/kotor-coop/issues/new?template=bug_report.yml).
+Include the package version for every player, who was hosting, the area and last action,
+expected and actual results, game mods, and whether this was LAN or internet play.
+For a session problem, collect a bundle from both host and joiner before repeated launches
+rotate the useful logs away. With multiple installations, specify the affected one:
+
+```powershell
+.\KotorCoop.Agent.exe logs --game-path "C:\GOG Games\Star Wars KOTOR (GOG)"
+```
+
+The bundle includes `dinput8-chain.log` when present and records the collecting agent's
+build version plus the version installed in the selected game folder. It does not include
+saved games; if reproducing needs one, keep a separate copy of that save folder.
+
+## Setup refuses an update or removal because a file is in use
+
+Close the game window for that installation and its co-op helper before updating or
+uninstalling. The installer checks existing game and mod files before changing them;
+its refusal names the blocked file and says that no files were changed. A helper can
+remain open briefly after the game exits, so wait for it to close and retry. If both
+are closed, check that your account can write to the game folder. `install --check`
+is read-only and can still run while the game is open.
+
+## The helper restarted, but the host is no longer hosting
+
+With `auto_start_agent = 1`, the plugin can restart a failed helper automatically. The new
+helper starts in menu mode; it may wait for a fresh Host or Connect choice rather than resume
+the previous session. A joiner can show "reconnecting" while the host's helper is already running.
+
+On the host, open the in-game `~` console and enter `host` to host again. Keep the same port.
+The joiner should reconnect; if it does not, choose Connect again or enter `connect <host>:<port>`.
+Collect both players' support bundles if recovery fails. Automatic helper restart alone does
+not establish that the multiplayer session has recovered.
+
+## Restarting after the game exits unexpectedly
+
+Keep both players' logs and the last good checkpoint. Restart the game and load that
+checkpoint, then connect again. Unsaved progress is not guaranteed to survive a hard
+exit; a local forced-exit check restored saved credits and lost the later unsaved change.
+If you see `W_SAVE` or `W_GIT`, shared channels are disabled. Follow the world-recovery
+steps below and wait for normal control and the connection to return before continuing.
+Successful reconnection alone does not confirm that shared objects are syncing.
+
+## Shared objects stop syncing after an object-mapping warning
+
+`W_GIT` means the saved object IDs differ between the two worlds. The mod disables affected
+channels because applying a door, enemy or item update to the wrong object would be unsafe.
+Keep both players' logs and save folders before trying recovery.
+
+On the joiner, enter `reconnect world` in the in-game `~` console to adopt the host's latest
+saved world with your own character. If asked to save first, both players should save, then
+the joiner should retry within the stated window. This reloads the joiner's world; wait for
+normal control and the connection to return. In personal inventory mode, your own saved
+inventory and credits should be retained. Report any loss or duplication with both log bundles.
+
+## Disconnect says it kept the last verified character checkpoint
+
+That message means the fresh disconnect save could not be proved complete. It does not mean
+your latest progress was captured. While still in a playable world, make a named save and keep
+its folder before closing the game. Collect the support bundle if the warning repeats.
+
+The 3 October development fix addresses a reproduced ten-second capture timeout after world
+adoption: the engine reused a longer save-name buffer, and the completion hook rejected the
+shorter Co-op name. The r5 verification package completed the same capture in 1.29 seconds.
+That package is a local candidate; check your installed build when comparing results.
+
 ## "Co-op" button doesn't appear on the main menu
 
 `menu_button` defaults ON in the code (both readers — see CONFIG.md) and the shipped
@@ -39,9 +105,9 @@ The plugin did not load. `dinput8.dll` must sit in the same directory as `swkoto
 
 ## Another mod already uses `dinput8.dll` (ReShade, an ASI loader, ...)
 
-The installer refuses to overwrite a `dinput8.dll` it does not recognise as its own (the
-double-click setup asks; `KotorCoop.Agent.exe install` and `install.ps1` need `--chain`/
-`-Chain` or `--force`). In chain mode the small `KotorCoop.Loader` wrapper becomes
+The command-line installer automatically preserves another mod's `dinput8.dll` by chaining;
+the double-click setup offers to keep it and load both. `--chain` / `-Chain` explicitly
+selects the same mode. Avoid `--force`, which overwrites the other DLL. In chain mode the small `KotorCoop.Loader` wrapper becomes
 `dinput8.dll`, the plugin is installed as `KotorCoop.Plugin.dll`, the other mod is renamed
 `dinput8.prev.dll`, and `dinput8.chain` lists all of them in load order (edit it by hand to
 add more; `--load a.dll` does the same). Extracting the zip straight over the other mod

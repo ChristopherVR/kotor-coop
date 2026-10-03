@@ -37,9 +37,12 @@ internal static unsafe partial class Odyssey
     ///
     /// MAIN THREAD ONLY.
     /// </summary>
-    public static bool ReconcilePause(out string detail)
+    public static bool ReconcilePause(bool coopKeepAlive, out string detail)
     {
         detail = "";
+
+        if (!PausePresentationRule.CanReconcile(IsFullScreenGuiUp, IsConversationActive,
+            PasswordEntryModal.IsAnyOpen)) return false;
 
         nint client = GetClient();
         nint server = GetServer();
@@ -62,6 +65,21 @@ internal static unsafe partial class Odyssey
         int union = GetPauseMask() | GetClientPauseMask();
         bool guiBelieves = *(int*)(gui + GuiBelievesPaused) != 0;
         bool repaired = false;
+
+        if (union == 0 && !guiBelieves && *(int*)(gui + 0xB38) != 0)
+        {
+            nint clientTimer = ClientGetWorldTimerFn(client);
+            nint serverTimer = ServerGetWorldTimerFn(server);
+            if (clientTimer != 0 && serverTimer != 0
+                && PausePresentationRule.ClearOrphanedPanel(coopKeepAlive, union, true, guiBelieves,
+                    *(int*)(clientTimer + WorldTimerPausedFlag) != 0,
+                    *(int*)(serverTimer + WorldTimerPausedFlag) != 0))
+            {
+                SetPauseVisualsFn(gui, 0, PauseReasonManual);
+                detail = "cleared orphaned pause panel after GUI return (no masks, both timers running)";
+                return true;
+            }
+        }
 
         // ⚠ THE BANNER IS THE ENGINE'S OWN INTENT, AND IT WINS.
         //

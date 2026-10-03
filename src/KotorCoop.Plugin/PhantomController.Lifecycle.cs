@@ -35,6 +35,7 @@ internal sealed unsafe partial class PhantomController
     /// </summary>
     public void Invalidate()
     {
+        _pendingDeletion.Clear();
         for (int i = 0; i < _phantoms.Length; i++)
         {
             if (_phantoms[i] != 0)
@@ -109,6 +110,7 @@ internal sealed unsafe partial class PhantomController
 
         if (Odyssey.DestroyObjectById(objectId, out int failure))
         {
+            _pendingDeletion.Track(objectId, _phantoms[slot]);
             PluginHost.Log($"{reason}: destroyed phantom 0x{objectId:X} (slot {slot})");
             ClearSlot(slot);
             PluginEvents.RaisePeerSlotDestroyed(slot, objectId);

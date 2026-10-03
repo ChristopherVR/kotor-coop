@@ -35,6 +35,8 @@ public sealed class ReliableLootSender(
     /// harmlessly under normal play.</summary>
     private bool _capRefusalLogged;
 
+    public bool HasCapacity { get { lock (_gate) return _pending.Count < maxPending; } }
+
     public int PendingCount
     {
         get

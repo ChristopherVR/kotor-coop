@@ -1,19 +1,30 @@
 kotor-coop {{VERSION}}
 ======================
 
-Two-player co-op for Star Wars: Knights of the Old Republic (the DRM-free GOG build,
-v1.0.3). Two full copies of the game run side by side -- on one machine or across a network
+License: personal, noncommercial use of official releases is permitted with a
+lawfully acquired game. Contributions to the official project are permitted;
+independent modified releases and commercial reuse require written permission.
+Read KotorCoop.LICENSE.txt. This is an unofficial fan mod; game rights remain
+with their owners. We do not condone piracy or claim endorsement. Third-party
+licenses apply separately. Legal review and the full dependency notice audit
+remain outstanding; see KotorCoop.LEGAL.txt and KotorCoop.THIRD-PARTY-NOTICES.txt.
+
+Two-to-eight-player co-op for Star Wars: Knights of the Old Republic (GOG or Steam,
+v1.0.3), on 64-bit Windows. Each player needs their own copy -- on one machine or across a network
 -- and this package bridges them into one shared world: you see each other as real in-game
 characters, travel, fight, loot, talk and pause together.
 
-No game file is modified. Everything lives beside swkotor.exe and can be removed again.
+The game executable is unchanged. Mod files live beside swkotor.exe and can be removed.
+Co-op play writes dedicated saves and uses the game's Auto Save slot; see "Play" below.
 
-What to expect. You can play the whole game together, start to finish. Either player can
+What to expect. This is a public playtest. A complete co-op campaign from start to finish
+has NOT been verified. Early-game routes and selected later scenes have been tested;
+three-to-eight-player campaign play is less extensively tested. Either player can
 lead through doors and area changes, and either player can pick the destination on the galaxy
 map -- the other one is taken along automatically, take-off movie and all. Enemies have one
 shared health bar, your hits land, and stuns, slows and heals reach your partner for real. The
-party's inventory, credits, merchant stock, doors, chests, quests and the journal are all one
-shared copy. Companions follow the host's game; set companion_local_combat = 1 in coop.ini
+backpacks and credits are personal by default; quest items, merchant stock, doors, chests,
+quests and the journal are shared. Companions follow the host's game; set companion_local_combat = 1 in coop.ini
 (off by default) to let one also fight for the other player through their own copy of the game.
 One conversation runs at a time: whoever starts it picks the replies and the other player watches
 it live. Pazaak and the swoop race are single-seat -- the other player is told they're waiting.
@@ -23,22 +34,25 @@ New Game screen; the mod keeps it and uses it on every join after. Mouse and key
 The full list -- what works, what has a catch, and what is deliberately left to the host -- is
 docs/limitations.md in the full repository (link at the bottom).
 
-Install -- pick one
+Install
 --------------------
 
-A. Extract into the game folder. Unzip this whole archive into the folder that contains
-swkotor.exe (for GOG usually C:\GOG Games\Star Wars KOTOR (GOG)). That's it -- the zip *is*
-the install. Start the game.
-
-B. Double-click KotorCoop.Agent.exe. Unzip anywhere, run the exe. It finds your KOTOR install
+Close KOTOR and its helper agent. Back up your game's saves folder before your first
+co-op session. Extract the whole zip into its OWN folder and double-click
+KotorCoop.Agent.exe. It finds your KOTOR install
 (GOG or Steam, or asks if it finds none or several), copies everything in, and offers to launch
 the game.
 
-Both do the same thing. Re-installing over an older version just works; your coop.ini is
-never overwritten. If another mod already has dinput8.dll (ReShade, an ASI loader, a
-widescreen fix...) both methods notice and set kotor-coop up to run alongside it automatically
+Use this installer for updates on every player's computer; it preserves coop.ini.
+If another mod already has dinput8.dll (ReShade, an ASI loader, a
+widescreen fix...) the installer offers to preserve it and load both mods together
 -- see "Another mod already uses dinput8.dll" below; you don't need to know anything about it
-in advance.
+in advance. This preserves the loader; it does not certify gameplay compatibility.
+Use the same co-op version and matching game mods for your first session.
+
+Direct extraction into the game folder is only for a clean install without dinput8.dll
+or coop.ini already there. Extracting over an existing install can overwrite another mod
+and your settings; Explorer cannot run the installer's preservation logic.
 
 Play
 ----
@@ -61,7 +75,7 @@ character is separate from any single-player game on the same install: the mod k
 saves\kotorcoop-character.*, refreshes it whenever you save while connected, and drops it into
 the host's world at the area entrance. While connected the mod keeps its own dedicated save --
 "Co-op" in the Load Game list -- refreshed every 10 minutes and as you leave, holding the
-HOST's world, shared credits and shared items included. Your Quick Save is never touched by the
+HOST's world. Your Quick Save is never touched by the
 mod. The game's own Auto Save slot is still used to bring the host's world in the instant you
 join or rejoin (an engine requirement), and keeps autosaving through it as you play, same as
 single player always did -- load "Co-op" for the save meant to be kept, not Auto Save. To start
@@ -189,13 +203,13 @@ see docs/research/network-topology.md if you want the full picture.
 Requirements
 ------------
 
-- Windows. Nothing else to install: KotorCoop.Agent.exe carries its own .NET
+- 64-bit Windows. Nothing else to install: KotorCoop.Agent.exe carries its own .NET
   runtime (that is why it is ~40 MB).
-- KOTOR 1, v1.0.3. A DRM-free (GOG) copy is what this is developed and tested against.
-  Steam's copy is the same binary under a DRM wrapper -- the engine addresses are correct on
-  it too -- but it is only partly supported; see "Steam" below.
+- KOTOR 1, v1.0.3, from GOG or Steam. Mixed-store sessions have been tested;
+  see "Steam" below for same-PC restrictions and optional invites.
 - For two players on one machine: a second copy of the game folder, with this installed
-  into both. Start the second copy through the helper (it renames the game's single-instance
+  into both; at least one must be DRM-free (GOG). If using Steam, launch it first.
+  Start the second DRM-free copy through the helper (it renames the game's single-instance
   lock): KotorCoop.Agent.exe launch --instance 2 --game-path <second copy>\swkotor.exe.
 
 Steam
@@ -241,8 +255,9 @@ Screen, Internet play and Advanced. The most commonly-touched ones:
 
   name               Your name as shown to your partner (blank = a generated one).
   password           Optional. Must match on both sides.
-  port               UDP port (default 27140). The host's port must be reachable from the
-                     client.
+  port               Session port (shipped settings: 27140; code fallback: 27015).
+                     Use the actual port shown by the host. UDP carries the session;
+                     TCP carries the initial save transfer, with UDP transfer fallback.
   host / mode        Address to join and host/join mode. Optional: the in-game server list and
                      its address box don't need them. A host set here pre-fills the address
                      box until you first use it; after that the box remembers what you last

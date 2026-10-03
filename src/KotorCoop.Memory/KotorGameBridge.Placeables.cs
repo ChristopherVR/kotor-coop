@@ -188,7 +188,11 @@ public sealed partial class KotorGameBridge
                 || !_memory.TryReadUInt32(row + 4, out uint value) || value > 7
                 || !_memory.TryReadUInt32(row + 8, out uint afterGeneration) || generation != afterGeneration
                 || !_memory.TryReadUInt32(row, out uint afterId) || id != afterId
-                || (_placeableApplyAcknowledgements.TryGetValue(id, out uint previous) && previous == generation)) continue;
+                // ACK rows survive slot rotation. Consume only a newer generation for
+                // this object, or an older row can re-prime the shadow and publish stale
+                // locks over a genuine local unlock. Signed distance also handles wrap.
+                || (_placeableApplyAcknowledgements.TryGetValue(id, out uint previous)
+                    && unchecked((int)(generation - previous)) <= 0)) continue;
             _placeableApplyAcknowledgements[id] = generation;
             _placeableShadow[id] = ((byte)(value & 1), (byte)((value & 2) == 0 ? 1 : 0), (byte)((value & 4) != 0 ? 1 : 0));
         }
@@ -205,7 +209,8 @@ public sealed partial class KotorGameBridge
                 || !_memory.TryReadUInt32(row + 4, out uint value) || value > 7
                 || !_memory.TryReadUInt32(row + 8, out uint afterGeneration) || generation != afterGeneration
                 || !_memory.TryReadUInt32(row, out uint afterId) || id != afterId
-                || (_placeableLocalChangeGenerations.TryGetValue(id, out uint previous) && previous == generation)) continue;
+                || (_placeableLocalChangeGenerations.TryGetValue(id, out uint previous)
+                    && unchecked((int)(generation - previous)) <= 0)) continue;
             _placeableLocalChangeGenerations[id] = generation;
             _placeablePendingLocalChanges[id] = ((byte)value, false);
         }

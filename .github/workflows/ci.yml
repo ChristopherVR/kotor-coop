@@ -45,6 +45,15 @@ jobs:
         shell: pwsh
         run: pwsh tools/package.ps1 -WarnAsError -OutDir dist
 
+      - name: Verify packaged Windows installer
+        shell: pwsh
+        run: |
+          $archive = @(Get-ChildItem dist/kotor-coop-*-windows.zip)
+          if ($archive.Count -ne 1) { throw 'Expected exactly one Windows package' }
+          Expand-Archive -LiteralPath $archive[0].FullName -DestinationPath artifacts/windows-package
+          pwsh tools/verify-package.ps1 -PackageDirectory artifacts/windows-package -WorkDirectory artifacts/windows-installer-check
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged installer verification failed' }
+
       # Short retention on purpose: release.yml downloads this artifact within minutes of a
       # green run, and a private repository's artifact storage quota is small (the 2026-09-16
       # pushes failed at this step with "Artifact storage quota has been hit" after two

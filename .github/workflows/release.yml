@@ -3,9 +3,8 @@
 # (and whose Linux tarball CI's linux-install job installed), never a second build.
 #
 #   push to main            -> CI green -> rolling pre-release "latest" (replaced every time)
-#   git push origin v0.1.0  -> CI green -> full release "v0.1.0" with
-#                              kotor-coop-0.1.0-windows.zip + kotor-coop-0.1.0-linux.tar.gz
-#   Actions tab (dispatch)  -> publishes the newest successful CI packages for the chosen ref as "latest"
+#   v* tag -> CI validates packages; publication requires an explicit manual promotion.
+#   Actions tab (dispatch) -> rolling main build, or promote a tested v* tag explicitly.
 name: Release
 
 on:
@@ -13,6 +12,16 @@ on:
     workflows: [CI]
     types: [completed]
   workflow_dispatch:
+    inputs:
+      promote_release:
+        description: 'Publish the selected tested v* tag as a numbered release (requires release-readiness sign-off)'
+        type: boolean
+        required: true
+        default: false
+
+concurrency:
+  group: release-publication
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -21,7 +30,11 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
 
     steps:
       - uses: actions/checkout@v7
@@ -34,6 +47,7 @@ jobs:
         id: what
         env:
           GH_TOKEN: ${{ github.token }}
+          PROMOTE_RELEASE: ${{ inputs.promote_release }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_run" ]; then
             ref='${{ github.event.workflow_run.head_branch }}'
@@ -42,13 +56,31 @@ jobs:
           else
             ref='${{ github.ref_name }}'
             sha='${{ github.sha }}'
-            run_id=$(gh run list --workflow CI --commit "$sha" --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+            run_id=$(gh run list --workflow CI --event push --commit "$sha" --status success --limit 1 --json databaseId --jq '.[0].databaseId')
             if [ -z "$run_id" ]; then echo "no successful CI run for $sha"; exit 1; fi
           fi
 
           case "$ref" in
-            v[0-9]*) kind=tag ;;
-            main)    kind=latest ;;
+            v[0-9]*)
+              if [ "${{ github.event_name }}" = workflow_dispatch ] && [ "$PROMOTE_RELEASE" = true ]; then
+                kind=tag
+              else
+                echo "tag packages validated; numbered publication requires manual promotion"
+                kind=skip
+              fi ;;
+            main)
+              if [ "$PROMOTE_RELEASE" = true ]; then
+                echo "::error::Select a tested v* tag to promote a numbered release."
+                exit 1
+              fi
+              tip=$(git ls-remote origin refs/heads/main | cut -f1)
+              if [ -z "$tip" ]; then echo "::error::Cannot resolve current main tip."; exit 1; fi
+              if [ "$tip" != "$sha" ]; then
+                echo "superseded main build; rolling release unchanged"
+                kind=skip
+              else
+                kind=latest
+              fi ;;
             *)       echo "ref $ref is neither main nor a v* tag; nothing to publish"; kind=skip ;;
           esac
 
@@ -92,6 +124,22 @@ jobs:
           zip_sha256=$(sha256sum "$zip" | cut -d' ' -f1)
           tgz_sha256=$(sha256sum "$tgz" | cut -d' ' -f1)
           version=${zip_name#kotor-coop-}; version=${version%-windows.zip}
+          source_version=$(git show "$sha:VERSION" | tr -d '[:space:]')
+          bumped=$(git log -1 --format=%H "$sha" -- VERSION)
+          since=$(git rev-list --count "$bumped..$sha")
+          expected_version="$source_version"
+          if [ "$since" -ne 0 ]; then
+            short_sha=$(git rev-parse --short=7 "$sha")
+            expected_version="$source_version-$since-g$short_sha"
+          fi
+          if [ "$version" != "$expected_version" ] || [ "$tgz_name" != "kotor-coop-$version-linux.tar.gz" ]; then
+            echo "::error::Package filenames and source VERSION do not agree."
+            exit 1
+          fi
+          if [ "$kind" = tag ] && { [ "$ref" != "v$version" ] || [ "$version" != "$source_version" ]; }; then
+            echo "::error::Selected tag does not match the validated package version."
+            exit 1
+          fi
 
           # The notes lead with the one thing a visitor is here for: which file is for their
           # machine, a direct link to it, and how to install it. GitHub lists assets below the
@@ -105,24 +153,24 @@ jobs:
               echo
               echo "| Platform | File | Install |"
               echo "| --- | --- | --- |"
-              echo "| Windows | **[$zip_name]($base/$zip_name)** (${zip_size} KB) | extract into your KOTOR folder, or double-click \`KotorCoop.Agent.exe\` from anywhere |"
+              echo "| Windows | **[$zip_name]($base/$zip_name)** (${zip_size} KB) | extract into its own folder, then run \`KotorCoop.Agent.exe\` |"
               echo
               echo "No SDK, runtime or toolchain needed."
               echo
-              echo "**Windows, pick one:**"
-              echo "- **Portable:** extract the zip straight into the folder that has \`swkotor.exe\` (for GOG usually \`C:\\GOG Games\\Star Wars KOTOR (GOG)\`) and start the game. The zip *is* the install."
-              echo "- **Installer:** extract anywhere and double-click \`KotorCoop.Agent.exe\`. It finds your GOG install (or asks you to pick the folder), copies everything in, and offers to launch. No PowerShell needed."
+              echo "**Windows:** close KOTOR and its agent, back up your saves, extract into a separate folder and double-click \`KotorCoop.Agent.exe\`. It finds your GOG or Steam install (or asks you to pick the folder), copies and checks the files, and offers to launch. No PowerShell needed."
+              echo "Use the installer for updates and existing mods: direct extraction can overwrite \`coop.ini\` or another mod's \`dinput8.dll\`. Install the same co-op version on every computer."
               echo
-              echo "(A \`pwsh .\\install.ps1 -GameDir '...'\` script is also included for scripted/CLI installs, but neither of the two options above needs it.)"
+              echo "(A \`pwsh .\\install.ps1 -GameDir '...'\` script is also included for scripted/CLI installs; double-click setup does not need it.)"
               echo
               echo "It contains the plugin (\`dinput8.dll\`), the chain loader for sharing \`dinput8.dll\` with another mod, the agent, the override assets, \`coop.ini\` and a README that covers install, play and troubleshooting."
               echo
               echo "SHA-256 \`$zip_sha256\` ($zip_name) · \`$tgz_sha256\` ($tgz_name) · built by CI run [${{ steps.what.outputs.run_id }}](https://github.com/${{ github.repository }}/actions/runs/${{ steps.what.outputs.run_id }}) from \`${sha:0:7}\`."
               echo
               if [ "$kind" = latest ]; then
-                echo "> Rolling build of \`main\`: every push that passes build + test replaces this release. Numbered releases (v0.x.y) are the stable ones."
+                echo "> Rolling build of \`main\`: every push that passes build + test replaces this release. Numbered releases are fixed versions; passing CI does not certify a complete campaign."
                 echo
               fi
+              echo "> Public playtest: a complete co-op campaign has not been verified. Read the [current limitations](https://github.com/${{ github.repository }}/blob/$sha/docs/limitations.md) before starting."
             } > notes.md
           }
 
@@ -146,15 +194,6 @@ jobs:
           if [ "$kind" = tag ]; then
             create_numbered "$ref"
           else
-            # The VERSION file names the release this commit belongs to. The first green build
-            # of a VERSION nobody has released yet becomes a real, numbered GitHub release
-            # (marked Latest), so bumping VERSION is all it takes to publish one. Every build
-            # also refreshes the rolling pre-release below.
-            ver=$(git show "$sha:VERSION" 2>/dev/null | tr -d '[:space:]' || true)
-            if [ -n "$ver" ] && ! gh release view "v$ver" >/dev/null 2>&1; then
-              create_numbered "v$ver"
-            fi
-
             make_notes latest latest
             # One rolling pre-release that always points at the newest green main build.
             # Delete + recreate rather than upload --clobber so the tag moves to the new sha

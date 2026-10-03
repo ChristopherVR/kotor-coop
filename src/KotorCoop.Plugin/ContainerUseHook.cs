@@ -127,16 +127,20 @@ internal static unsafe class ContainerUseHook
         int n = 0;
 
         s[n++] = 0x60; // pushad
+        // Original stack arguments are at +36 and +40 after pushad. Capture the
+        // second first, then the first (now +40 after that push), without changing ecx.
+        s[n++] = 0xFF; s[n++] = 0x74; s[n++] = 0x24; s[n++] = 0x28;
+        s[n++] = 0xFF; s[n++] = 0x74; s[n++] = 0x24; s[n++] = 0x28;
         s[n++] = 0x51; // push ecx — the CSWSPlaceable this call is opening, so the gate can
                         //  tell WHICH container was clicked. Still valid post-pushad: pushad
                         //  only saves copies, it does not clobber the live register.
 
-        nint callback = (nint)(delegate* unmanaged[Cdecl]<nint, int>)&OnOpenInventory;
+        nint callback = (nint)(delegate* unmanaged[Cdecl]<nint, uint, int, int>)&OnOpenInventory;
         s[n++] = 0xE8; // call OnOpenInventory
         *(int*)(s + n) = (int)(callback - (stub + n + 4));
         n += 4;
 
-        s[n++] = 0x83; s[n++] = 0xC4; s[n++] = 0x04; // add esp, 4 — cdecl, we clean up
+        s[n++] = 0x83; s[n++] = 0xC4; s[n++] = 0x0C; // add esp, 12 — three cdecl args
                                                       //  (before the test: it writes flags)
 
         s[n++] = 0x85; s[n++] = 0xC0; // test eax, eax  (before popad — popad overwrites eax)
@@ -223,6 +227,7 @@ internal static unsafe class ContainerUseHook
         _lastDeferredId = 0;
         _lastDeferredSerial = 0;
         _deferSequence = 0;
+        _deferredOpen.Clear();
     }
 
     // ---- arbitration deferral (container_lock_arbitration) -------------------------------
@@ -253,6 +258,23 @@ internal static unsafe class ContainerUseHook
     private static uint _lastDeferredId;
     private static uint _lastDeferredSerial;
     private static uint _deferSequence;
+    private static readonly DeferredContainerOpen _deferredOpen = new();
+
+    /// <summary>Resume the exact final open, rather than replaying walking, animations
+    /// and OnUsed scripts through UseObject. Resolve by id anew; never retain a native pointer.
+    /// The patched entry still checks peer holds and consumes the one-shot grant.</summary>
+    public static bool ResumeDeferredOpen(uint id, uint serial)
+    {
+        if (!_installed || !_deferredOpen.TryTake(id, serial, out uint actor, out int feedback))
+            return false;
+
+        nint placeable = Odyssey.ResolvePlaceable(id);
+        if (placeable == 0) return false;
+        AllowNextOpen(id);
+        ((delegate* unmanaged[Thiscall]<nint, uint, int, void>)OpenInventory)(placeable, actor, feedback);
+        WithdrawGrant(); // also clear if a newer peer hold refused the call
+        return true;
+    }
 
     /// <summary>The most recently DEFERRED open attempt's placeable id, and the serial it was
     /// captured at (0 = nothing captured yet). Same shape as <see cref="LatestAttempt"/> — a
@@ -307,7 +329,7 @@ internal static unsafe class ContainerUseHook
     /// — a click on a container, or a queued use action reaching its target, lands here.
     /// </summary>
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static int OnOpenInventory(nint placeable)
+    private static int OnOpenInventory(nint placeable, uint actor, int feedback)
     {
         try
         {
@@ -356,6 +378,7 @@ internal static unsafe class ContainerUseHook
                 // and let InteractionLockController ask the host before this goes any further.
                 _lastDeferredId = id;
                 _lastDeferredSerial = ++_deferSequence; // written last
+                _deferredOpen.Capture(id, _lastDeferredSerial, actor, feedback);
                 return 1;
             }
 

@@ -391,6 +391,22 @@ function PlayerModule($h) {
     return [VF]::Str($h, $text, $length)
 }
 
+function WaitForSettledWorldPair([string]$module, [int]$timeoutSeconds = 60) {
+    $deadline = [DateTime]::UtcNow.AddSeconds($timeoutSeconds)
+    $stableSince = $null
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $ready = (PlayerModule $h1) -ieq $module -and (PlayerModule $h2) -ieq $module -and
+            (PlayerAddress $h1 $b1) -ne 0 -and (PlayerAddress $h2 $b2) -ne 0
+        if ($ready) {
+            if ($null -eq $stableSince) { $stableSince = [DateTime]::UtcNow }
+            if (([DateTime]::UtcNow - $stableSince).TotalSeconds -ge 5) { return $true }
+        }
+        else { $stableSince = $null }
+        Start-Sleep -Milliseconds 200
+    }
+    return $false
+}
+
 function RestorePosition($h, $b, $position) {
     $command = 'tp {0} {1} {2}' -f $position[0].ToString('R', [Globalization.CultureInfo]::InvariantCulture), $position[1].ToString('R', [Globalization.CultureInfo]::InvariantCulture), $position[2].ToString('R', [Globalization.CultureInfo]::InvariantCulture)
     if (-not (SendConsole $h $b $command)) { throw 'native fixture position restoration did not apply' }
@@ -709,7 +725,7 @@ if ($enemyId -ne 0) {
         ("serial $oneShotBefore -> $oneShotAfter, attacking 0x{0:X} at {1:F0} units" -f $enemyId, $bestDist)
 }
 else {
-    Check 'swing animations reach the peer' $false 'no enemy published to attack'
+    SkipCheck 'swing animations reach the peer' 'no active hostile target; stage one and use -CombatTargetHostId'
 }
 
 # ⚠ Put the fight down before talking. Section 10 orders the host's PC to attack and leaves it
@@ -892,7 +908,7 @@ if ($dmgId -ne 0) {
     }
 }
 else {
-    Check 'a client hit costs the enemy real hit points' $false 'no enemy published to attack'
+    SkipCheck 'a client hit costs the enemy real hit points' 'no active hostile target; stage one and use -CombatTargetHostId'
 }
 
 # --- 14. shared progression (party gold and PC experience) -------------------------------
@@ -1629,6 +1645,7 @@ elseif ($validBefore -and $moduleBefore.Length -gt 0) {
         [VF]::U32($h2, $b2 + 0x968) -eq 0 -and
         (PlayerModule $h2) -eq $TransitionModule
     } 40
+    $outbound = $outbound -and (WaitForSettledWorldPair $TransitionModule)
     $reloaded = $false
     $returnReplied = $false
     # Return even if the outward wait timed out after the module did change.
@@ -1640,6 +1657,7 @@ elseif ($validBefore -and $moduleBefore.Length -gt 0) {
             [VF]::U32($h2, $b2 + 0x968) -eq 0 -and
             (PlayerModule $h2) -eq $moduleBefore
         } 40
+        $reloaded = $reloaded -and (WaitForSettledWorldPair $moduleBefore)
     }
     $rosterRestored = WaitFor2 { ([VF]::U32($h2, $b2 + 0x3304) -band 0x80000000) -ne 0 } 10
     $hostRosterAfter = [VF]::U32($h2, $b2 + 0x3304)

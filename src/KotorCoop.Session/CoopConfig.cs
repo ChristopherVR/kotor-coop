@@ -1206,13 +1206,10 @@ public sealed record CoopConfig
         };
     }
 
-    /// <summary>Logs the non-player-facing keys coop.ini actually sets — the developer
-    /// switch (known to some reader, see docs/CONFIG.md) or a genuinely unrecognised key.
-    /// Called from <see cref="TryLoad"/> so it fires wherever coop.ini is actually parsed for
-    /// real use, through <see cref="Console.WriteLine"/>, the same sink every other agent
-    /// startup diagnostic in this codebase already uses.</summary>
+    /// <summary>Serializes reporting when coop.ini is parsed: developer switches are
+    /// retained for F1 and the support log; genuinely unrecognised keys still emit
+    /// a deduplicated <see cref="Console.WriteLine"/> warning.</summary>
     private static readonly object ReportGate = new();
-    private static string _lastDeveloperLine = string.Empty;
     private static string _lastUnknownLine = string.Empty;
 
     /// <summary>The developer switches the last parsed coop.ini sets, as "key=value" — shown
@@ -1232,15 +1229,8 @@ public sealed record CoopConfig
         {
             DeveloperSwitches = developer.Select(key => $"{key}={kv[key]}").ToList();
 
-            string developerLine = developer.Count == 0
-                ? string.Empty
-                : $"coop.ini: {developer.Count} developer switch(es) set - testing options, not player settings (F1 lists them)";
-            if (developerLine.Length > 0 && developerLine != _lastDeveloperLine)
-            {
-                Console.WriteLine(developerLine);
-            }
-
-            _lastDeveloperLine = developerLine;
+            // F1 lists these settings; the agent records them in its support log.
+            // Do not print engineering detail before the dashboard starts filtering.
 
             string unknownLine = unknown.Count == 0
                 ? string.Empty

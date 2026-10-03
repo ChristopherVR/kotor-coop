@@ -5,6 +5,7 @@ namespace KotorCoop.Plugin;
 // destroy phantom bodies through the engine. See PhantomController.cs for shared state.
 internal sealed unsafe partial class PhantomController
 {
+    private readonly PendingSpawnDeletion _pendingDeletion = new();
     /// <summary>
     /// Destroys one live phantom body through the engine, for the pre-store flush window:
     /// a phantom left standing when the area is stored gets serialised into the saved
@@ -28,7 +29,7 @@ internal sealed unsafe partial class PhantomController
                 }
             }
 
-            return standing;
+            return standing + _pendingDeletion.CountStanding(Odyssey.ResolveServerObject);
         }
     }
 
@@ -48,6 +49,8 @@ internal sealed unsafe partial class PhantomController
             return true;
         }
 
+        // Pending deletion still contributes to StandingCount, but must not starve
+        // the other registries while the engine processes the accepted request.
         return false;
     }
 
@@ -74,6 +77,6 @@ internal sealed unsafe partial class PhantomController
         // readout stayed at whatever the live session left — which is how a disconnected
         // game reported one phantom for forty seconds with the controller holding none.
         PublishPhantomCount();
-        return _phantomCount;
+        return _phantomCount + _pendingDeletion.CountStanding(Odyssey.ResolveServerObject);
     }
 }

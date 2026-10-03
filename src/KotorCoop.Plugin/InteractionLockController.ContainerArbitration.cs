@@ -3,7 +3,7 @@ namespace KotorCoop.Plugin;
 /// <summary>
 /// Closes the container-loot race (docs/roadmap-seamless.md Tier 1 item 4): drives
 /// <see cref="ContainerLockArbiter"/> — the pure click -&gt; pending -&gt; grant/deny/timeout ->
-/// re-issue/refuse state machine — against <see cref="ContainerUseHook"/>'s newly-added deferral
+/// resume/refuse state machine — against <see cref="ContainerUseHook"/>'s deferral
 /// capture and the shared-block request/response region
 /// (<c>SharedBlock.OffsetLocalContainerLockRequestTargetId</c> onward,
 /// docs/research/container-sync.md's <c>container_lock_arbitration</c> section).
@@ -26,11 +26,15 @@ internal sealed unsafe partial class InteractionLockController
     /// process, never persisted, never compared across instances (the host and every client
     /// each mint their own). Starts at 1 because 0 is reserved wire-wide for "no request".</summary>
     private uint _nextContainerRequestSerial;
+    private long _containerRequestAtMs;
+    private uint _pendingDeferredSerial;
 
     private void InvalidateContainerArbitration()
     {
         _containerArbiter.Reset();
         _seenDeferredSerial = 0;
+        _containerRequestAtMs = 0;
+        _pendingDeferredSerial = 0;
         block.LocalContainerLockRequestTargetId = 0;
         block.LocalContainerLockRequestSerial = 0;
         ContainerUseHook.WithdrawGrant();
@@ -62,6 +66,9 @@ internal sealed unsafe partial class InteractionLockController
             }
 
             _containerArbiter.BeginRequest(deferredId, requestSerial, now);
+            _containerRequestAtMs = now;
+            _pendingDeferredSerial = deferredSerial;
+            PluginHost.Log($"container: arbitration requested 0x{deferredId:X} (serial {requestSerial})");
 
             // Published for the agent to forward (WorldStatePump.PumpContainerLockArbitration)
             // — target id FIRST, serial LAST, so a torn read on the agent side sees an old
@@ -81,9 +88,9 @@ internal sealed unsafe partial class InteractionLockController
         switch (_containerArbiter.Poll(now, responseArrived, granted))
         {
             case ContainerLockPollOutcome.Granted:
-                ContainerUseHook.AllowNextOpen(pendingTargetId);
-                Odyssey.UseObject(pendingTargetId);
-                PluginHost.Log($"container: arbitration granted 0x{pendingTargetId:X}; re-issuing open");
+                bool queued = ContainerUseHook.ResumeDeferredOpen(pendingTargetId, _pendingDeferredSerial);
+                PluginHost.Log($"container: arbitration granted 0x{pendingTargetId:X} after {now - _containerRequestAtMs}ms; "
+                    + (queued ? "resumed captured open" : "captured open expired or target unavailable"));
                 break;
 
             case ContainerLockPollOutcome.Denied:
@@ -93,20 +100,20 @@ internal sealed unsafe partial class InteractionLockController
                 _containerNoticeUntilMs = now + FarNoticeDurationMs;
                 _containerNoticeLength = BuildContainerNoticeText(0); // holder unknown from a
                                                                        // bare deny — generic text
-                PluginHost.Log($"container: arbitration denied 0x{pendingTargetId:X} (a peer got there first)");
+                PluginHost.Log($"container: arbitration denied 0x{pendingTargetId:X} after {now - _containerRequestAtMs}ms (a peer got there first)");
                 break;
 
             case ContainerLockPollOutcome.TimedOut:
                 // Fails SAFE: proceed exactly as this feature's predecessor always did, rather
                 // than refusing a container nobody may actually hold. ContainerUseHook's own
-                // peer-held check still runs on the re-issued click regardless, so a genuinely
+                // peer-held check still runs on the resumed open regardless, so a genuinely
                 // contested container is still caught there even if arbitration itself dropped
                 // the ball.
-                ContainerUseHook.AllowNextOpen(pendingTargetId);
-                Odyssey.UseObject(pendingTargetId);
+                bool fallbackQueued = ContainerUseHook.ResumeDeferredOpen(pendingTargetId, _pendingDeferredSerial);
                 PluginHost.Log(
                     $"container: arbitration timed out for 0x{pendingTargetId:X} "
-                    + $"(no host answer within {ContainerLockArbiter.TimeoutMs}ms); proceeding as before");
+                    + $"(no host answer within {ContainerLockArbiter.TimeoutMs}ms; elapsed {now - _containerRequestAtMs}ms); "
+                    + (fallbackQueued ? "resumed captured open" : "captured open expired or target unavailable"));
                 break;
 
             case ContainerLockPollOutcome.Waiting:

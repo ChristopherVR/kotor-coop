@@ -37,8 +37,8 @@ internal static unsafe partial class PluginHost
         + MaterialisedEnemies.StandingCount
         + (_mapMarkers?.StandingCount ?? 0);
 
-    /// <summary>The door-transition flush's exact sequence, one destroy per call; false once
-    /// every registry reports empty.</summary>
+    /// <summary>One destroy per call across all registries; after the sweep, keep holding
+    /// while any accepted deletion still resolves to a standing body.</summary>
     private static bool FlushOneSpawnedBody()
     {
         if (_controller is { } phantoms && phantoms.FlushOneBody())
@@ -56,7 +56,14 @@ internal static unsafe partial class PluginHost
             return true;
         }
 
-        return _mapMarkers is { } markers && markers.FlushOneBody();
+        if (_mapMarkers is { } markers && markers.FlushOneBody())
+        {
+            return true;
+        }
+
+        // Each registry has had a chance to flush. Accepted deletion may still be
+        // pending in the engine, so the save must keep holding after this sweep.
+        return CountSpawnedBodiesStanding() != 0;
     }
 
     /// <summary>

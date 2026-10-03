@@ -213,6 +213,7 @@ internal static unsafe partial class PluginHost
 
         NativeSaveCompletionHook.Block = BlockAddress;
         NativeSaveCompletionHook.BeforeSerialization = BoundSaveSerializationParty;
+        NativeSaveCompletionHook.Diagnostic = Log;
         NativeSaveCompletionHook.Install(out string saveCompletionDiagnostic);
         Log(saveCompletionDiagnostic);
         PartyOccupantHook.PublicationBank = BlockAddress + SharedBlock.OffsetLocalPartyOccupants;
@@ -539,6 +540,11 @@ internal static unsafe partial class PluginHost
         // The engine reverts any pause that lacks a valid "PausedBy" record within one
         // tick, which in a loopback session is every pause there is — space bar, HUD
         // button and mirror alike. See PauseSanityPatch.
+        if (EnemyPausePresentationHook.Install(out string enemyPauseDiagnostic))
+            Log($"pause: {enemyPauseDiagnostic}");
+        else
+            Log($"pause: {enemyPauseDiagnostic}; enemy banner suppression unavailable");
+
         if (PauseSanityPatch.Install(out string pausePatchDiagnostic))
         {
             Log($"pause: {pausePatchDiagnostic}");
