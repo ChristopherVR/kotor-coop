@@ -1,14 +1,24 @@
 # Contributing
 
+## Contribution permissions
+
+Read [LICENSE](../LICENSE). Development branches and forks may prepare contributions
+to this official project; independent releases and commercial reuse are restricted.
+Intentionally submitting work for inclusion makes the section 3 contribution grant
+while you retain ownership. Identify separate licenses and confirm your rights.
+Do not submit game executables, extracted game assets, keys, cracks or DRM bypasses.
+Earlier contributions need rights-holder authorization before relicensing.
+The [legal readiness gates](LEGAL.md) remain open.
+
 ## Prerequisites
 
 - Windows. Building from source needs the .NET 10 SDK and the Visual Studio 2022 MSVC x86
   C++ toolset (`Microsoft.VisualStudio.Component.VC.Tools.x86.x64`) for the plugin's
   NativeAOT `win-x86` build.
-- **The DRM-free GOG build of KOTOR 1** (v1.0.3), not Steam, for anything that touches a
-  live game — addresses are verified against this binary and Steam's DRM/packer defeats
-  both static analysis and a second instance. See `docs/FINDING-OFFSETS.md`. KOTOR 2 is
-  untouched by this codebase.
+- **KOTOR 1 v1.0.3** from GOG or Steam for live checks. Static binary analysis uses the
+  DRM-free build; Steam's wrapper decrypts the same engine code at runtime. A same-PC
+  two-instance rig needs at least one DRM-free copy (launch Steam first if using both).
+  See `docs/FINDING-OFFSETS.md` and `docs/research/steam-support.md`. KOTOR 2 is untouched.
 
 ## Clone, build, test
 
@@ -117,17 +127,33 @@ in-place upgrade, `--uninstall` and Steam-library auto-detection against a stub 
 `install.sh` is a bash port of `PackageInstaller.cs`, so a change to the installer's layout
 rules belongs in both.
 
+Before the Windows package upload, CI extracts the zip and runs `tools/verify-package.ps1`
+against disposable synthetic installs. This verifies the actual packaged installer's upgrade,
+settings/loader preservation, broken-chain rejection, removal and support bundles. It does not
+run KOTOR or establish real third-party mod compatibility. For a local run:
+
+```powershell
+pwsh tools/verify-package.ps1 -PackageDirectory <extracted-package>
+```
+
+The latest local release-verification results and remaining live gates are in
+[RELEASE-READINESS.md](RELEASE-READINESS.md).
+
 `.github/workflows/release.yml` runs **after CI succeeds** (`workflow_run`) and publishes
 the very two packages that run produced — it never rebuilds. Every green push to `main` replaces the
-rolling `latest` pre-release. **The release number is the `VERSION` file at the repo root.** The first
-green build of a `VERSION` that has no GitHub release yet also becomes a numbered release `v<VERSION>`,
-marked Latest, with `docs/release-notes/v<VERSION>.md` as its notes when that file exists (plain
-language, for players) and GitHub's generated change list otherwise. So to ship: write the notes file,
-bump `VERSION`, push. `tools/package.ps1` names a build exactly `<VERSION>` on the commit that changed
+rolling `latest` pre-release, provided that commit is still the tip of `main`. Publication jobs
+are serialized so an older run cannot replace a newer rolling build. **The release number is
+the `VERSION` file at the repo root.** A VERSION bump alone never publishes a numbered release.
+`tools/package.ps1` names a build exactly `<VERSION>` on the commit that changed
 the file and `<VERSION>-<commits since>-g<sha>` after it. A hand-pushed `v*` tag
-(`git tag v0.1.0 && git push origin v0.1.0`) still goes through the same CI run and becomes a full
-release named after the tag. A manual dispatch publishes the newest successful CI packages for the chosen
-ref. Both contain a `README.txt` (`tools/package-README.txt`,
+still goes through CI, but its automatic publication run skips the numbered release. After
+completing the [release-readiness sign-off](RELEASE-READINESS.md), manually run the Release workflow
+on that tested tag with `promote_release` enabled. The tag, packaged version and VERSION must
+agree; tag the VERSION-changing commit so its package has the exact numbered version. Promotion
+uses that commit's successful CI artifacts and marks the numbered release Latest. It uses
+`docs/release-notes/v<VERSION>.md` when present, otherwise GitHub's generated notes. Manual runs
+on `main` with promotion disabled refresh only the rolling pre-release. Both packages contain
+a `README.txt` (`tools/package-README.txt`,
 version-stamped by `package.ps1`) that explains install, play, chain mode and troubleshooting
 to someone who has never seen this repo.
 

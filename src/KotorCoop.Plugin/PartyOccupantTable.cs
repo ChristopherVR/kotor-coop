@@ -41,6 +41,7 @@ internal sealed class PartyOccupantTable
         if (_generation[slot] == 0) return true;
         if (_replaced[slot] || !PartyRosterTemplateTable.TryGetTemplate(slot, out string stock)) return false;
         ReadOnlySpan<byte> bytes = _templates.AsSpan(slot * 16, 16);
+        if (slot == 0 && bytes[..9].SequenceEqual("end_trask"u8) && bytes[9] == 0) return true;
         for (int i = 0; i < stock.Length; i++)
             if (bytes[i] != (byte)stock[i]) return false;
         return stock.Length == 16 || bytes[stock.Length] == 0;

@@ -45,7 +45,10 @@ internal sealed unsafe partial class SharedBlockView
         return sequence == *U32(bank) && HostPartyOccupantsCurrent();
     }
     public bool HostPartyOccupantRequiresBinding(int slot) => TryGetHostPartyOccupant(slot, out uint generation, out string template)
-        && generation != 0 && (HostPartyOccupantReplaced(slot) || (!PartyRosterTemplateTable.TryGetTemplate(slot, out string stock) || !template.Equals(stock, StringComparison.OrdinalIgnoreCase)));
+        && generation != 0 && (HostPartyOccupantReplaced(slot)
+            || (!(slot == 0 && template.Equals("end_trask", StringComparison.OrdinalIgnoreCase))
+                && (!PartyRosterTemplateTable.TryGetTemplate(slot, out string stock)
+                    || !template.Equals(stock, StringComparison.OrdinalIgnoreCase))));
     public bool HostPartyOccupantReplaced(int slot) => (uint)slot < 9 && (baseAddress[SharedBlock.OffsetHostPartyOccupants + 240 + slot] & 1) != 0;
     public bool HostPartyOccupantAdopted(int slot) => (uint)slot < 9 && HostPartyOccupantsCurrent()
         && (baseAddress[SharedBlock.OffsetHostPartyOccupants + 240 + slot] & 2) != 0

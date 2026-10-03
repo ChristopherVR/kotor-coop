@@ -141,6 +141,7 @@ internal static class InstallCommand
             {
                 Cli.Warn("Installed, but the check above found a problem (a FAIL line). Run");
                 Cli.Warn("KotorCoop.Agent.exe install --check for the details, or try setup again.");
+                return Pause(interactive, 1);
             }
 
             return OfferLaunch(game, interactive);

@@ -25,8 +25,8 @@
 # build, not on demand later. See docs/research/proton.md for why the exe is self-contained.
 #
 # Does NOT touch a game install and does NOT run the game. CI runs this on every push and
-# attaches both files to the run; a green run on main or a v* tag becomes a GitHub release
-# with both attached (.github/workflows/release.yml). The symbols zip is CI-artifact-only -
+# attaches both files to the run; green main builds refresh the rolling pre-release.
+# Tested v* tags require manual numbered promotion (.github/workflows/release.yml). The symbols zip is CI-artifact-only -
 # it is never attached to a GitHub release, only kept for maintainers to pull off a CI run.
 #
 #   pwsh tools\package.ps1                 # dist\kotor-coop-<git describe>-windows.zip + -linux.tar.gz
@@ -51,8 +51,8 @@ if (-not $Version) {
 
     # The VERSION file is the release number. The build is named exactly VERSION on the commit
     # that last changed that file, and "<VERSION>-<commits since>-g<sha>" after it, so the first
-    # green build of a bumped VERSION is the numbered release and later ones are clearly newer
-    # snapshots of it (the release workflow cuts the GitHub release from this).
+    # build of a bumped VERSION is the numbered candidate and later ones are clearly newer
+    # snapshots of it. Numbered publication requires explicit promotion of a tested tag.
     $versionFile = Join-Path $repo 'VERSION'
     if (Test-Path $versionFile) {
         $declared = (Get-Content $versionFile -Raw).Trim()
@@ -177,6 +177,9 @@ Get-ChildItem (Join-Path $repo 'profiles\mods') -File -Filter '*.json' |
     Copy-Item -Destination (Join-Path $staging 'coop-mods')
 
 # --- installer wrapper + README ------------------------------------------------------------
+Copy-Item (Join-Path $repo 'LICENSE') (Join-Path $staging 'KotorCoop.LICENSE.txt')
+Copy-Item (Join-Path $repo 'THIRD-PARTY-NOTICES.md') (Join-Path $staging 'KotorCoop.THIRD-PARTY-NOTICES.txt')
+Copy-Item (Join-Path $repo 'docs\LEGAL.md') (Join-Path $staging 'KotorCoop.LEGAL.txt')
 Copy-Item (Join-Path $PSScriptRoot 'install.ps1') (Join-Path $staging 'install.ps1')
 # install.ps1 dot-sources this for the coop.ini drift check on a re-install; without it the
 # wrapper failed AFTER placing every file (found live 2026-09-03 running the zip against a

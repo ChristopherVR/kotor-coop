@@ -8,7 +8,7 @@ the internet, and the mod keeps everyone in one shared world, each in their own 
 plays the way a seamless co-op mod does: nobody sets up a "server". You start the game, press
 **Co-op** on the main menu, and connect.
 
-No game file is changed. The mod loads the way the game already loads its own helper library, and
+The game executable is unchanged. The mod loads the way the game already loads its own helper library, and
 it can share that spot with other mods such as ReShade.
 
 **Players:** the plain-language install and play guides are in [`site/`](site/). This README covers
@@ -41,7 +41,7 @@ players, and it is the page to read before you plan a long session.
 
 ## Requirements
 
-- Windows. The download needs nothing else installed.
+- 64-bit Windows. The download needs nothing else installed.
 - **KOTOR 1, version 1.0.3**, from GOG or Steam. KOTOR 2 is not touched.
 - To run two copies on one PC you need a second copy of the game folder, and at least one of the two
   must be the GOG version (Steam allows only one running copy).
@@ -50,16 +50,20 @@ players, and it is the page to read before you plan a long session.
 
 Download the file for your computer from the
 [Releases page](https://github.com/ChristopherVR/kotor-coop/releases): the newest numbered release
-is the stable one, and **latest** is the newest build of the main branch that passed its automatic
-checks.
+is a fixed version, and **latest** is the newest build of the main branch that passed its automatic
+checks. These checks do not certify a complete campaign; treat the current mod as a public playtest.
 
-- **Windows:** `kotor-coop-<version>-windows.zip`. Either extract it straight into the folder that
-  contains `swkotor.exe`, or extract it anywhere and double-click `KotorCoop.Agent.exe`. It finds
+- **Windows:** `kotor-coop-<version>-windows.zip`. Close KOTOR and its agent, extract the zip into
+  its own folder, and double-click `KotorCoop.Agent.exe`. It finds
   your KOTOR install (GOG or Steam, including other drives), copies everything in and offers to launch.
 
 If another mod already uses the same helper file (ReShade, an ASI loader and similar), the installer
 notices and sets the two up side by side automatically. See [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
 if anything looks off.
+
+Direct extraction into the game folder is only suitable for a clean install without an existing
+`dinput8.dll` or `coop.ini`. Use the installer for updates: extracting over existing files can
+overwrite another mod and your settings. Back up your `saves` folder before your first co-op session.
 
 ## Your first session
 
@@ -70,9 +74,10 @@ Start KOTOR and click **Co-op** on the main menu.
   choose **Connect to an address...** at the bottom of the list and type what the host gives you.
 
 The first time you join, the normal character-creation screen opens and you build your own
-character. That character is yours on every later join, and your single-player saves are never touched.
+character. That character is yours on every later join, and your named single-player saves are never touched.
 While connected, the mod keeps a save called **Co-op** in your Load Game list. Load that one to keep
-your progress, not Auto Save.
+your progress, not Auto Save. Joining uses the game's Auto Save slot, so keep a named save
+or backup for any single-player progress you want to preserve.
 
 
 **Console and chat:** press `~` for the console and **Enter** to chat with your partner. The full list
@@ -93,6 +98,9 @@ is in [docs/CONSOLE.md](docs/CONSOLE.md).
 
 **Mods do not have to match.** When you connect, the two installs compare notes and the mod tells
 you on screen what differs and what it switched off because of it.
+
+For your first session, use matching game mods and the same co-op version. A connection that
+continues with shared features disabled is not proof that different content is compatible.
 
 ## Steam
 
@@ -148,12 +156,13 @@ live-rig and release reference is [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
 
 ### Releases
 
+Before promoting a build for general use, follow [the release-readiness checklist](docs/RELEASE-READINESS.md).
+
 The release number is the `VERSION` file. Every push to `main` that passes build and tests refreshes
-the rolling **latest** pre-release. When `VERSION` names a version that has no GitHub release yet, the
-first green build of it also becomes a numbered release, marked **Latest**, using
-`docs/release-notes/v<version>.md` as its notes when that file exists (and GitHub's change list
-otherwise). To ship a release: write the notes file, change `VERSION`, push. A `v*` tag pushed by
-hand still works too.
+the rolling **latest** pre-release if that commit is still the tip of `main`. A VERSION bump or
+tag push validates a candidate without publishing a numbered release. After sign-off, manually
+run the Release workflow on the tested `v<VERSION>` tag with `promote_release` enabled; the tag,
+package version and VERSION must agree. See [the release instructions](docs/CONTRIBUTING.md#ci-and-releases).
 
 ### How it works
 
@@ -167,6 +176,18 @@ other players over the network
 
 Everyone talks only to the host. Authority is explicit: your character is yours, enemies are the
 host's. Full design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+### License and game ownership
+
+Official releases are free for personal, noncommercial play with a legally acquired
+game. Contributions to this project are welcome; independent modified releases,
+rebranding and commercial reuse require written permission under [LICENSE](LICENSE).
+This is a restricted source-available project; GitHub's public-repository permissions
+still apply if the repository becomes public.
+
+This unofficial fan mod does not own the game or its assets and is not endorsed by
+its rights holders. We do not condone piracy. See [legal release gates](docs/LEGAL.md)
+and [third-party notices](THIRD-PARTY-NOTICES.md); legal clearance remains outstanding.
 
 ### Documentation map
 

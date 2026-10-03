@@ -68,6 +68,7 @@ public sealed class LogsCommandTests : IDisposable
     [InlineData("kotorcoop-agent.log", true)]
     [InlineData("kotorcoop-agent.log.2", true)]
     [InlineData("kotorcoop-crash.bin", true)]
+    [InlineData("dinput8-chain.log", true)]
     [InlineData("swkotor.exe", false)]
     [InlineData("coop.ini", false)]
     [InlineData("kotorcoop-character.pifo", false)]
@@ -108,6 +109,19 @@ public sealed class LogsCommandTests : IDisposable
         string systemText = system.ReadToEnd();
         Assert.Contains("test-1.0", systemText);
         Assert.Contains("swkotor.exe", systemText);
+        Assert.Contains("installed   unknown", systemText);
+    }
+
+    [Fact]
+    public void ChainLoaderFailureIsIncludedInTheBundle()
+    {
+        File.WriteAllText(Path.Combine(_dir, "dinput8-chain.log"), "failed to load KotorCoop.Plugin.dll\n");
+        string zipPath = Path.Combine(_dir, "out.zip");
+
+        Assert.Equal(2, LogsCommand.WriteBundle(_dir, zipPath, "preview"));
+        using ZipArchive zip = ZipFile.OpenRead(zipPath);
+        using StreamReader log = new(zip.GetEntry("dinput8-chain.log")!.Open());
+        Assert.Contains("failed to load KotorCoop.Plugin.dll", log.ReadToEnd());
     }
 
     [Fact]

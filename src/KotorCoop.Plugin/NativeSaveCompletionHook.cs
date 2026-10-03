@@ -10,6 +10,7 @@ internal static unsafe class NativeSaveCompletionHook
 {
     internal static nint Block = 0;
     internal static Action? BeforeSerialization = null;
+    internal static Action<string>? Diagnostic = null;
     private static bool _installed;
     private static readonly NativeSaveIoWatch Io = new();
     private static readonly byte[] Rows = new byte[9 * 24];
@@ -77,7 +78,16 @@ internal static unsafe class NativeSaveCompletionHook
         nint text=*(nint*)exo; uint length=*(uint*)(exo+4);
         if(length==0 || length>maximum || !NativeMethods.IsReadable(text,length)) return "";
         ReadOnlySpan<byte> bytes=new((void*)text,(int)length);
-        if(bytes[^1]==0)bytes=bytes[..^1];
+        return DecodeString(bytes);
+    }
+    internal static string DecodeString(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.IsEmpty) return "";
+        // The engine can retain the previous allocation length when a shorter name
+        // replaces QUICKSAVE with Co-op. The first terminator bounds the actual string;
+        // trailing bytes belong to that reused buffer, not the saved directory.
+        int terminator = bytes.IndexOf((byte)0);
+        if (terminator >= 0) bytes = bytes[..terminator];
         foreach(byte b in bytes)if(b is <32 or >126)return "";
         return Encoding.ASCII.GetString(bytes);
     }
@@ -109,6 +119,14 @@ internal static unsafe class NativeSaveCompletionHook
             if (_installed) BeforeSerialization?.Invoke();
             if(!_installed || Block==0 || !PartyOccupantHook.Installed)return;
             string path=ReadString(stall+0x18,128).Replace('\\','/');
+            if (path.Length == 0 && NativeMethods.IsReadable(stall + 0x18, 8))
+            {
+                nint text = *(nint*)(stall + 0x18);
+                uint length = *(uint*)(stall + 0x1C);
+                int firstZero = length <= 128 && NativeMethods.IsReadable(text, length)
+                    ? new ReadOnlySpan<byte>((void*)text, (int)length).IndexOf((byte)0) : -1;
+                Diagnostic?.Invoke($"native save path refused: length={length}, firstZero={firstZero}");
+            }
             int colon=path.LastIndexOf(':'); if(colon>=0)path=path[(colon+1)..];
             _directory=path.Trim('/');
             Io.Begin(GetCurrentThreadId(),_directory);
@@ -137,16 +155,31 @@ internal static unsafe class NativeSaveCompletionHook
     {
         try
         {
-            if(!_installed || !Io.Complete(GetCurrentThreadId()) || Block==0
-                || !ReadPacked(_table,out uint packed,out int control)
+            if (!_installed || Block == 0) return;
+            uint thread = GetCurrentThreadId();
+            string ioDiagnostic = Io.CompletionDiagnostic(thread);
+            if (!Io.Complete(thread))
+            {
+                Diagnostic?.Invoke($"native save proof refused for '{_directory}': {ioDiagnostic}");
+                return;
+            }
+            if (!ReadPacked(_table,out uint packed,out int control)
                 || !ContextCurrent(_epoch,_serial,_packed,_control,*(uint*)(Block+SharedBlock.OffsetLivenessNativeEpoch),*(uint*)(Block+SharedBlock.OffsetWorldLoadSerial),packed,control)
-                || !NativeMethods.IsReadable(_table+0x0C,36) || !new ReadOnlySpan<byte>((void*)(_table+0x0C),36).SequenceEqual(ObjectIds))return;
+                || !NativeMethods.IsReadable(_table+0x0C,36) || !new ReadOnlySpan<byte>((void*)(_table+0x0C),36).SequenceEqual(ObjectIds))
+            {
+                Diagnostic?.Invoke($"native save proof refused for '{_directory}': party/world binding changed during serialization");
+                return;
+            }
             Span<byte> template=stackalloc byte[16];
             for(int slot=0;slot<9;slot++)
             {
                 PartyOccupantHook.Captured.CopyTemplate(slot,template);
                 if(PartyOccupantHook.Captured.Generation(slot)!=BitConverter.ToUInt32(Rows,slot*24)
-                    || !template.SequenceEqual(Rows.AsSpan(slot*24+8,16)))return;
+                    || !template.SequenceEqual(Rows.AsSpan(slot*24+8,16)))
+                {
+                    Diagnostic?.Invoke($"native save proof refused for '{_directory}': party occupant {slot} changed during serialization");
+                    return;
+                }
             }
             byte* bank=(byte*)Block+SharedBlock.OffsetNativeSaveCompletion;
             uint seq=*(uint*)bank; *(uint*)bank=(seq+1)|1u;

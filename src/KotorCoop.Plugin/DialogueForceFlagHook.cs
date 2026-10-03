@@ -53,7 +53,7 @@ namespace KotorCoop.Plugin;
 ///
 /// ── The hook itself ──
 ///
-/// A read-only, non-refusing whole-function-prologue detour, same discipline as
+/// A whole-function-prologue detour, same discipline as
 /// <see cref="DialogueGateHook"/>: verify the SEH prologue bytes before patching, relocate them
 /// (all three instructions are position-independent — an immediate, an absolute-addressed
 /// segment read, an absolute constant — so they move verbatim), resume normally. Captures
@@ -67,12 +67,18 @@ namespace KotorCoop.Plugin;
 ///
 /// <b>NEEDS-LIVE (the one item this round's brief asked to name):</b> that <c>[actionStruct+0x48]</c>
 /// reads TRUE for a real ambush/forced conversation and FALSE for a real player click, on the
-/// actual game, and that the object-id correlation above actually lines up in play. Nothing
-/// else here is new risk beyond what <see cref="DialogueGateHook"/> already ships: read-only,
-/// no engine calls, fails open to "not forced" on any doubt.
+/// actual game, and that the object-id correlation above actually lines up in play.
+/// The menu deferral added after the 2026-10-03 equipment report returns retail pending
+/// status 3 before constructing a conversation. RunActions requeues this result instead
+/// of freeing the action (only result 1 is complete). Forced story starts therefore wait
+/// for full-screen menus without taking StartDialog's destructive refusal path. Native
+/// diagnostics verified the detour and return; retail menu/story coverage remains required.
 /// </summary>
 internal static unsafe class DialogueForceFlagHook
 {
+    public static bool DeferForMenus;
+    private static bool _menuDeferred;
+    private static int _menuDeferralsLogged;
     private const nint AIActionDialogObject = 0x0057A470;
 
     /// <summary>Where the relocated prologue resumes — start + the 13 relocated bytes.</summary>
@@ -112,7 +118,14 @@ internal static unsafe class DialogueForceFlagHook
             }
         }
 
-        nint stub = NativeMethods.VirtualAlloc(0, 64, MemCommitReserve, PageExecuteReadWrite);
+        // Verify the pending-status constant and callee cleanup used by the new
+        // early return. RunActions (0x5800F2) frees only status 1; status 3 requeues.
+        if (*(int*)0x00745DC4 != 3 || !new ReadOnlySpan<byte>((void*)0x0057B285, 3).SequenceEqual(new byte[] { 0xC2, 0x04, 0x00 }))
+        {
+            diagnostic = "dialogue pending status/cleanup mismatch; not installing";
+            return false;
+        }
+        nint stub = NativeMethods.VirtualAlloc(0, 96, MemCommitReserve, PageExecuteReadWrite);
         if (stub == 0)
         {
             diagnostic = "VirtualAlloc failed";
@@ -135,16 +148,18 @@ internal static unsafe class DialogueForceFlagHook
         s[n++] = 0x8B; s[n++] = 0x44; s[n++] = 0x24; s[n++] = 0x1C; // mov eax, [esp+0x1C]
         s[n++] = 0x50;                                             // push eax (this: 1st/leftmost cdecl arg)
 
-        nint callback = (nint)(delegate* unmanaged[Cdecl]<nint, nint, void>)&OnAIActionDialogObject;
+        nint callback = (nint)(delegate* unmanaged[Cdecl]<nint, nint, int>)&OnAIActionDialogObject;
         s[n++] = 0xE8; // call OnAIActionDialogObject
         *(int*)(s + n) = (int)(callback - (stub + n + 4));
         n += 4;
 
         s[n++] = 0x83; s[n++] = 0xC4; s[n++] = 0x08; // add esp, 8 — cdecl, we clean up
+        s[n++] = 0x85; s[n++] = 0xC0; // test callback before popad restores eax
         s[n++] = 0x61;                               // popad — this (ecx) and every other
                                                        //  register comes back exactly as the
                                                        //  real function expects to find it
 
+        s[n++] = 0x75; s[n++] = (byte)(Prologue.Length + 5); // pending branch
         for (int i = 0; i < Prologue.Length; i++) // the relocated prologue
         {
             s[n++] = Prologue[i];
@@ -153,6 +168,11 @@ internal static unsafe class DialogueForceFlagHook
         s[n++] = 0xE9; // jmp AIActionDialogObject+13
         *(int*)(s + n) = (int)(ResumeAt - (stub + n + 4));
         n += 4;
+
+        // Same pending result as retail's 0x57B268 path; no constructor, cleanup
+        // or action mutation has happened, so the original action survives the menu.
+        s[n++] = 0xB8; *(int*)(s + n) = 3; n += 4; // mov eax, 3
+        s[n++] = 0xC2; s[n++] = 0x04; s[n++] = 0; // ret 4
 
         if (!NativeMethods.VirtualProtect(AIActionDialogObject, (nuint)Prologue.Length, PageExecuteReadWrite, out uint old))
         {
@@ -247,22 +267,33 @@ internal static unsafe class DialogueForceFlagHook
     private const int ObjectId = 0x04;
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static void OnAIActionDialogObject(nint thisObj, nint actionStruct)
+    private static int OnAIActionDialogObject(nint thisObj, nint actionStruct)
     {
         try
         {
             if (thisObj is <= 0x10000 or >= 0x7FFF_0000 || actionStruct is <= 0x10000 or >= 0x7FFF_0000)
             {
-                return;
+                return 0;
             }
 
             int objectId = *(int*)(thisObj + ObjectId);
             bool forced = *(int*)(actionStruct + 0x48) != 0;
             Record(objectId, forced);
+            if (DialogueMenuStartRule.Defer(DeferForMenus, Odyssey.IsFullScreenGuiUp, Odyssey.IsConversationActive))
+            {
+                if (!_menuDeferred && _menuDeferralsLogged++ < 10)
+                    PluginHost.Log("dialogue: queued conversation deferred until the full-screen menu closes");
+                _menuDeferred = true;
+                return 1;
+            }
+            if (_menuDeferred && _menuDeferralsLogged <= 10)
+                PluginHost.Log("dialogue: menu closed; resuming the queued conversation");
+            _menuDeferred = false;
         }
         catch
         {
             // Never let a managed fault unwind into the engine.
         }
+        return 0;
     }
 }

@@ -14,6 +14,8 @@ public sealed partial class CoopHost
 {
     private readonly ReliableLootSender _lootSender = new();
     private readonly ContainerLootStore _lootStore = new();
+    private readonly Lock _lootResyncGate = new();
+    private readonly Dictionary<string, int> _lootResyncCursor = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The container-loot store, exposed the way <see cref="Flags"/>/<see cref="Items"/>
     /// already are, so a caller (a test, the resync tripwire) can read its Version/Digest
@@ -215,9 +217,20 @@ public sealed partial class CoopHost
         string target = module is { Length: > 0 } ? module : _lootStore.Module;
         if (!string.Equals(target, _lootStore.Module, StringComparison.OrdinalIgnoreCase))
             return;
-        foreach (ContainerLootRemoval removal in _lootStore.HistorySnapshot(target))
+        List<ContainerLootRemoval> history = _lootStore.HistorySnapshot(target);
+        if (history.Count == 0) return;
+        lock (_lootResyncGate)
         {
-            _lootSender.Enqueue(HostPeerId, removal.ContainerId, removal.ItemId, nowMs, target);
+            int cursor = _lootResyncCursor.GetValueOrDefault(target) % history.Count;
+            // Resume where the bounded sender filled up. Restarting at zero can endlessly
+            // re-offer already acknowledged old removals and starve the missing tail.
+            for (int visited = 0; visited < history.Count && _lootSender.HasCapacity; visited++)
+            {
+                ContainerLootRemoval removal = history[cursor];
+                _lootSender.Enqueue(HostPeerId, removal.ContainerId, removal.ItemId, nowMs, target);
+                cursor = (cursor + 1) % history.Count;
+            }
+            _lootResyncCursor[target] = cursor;
         }
     }
 

@@ -82,6 +82,10 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\PlaceableDesiredStateTracker.cs" Link="Plugin\PlaceableDesiredStateTracker.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PlaceableLocalChangeTracker.cs" Link="Plugin\PlaceableLocalChangeTracker.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\ContainerUseAttemptRule.cs" Link="Plugin\ContainerUseAttemptRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\ChatInputLatch.cs" Link="Plugin\ChatInputLatch.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\DeferredContainerOpen.cs" Link="Plugin\DeferredContainerOpen.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\PausePresentationRule.cs" Link="Plugin\PausePresentationRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\DialogueMenuStartRule.cs" Link="Plugin\DialogueMenuStartRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SpawnDrainRule.cs" Link="Plugin\SpawnDrainRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\LogRotation.cs" Link="Plugin\LogRotation.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\CrashRecord.cs" Link="Plugin\CrashRecord.cs" />
@@ -190,6 +194,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\PlacedMineRules.cs" Link="Plugin\PlacedMineRules.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\GhostSweepRule.cs" Link="Plugin\GhostSweepRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SaveFlushRule.cs" Link="Plugin\SaveFlushRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\PendingSpawnDeletion.cs" Link="Plugin\PendingSpawnDeletion.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PlayerCommandableLockRule.cs" Link="Plugin\PlayerCommandableLockRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartyFollowTransitionRule.cs" Link="Plugin\PartyFollowTransitionRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\FinalNodeGeometryRule.cs" Link="Plugin\FinalNodeGeometryRule.cs" />

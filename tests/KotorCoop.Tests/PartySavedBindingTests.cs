@@ -12,6 +12,21 @@ namespace KotorCoop.Tests;
 
 public sealed class PartySavedBindingTests
 {
+    [Fact]
+    public void TutorialTraskFirstAdmissionUsesStockIdentityButReplacementStillNeedsProof()
+    {
+        Assert.False(PartySavedOccupantRule.RequiresBinding(0, new(2, "end_trask")));
+        Assert.False(PartySavedOccupantRule.RequiresBinding(0, new(2, "END_TRASK")));
+        Assert.True(PartySavedOccupantRule.RequiresBinding(0, new(2, "end_trask", true)));
+        Assert.True(PartySavedOccupantRule.RequiresBinding(1, new(2, "end_trask")));
+        Assert.True(PartySavedOccupantRule.RequiresBinding(0, new(2, "end_trask_mod")));
+        PartyOccupantTable table = new();
+        Assert.True(table.ObserveTemplate(0, "end_trask"u8, true));
+        Assert.True(table.FixedStockIdentity(0));
+        Assert.True(table.ObserveTemplate(0, "end_trask"u8, true));
+        Assert.False(table.FixedStockIdentity(0));
+    }
+
     private static PartyRoster Roster(uint generation = 5, uint epoch = 3, string? hash = null)
         => new(1, 1, Occupants: [new(generation, "orn_fakechanna", true, hash ?? new string('A', 64))],
             HostSessionId: 20, HostLoadSerial: 2, HostNativeEpoch: epoch, RefreshSaveIdentity: 45, RefreshRevision: 6);
@@ -39,6 +54,15 @@ public sealed class PartySavedBindingTests
             *(uint*)(memory + SharedBlock.OffsetPartyAdoptedLocalGenerations) = PartyOccupantHook.Captured.Generation(0);
             Assert.True(view.CanMirrorPartyOccupant(0,5));
             Assert.False(PartySavedOccupantRule.RequiresBinding(0,new(1,"p_bastilla")));
+            // Trask's first tutorial admission needs no mod-replacement adoption.
+            new Span<byte>(memory + row + 8, 16).Clear();
+            Encoding.ASCII.GetBytes("end_trask").CopyTo(new Span<byte>(memory + row + 8, 16));
+            memory[bank + 240] = 0;
+            Assert.False(view.HostPartyOccupantRequiresBinding(0));
+            Assert.True(view.CanMirrorPartyOccupant(0, 5));
+            memory[bank + 240] = 1;
+            Assert.True(view.HostPartyOccupantRequiresBinding(0));
+            Assert.False(view.CanMirrorPartyOccupant(0, 5));
         }
         finally { PartyOccupantReconcileState.Invalidate(); System.Runtime.InteropServices.NativeMemory.Free(memory); }
     }

@@ -1,0 +1,53 @@
+name: Bug report
+description: Report an installation, connection or gameplay problem.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please check [troubleshooting](https://github.com/ChristopherVR/kotor-coop/blob/main/docs/TROUBLESHOOTING.md) and [known limitations](https://github.com/ChristopherVR/kotor-coop/blob/main/docs/limitations.md), and search existing issues first.
+        The mod is a public playtest; a complete co-op campaign has not been verified.
+  - type: input
+    id: version
+    attributes:
+      label: Co-op versions
+      description: Package filename or exact version for the host and each affected joiner. Say if built from source.
+      placeholder: "Host: …; joiner: …"
+    validations:
+      required: true
+  - type: textarea
+    id: setup
+    attributes:
+      label: Game and session setup
+      description: Windows version, GOG/Steam and game version for each PC, number of players, host/joiner role, and installed game mods. For install problems, include new install/update and existing DLL loaders.
+    validations:
+      required: true
+  - type: dropdown
+    id: connection
+    attributes:
+      label: Connection type
+      options:
+        - LAN (separate PCs)
+        - Internet (direct or port forwarding)
+        - Internet (tunnel; name it in the setup)
+        - Multiple copies on one PC
+        - Not connected / installation problem
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps and location
+      description: What area/save were you in? What did each player do immediately before the problem? Does it happen every time, and did reconnecting or restarting help?
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Expected and actual result
+      description: Include the exact on-screen error, whether control returned, and any missing/duplicated items or save changes.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Support bundles and screenshots
+      description: Run KotorCoop.Agent.exe logs for the affected install, ideally on both host and joiner. With multiple installs add --game-path "path to game folder". Drag the resulting Desktop zip(s) here, or explain why collection failed. Nothing uploads automatically; review logs for addresses and names before sharing. Saves are not bundled.
