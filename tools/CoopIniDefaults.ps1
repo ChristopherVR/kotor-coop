@@ -153,6 +153,8 @@ $script:CoopIniDriftedDefaults = @(
         OldValue = 'save'
         NewValue = 'auto'
         Date     = '2026-09-03'
+        Meaning  = 'selects the appropriate join flow automatically'
+    }
     [pscustomobject]@{
         Key      = 'world_transfer_udp_fallback'
         OldValue = '0'

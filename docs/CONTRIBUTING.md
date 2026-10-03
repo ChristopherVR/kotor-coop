@@ -2,8 +2,10 @@
 
 ## Contribution permissions
 
-Read [LICENSE](../LICENSE). Development branches and forks may prepare contributions
-to this official project; independent releases and commercial reuse are restricted.
+Read [LICENSE](../LICENSE). **Forks are welcome for contributing back:** fork the
+repository, make a development branch, and open a pull request against this official
+project. Development and testing for that purpose are permitted; independent releases
+and commercial reuse are restricted.
 Intentionally submitting work for inclusion makes the section 3 contribution grant
 while you retain ownership. Identify separate licenses and confirm your rights.
 Do not submit game executables, extracted game assets, keys, cracks or DRM bypasses.

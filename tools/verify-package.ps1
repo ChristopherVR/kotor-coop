@@ -18,9 +18,14 @@ $fixtureRoot = [IO.Path]::GetFullPath($WorkDirectory)
 if (Test-Path -LiteralPath $fixtureRoot) { throw 'WorkDirectory must be new; refusing to modify existing data.' }
 $installerExe = Join-Path $packageRoot 'KotorCoop.Agent.exe'
 foreach ($required in @('KotorCoop.Agent.exe', 'dinput8.dll', 'chain-loader\dinput8.dll',
-                       'coop.ini', 'CoopIniDefaults.ps1', 'install.ps1', 'README.txt',
+                       'coop.ini', 'install.ps1', 'README.txt',
                        'Override\k_coop_phantom.utc', 'KotorCoop.LICENSE.txt',
                        'KotorCoop.LEGAL.txt', 'KotorCoop.THIRD-PARTY-NOTICES.txt')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $packageRoot $required))) {
+        throw "Missing package file: $required"
+    }
+}
+foreach ($required in @('KotorCoop.CollectLogs.cmd', 'KotorCoop.DEFAULTS.ini')) {
     if (-not (Test-Path -LiteralPath (Join-Path $packageRoot $required))) {
         throw "Missing package file: $required"
     }
@@ -66,6 +71,17 @@ try {
         }
         Invoke-Installer "$layout-upgrade" @('install', '--game-path', $game)
         Assert-Check ([IO.File]::ReadAllText((Join-Path $game 'coop.ini')) -ceq $customIni) "$layout upgrade preserves settings"
+        Assert-Check (Test-Path -LiteralPath (Join-Path $game 'KotorCoop.CollectLogs.cmd')) "$layout installs double-click log collector"
+        Assert-Check ((Get-FileHash -LiteralPath (Join-Path $game 'KotorCoop.DEFAULTS.ini')).Hash -eq
+            (Get-FileHash -LiteralPath (Join-Path $packageRoot 'coop.ini')).Hash) "$layout ships exact incoming defaults"
+        $oldIni = $customIni.Replace('menu_button = 1', 'menu_button = 0')
+        [IO.File]::WriteAllText((Join-Path $game 'coop.ini'), $oldIni)
+        Invoke-Installer "$layout-preview-defaults" @('install', '--game-path', $game)
+        Assert-Check ([IO.File]::ReadAllText((Join-Path $game 'coop.ini')) -ceq $oldIni) "$layout migration is opt-in"
+        Invoke-Installer "$layout-migrate-defaults" @('install', '--game-path', $game, '--update-defaults')
+        Assert-Check ([IO.File]::ReadAllText((Join-Path $game 'coop.ini')) -ceq $customIni) "$layout migration preserves custom settings"
+        $backups = @(Get-ChildItem -LiteralPath $game -Filter 'coop.ini.before-defaults-*.bak')
+        Assert-Check ($backups.Count -eq 1 -and [IO.File]::ReadAllText($backups[0].FullName) -ceq $oldIni) "$layout migration backs up original settings"
         if ($layout -eq 'chain') {
             $entries = @(Get-Content -LiteralPath (Join-Path $game 'dinput8.chain') | Where-Object { $_.Trim() -eq 'extra.dll' })
             Assert-Check ($entries.Count -eq 1) 'custom chain entry preserved exactly once'
@@ -75,7 +91,7 @@ try {
             Move-Item -LiteralPath "$plugin.held" -Destination $plugin
             [IO.File]::WriteAllText((Join-Path $game 'dinput8-chain.log'), 'chain diagnostic fixture')
             [IO.File]::WriteAllText((Join-Path $game 'coop.ini'), $customIni + "password = fixture-secret`r`nhost = fixture-private-address`r`n")
-            Invoke-Installer 'support-bundle' @('logs', '--game-path', $game)
+            Invoke-Installer 'support-bundle' @('support', '--game-path', $game)
             $bundleLine = Get-Content -LiteralPath (Join-Path $fixtureRoot 'support-bundle.txt') |
                 Where-Object { $_ -match '^wrote (.+) \(\d+ file\(s\)\)\.$' } | Select-Object -First 1
             if (-not $bundleLine -or $bundleLine -notmatch '^wrote (.+) \(\d+ file\(s\)\)\.$') {
@@ -110,6 +126,7 @@ try {
         Invoke-Installer "$layout-uninstall" @('uninstall', '--game-path', $game)
         Assert-Check ([IO.File]::ReadAllText((Join-Path $game 'coop.ini')) -ceq $customIni) "$layout uninstall preserves settings"
         Assert-Check (-not (Test-Path -LiteralPath (Join-Path $game 'KotorCoop.Agent.exe'))) "$layout agent removed"
+        Assert-Check (-not (Test-Path -LiteralPath (Join-Path $game 'KotorCoop.CollectLogs.cmd'))) "$layout log shortcut removed"
         if ($layout -eq 'chain') {
             Assert-Check ([IO.File]::ReadAllText((Join-Path $game 'dinput8.dll')) -ceq $foreign) 'foreign DLL restored'
             Assert-Check (Test-Path -LiteralPath (Join-Path $game 'extra.dll')) 'custom chain DLL retained'

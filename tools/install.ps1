@@ -60,9 +60,9 @@
 #   pwsh install.ps1 -GameDir '...'                  # warns only, changes nothing (the default)
 #   pwsh install.ps1 -GameDir '...' -UpdateDefaults   # also rewrites the drifted lines in place
 #
-# See tools/CoopIniDefaults.ps1 for the actual parsing/decision logic (dot-sourceable and
-# side-effect-free on its own - exercise it directly per tools/README.md's manual-verification
-# note; this repo has no Pester harness to automate it yet) and tools/README.md for both.
+# Parsing and migration are shared with double-click setup in SettingsMigration.cs.
+# Changes follow the incoming player template, are opt-in, and create a backup first.
+# Historical developer switches are preserved rather than migrated by this wrapper.
 #
 # --- crash dumps (-EnableCrashDumps / -DisableCrashDumps) ----------------------------------
 # A player-facing counterpart to the dev-only tools/crashlog.ps1 -EnableDumps: turns on Windows
@@ -145,85 +145,14 @@ if ($Uninstall) {
     & $agent uninstall --game-path $GameDir
 }
 else {
-    # Captured BEFORE the install call: PackageInstaller writes a fresh coop.ini only when none
-    # exists, and a freshly-written file is by definition current - the drift check below only
-    # means anything against a coop.ini that predates this run.
-    $iniPath = Join-Path $GameDir 'coop.ini'
-    $iniExistedBefore = Test-Path -LiteralPath $iniPath
-
     $installArgs = @('install', '--from', $PSScriptRoot, '--game-path', $GameDir)
     if ($Chain) { $installArgs += '--chain' }
     if ($Load.Count -gt 0) { $installArgs += @('--load', ($Load -join ',')) }
     if ($Force) { $installArgs += '--force' }
+    if ($UpdateDefaults) { $installArgs += '--update-defaults' }
     & $agent @installArgs
 }
 
 if ($LASTEXITCODE -ne 0) { throw "KotorCoop.Agent.exe exited with code $LASTEXITCODE" }
 
-# --- coop.ini upgrade-drift check: only for a plain (non-uninstall) run, and only when the
-# player's coop.ini predates this install ------------------------------------------------------
-$defaultsTable = Join-Path $PSScriptRoot 'CoopIniDefaults.ps1'
-if (-not $Uninstall -and $iniExistedBefore -and -not (Test-Path -LiteralPath $defaultsTable)) {
-    # The install itself is complete at this point; a missing drift table (a hand-assembled
-    # package) must not turn a finished install into a failed one.
-    Write-Warning "CoopIniDefaults.ps1 is not beside install.ps1 - skipping the coop.ini upgrade-drift check"
-}
-elseif (-not $Uninstall -and $iniExistedBefore) {
-    . $defaultsTable
-
-    $playerIni = ConvertFrom-CoopIni -Path $iniPath
-    # The reference is whatever coop.ini SHIPPED beside this install.ps1 in the current
-    # package - since package.ps1 stages profiles/coop.ini.example as coop.ini in the same zip
-    # root, this is the current, correct set of keys/defaults, no separate .example file needed.
-    $referencePath = Join-Path $PSScriptRoot 'coop.ini'
-    $referenceIni = if (Test-Path -LiteralPath $referencePath) { ConvertFrom-CoopIni -Path $referencePath } else { $null }
-
-    $drift = Get-CoopIniDrift -PlayerIni $playerIni -ReferenceIni $referenceIni
-
-    if ($drift.Drifted.Count -gt 0) {
-        ''
-        "your coop.ini predates this version and still has $($drift.Drifted.Count) default(s) that changed:"
-        foreach ($entry in $drift.Drifted) {
-            Write-Warning "  $($entry.Key) = $($entry.OldValue)  (new shipped default since $($entry.Date): $($entry.NewValue) - $($entry.Meaning))"
-        }
-
-        if ($UpdateDefaults) {
-            $changed = Update-CoopIniDefaults -Path $iniPath -Drifted $drift.Drifted
-            "updated $changed line(s) in $iniPath"
-        }
-        else {
-            "run with -UpdateDefaults to rewrite just those lines in place (everything else in your coop.ini is left untouched)."
-        }
-    }
-
-    if ($drift.MissingKeys.Count -gt 0) {
-        ''
-        $missingHeader = "informational: your coop.ini is also missing $($drift.MissingKeys.Count) key(s) " +
-            "present in the shipped template (these simply use the code's own built-in default - " +
-            "see docs/CONFIG.md):"
-        $missingHeader
-        "  $($drift.MissingKeys -join ', ')"
-    }
-
-    if ($drift.RemovableDeveloperKeys.Count -gt 0) {
-        ''
-        $removableKeys = $drift.RemovableDeveloperKeys | ForEach-Object { $_.Key }
-        "your coop.ini also still sets $($drift.RemovableDeveloperKeys.Count) developer switch(es) " +
-            "explicitly, each already at its own current default - noise, since the shipped " +
-            "coop.ini no longer lists developer switches at all (see docs/CONFIG.md's " +
-            "`"Developer switches`" table):"
-        foreach ($entry in $drift.RemovableDeveloperKeys) {
-            "  $($entry.Key) = $($entry.Value)"
-        }
-
-        if ($UpdateDefaults) {
-            $removedCount = Remove-CoopIniKeys -Path $iniPath -Keys $removableKeys
-            "removed $removedCount noise line(s) from $iniPath"
-        }
-        else {
-            "run with -UpdateDefaults to remove just those lines (a developer switch set to " +
-                "anything OTHER than its current default is left untouched - that is a " +
-                "deliberate choice, not noise)."
-        }
-    }
-}
+# Defaults migration is handled by the agent for both command-line and double-click setup.

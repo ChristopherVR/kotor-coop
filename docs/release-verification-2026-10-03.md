@@ -603,3 +603,43 @@ Trask body and resume following. Also save a named slot and return to play to
 check text entry and the orphaned enemy-sighted panel. Preserve both logs and
 checkpoint saves. Controlled diagnostics and automated tests do not replace these
 steps.
+
+### r15 public-readiness friction follow-up
+
+The main installer now previews player settings that match historical defaults and
+offers opt-in migration to the exact incoming KotorCoop.DEFAULTS.ini template.
+Declining preserves settings. Accepting first backs up coop.ini; custom values,
+comments and line endings are preserved, and locked-game refusal happens before
+settings or backups are written. The PowerShell wrapper delegates -UpdateDefaults
+to this same implementation. A syntax error in the legacy PowerShell drift table
+was also corrected; that helper is no longer shipped or used by the wrapper.
+
+KotorCoop.CollectLogs.cmd runs the interactive support collector. Inside a game
+folder it selects that install; from an extracted package it offers game-folder
+selection as needed. Bundles are local, redact password/host settings, and upload
+nothing. The existing warning about IP addresses and character names in logs remains.
+
+The native liveness overlay now retains a re-host instruction when a previously
+hosted helper recovers into menu mode without an active session. It clears when a
+session is established. This is guidance, not automatic session restoration; visible
+retail verification and the earlier dialogue/Trask/save-menu retests remain open.
+
+Validation: the non-Slow/non-Soak tier passed 5,715 tests, zero failures/skips, in
+2m57s. Final focused migration/logging/installer/options checks passed 58 tests,
+including refusal with a game image locked against writes. A rebuild attempted while
+the broader test process was still running hit a file lock; the focused checks were
+rebuilt and rerun successfully after that process finished. Native x86 and Windows/
+Linux packaging passed with warnings as errors. The package matrix passed 48 checks,
+covering plain/chained layouts, migration opt-in, backups, custom settings,
+interactive support routing, notice copies and removal of the log shortcut.
+
+The solution-wide NuGet audit including transitive dependencies reported no known
+vulnerable packages. Exact agent dependency versions are recorded in the third-party
+inventory; full copyright/license texts, embedded-material review and legal clearance
+remain open. Contributor guidance explicitly welcomes forks intended to submit PRs
+back to this project. No public visibility change or numbered release was made.
+
+Final local r15 Windows archive: kotor-coop-0.11.0-readiness-20261003-r15-windows.zip.
+SHA-256: `5ED584A4C01EE883F99C003422460A7C4306362DAB78F9380ECA3CC0DC2ADEB3`.
+The final rebuilt archive passed the 48-check package matrix. This is a local,
+pre-commit candidate; do not treat it as a hosted release artifact.
