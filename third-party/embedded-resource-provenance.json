@@ -1,0 +1,233 @@
+{
+  "assembly": {
+    "revision": "db22e2f015a2cac3315141f40f536f3d8534c5eb",
+    "proof": "Embedded grammar matches upstream exactly after line-ending and final-whitespace normalization",
+    "materialUrl": "https://raw.githubusercontent.com/haxo-games/Universal-Assembly-Syntax-Highlighting/db22e2f015a2cac3315141f40f536f3d8534c5eb/syntaxes/asm.tmLanguage.json"
+  },
+  "themes": [
+    {
+      "sha256": "81F9650B31CF7CC1037369490DB53943F380A56D708018F0B77C6AC7F4C84540",
+      "materialSource": "danipen/TextMateSharp@622d1b240a5be474939857c0b2780249022f14a3",
+      "noticeSources": [
+        "Microsoft VS Code"
+      ],
+      "file": "abyss-color-theme.json"
+    },
+    {
+      "sha256": "22DCDBDF9201C5153E45F650783889945284B1A16B380267DCE1B439FE56A230",
+      "materialSource": "danipen/TextMateSharp@622d1b240a5be474939857c0b2780249022f14a3",
+      "noticeSources": [
+        "One Dark conversion",
+        "Atom One Dark"
+      ],
+      "file": "atom-one-dark-color-theme.json"
+    },
+    {
+      "sha256": "A016A9FC987B779A0FF7E354F6C39F99039D36446D825EB851BD3E873F5C3A0C",
+      "materialSource": "danipen/TextMateSharp@622d1b240a5be474939857c0b2780249022f14a3",
+      "noticeSources": [
+        "One Light conversion",
+        "Atom One Light"
+      ],
+      "file": "atom-one-light-color-theme.json"
+    },
+    {
+      "sha256": "14882E0918060ABA73E3A60CCD906473D42DD4CBECB86A705D58A4F56078F1B7",
+      "materialSource": "danipen/TextMateSharp@622d1b240a5be474939857c0b2780249022f14a3",
+      "noticeSources": [
+        "Microsoft VS Code"
+      ],
+      "file": "dark_plus.json"
+    },
+    {
+      "sha256": "578DAFA7EA7FC4818B4C5FBF25A93742E1BA426BB4539D34529AD369B7712580",
+      "materialSource": "danipen/TextMateSharp@622d1b240a5be474939857c0b2780249022f14a3",
+      "noticeSources": [
+        "Microsoft VS Code"
+      ],
+      "file": "dark_vs.json"
+    },
+    {
+      "sha256": "6B940A575D7DC53DB927323B8FF94DD06735FBDCC1E1B794314BD18908D77178",
+      "materialSource": "danipen/TextMateSharp@622d1b240a5be474939857c0b2780249022f14a3",
+      "noticeSources": [
+        "Microsoft VS Code"
+      ],
+      "file": "dimmed-monokai-color-theme.json"
+    },
+    {
+      "sha256": "D157EF14C42EE034BD2B169344D687F3A6CBB0F6F0721D36BE73508BED5EF517",
+      "materialSource": "danipen/TextMateSharp@622d1b240a5be474939857c0b2780249022f14a3",
+      "noticeSources": [
+        "Dracula"
+      ],
+      "file": "dracula-color-theme.json"
+    },
+    {
+      "sha256": "5EF2D0729061F49CBBD8916C9E885141AD0CF1BC0D20850D4EBB6DDC4A62DC93",
+      "materialSource": "danipen/TextMateSharp@622d1b240a5be474939857c0b2780249022f14a3",
+      "noticeSources": [
+        "Microsoft VS Code"
+      ],
+      "file": "hc_black.json"
+    },
+    {
+      "sha256": "358E65D88CB18BE44E6671E0D2837E9B30917FAD41402B7B358A59F0C36E2109",
+      "materialSource": "danipen/TextMateSharp@622d1b240a5be474939857c0b2780249022f14a3",
+      "noticeSources": [
+        "Microsoft VS Code"
+      ],
+      "file": "hc_light.json"
+    },
+    {
+      "sha256": "14FD2354DF1A1B10014031F5B76CDE5F501623924E4FF283D4408C1C630E65DA",
+      "materialSource": "danipen/TextMateSharp@622d1b240a5be474939857c0b2780249022f14a3",
+      "noticeSources": [
+        "Microsoft VS Code"
+      ],
+      "file": "kimbie-dark-color-theme.json"
+    },
+    {
+      "sha256": "3CB2D6F0914BEAD9AAE893D0F7A9E0589948BF8BB5BA8A2AF52E0F38921DBF86",
+      "materialSource": "danipen/TextMateSharp@622d1b240a5be474939857c0b2780249022f14a3",
+      "noticeSources": [
+        "Microsoft VS Code"
+      ],
+      "file": "light_plus.json"
+    },
+    {
+      "sha256": "31D3A9DC2361C051E45883A52E8AF4D1A6B628611F6C9D4233EDE59C25EFFF61",
+      "materialSource": "danipen/TextMateSharp@622d1b240a5be474939857c0b2780249022f14a3",
+      "noticeSources": [
+        "Microsoft VS Code"
+      ],
+      "file": "light_vs.json"
+    },
+    {
+      "sha256": "EDDDC56C4531FD3742243254C9D123A870B8D0391D0A0E4297617C00E186370D",
+      "materialSource": "danipen/TextMateSharp@622d1b240a5be474939857c0b2780249022f14a3",
+      "noticeSources": [
+        "Microsoft VS Code"
+      ],
+      "file": "monokai-color-theme.json"
+    },
+    {
+      "sha256": "6FF96C314C9CA63ADC78C848594C1E3D973BD4449F13E2F0D8E22A24C51D8A5F",
+      "materialSource": "danipen/TextMateSharp@622d1b240a5be474939857c0b2780249022f14a3",
+      "noticeSources": [
+        "One Dark conversion",
+        "Atom One Dark"
+      ],
+      "file": "onedark-color-theme.json"
+    },
+    {
+      "sha256": "A707474BF13EEB17A24E370C4D27E8AED035FB3ABF90DDB13AAF860F037AB222",
+      "materialSource": "danipen/TextMateSharp@622d1b240a5be474939857c0b2780249022f14a3",
+      "noticeSources": [
+        "Microsoft VS Code"
+      ],
+      "file": "quietlight-color-theme.json"
+    },
+    {
+      "sha256": "091C6ED98637D8E847CF9C286EA2E2E498C0009E315CB91F22C4B4586364BD79",
+      "materialSource": "danipen/TextMateSharp@622d1b240a5be474939857c0b2780249022f14a3",
+      "noticeSources": [
+        "Microsoft VS Code"
+      ],
+      "file": "Red-color-theme.json"
+    },
+    {
+      "sha256": "9D8FF0C743644F8E5C1688F7FBCD5DB59E3111177DBDEE012E1179787F136261",
+      "materialSource": "danipen/TextMateSharp@622d1b240a5be474939857c0b2780249022f14a3",
+      "noticeSources": [
+        "Microsoft VS Code"
+      ],
+      "file": "solarized-dark-color-theme.json"
+    },
+    {
+      "sha256": "2C86C32DE56ADDA4EC7259E1CBC58A90E125A355FDD55941E859DAF6AC59489D",
+      "materialSource": "danipen/TextMateSharp@622d1b240a5be474939857c0b2780249022f14a3",
+      "noticeSources": [
+        "Microsoft VS Code"
+      ],
+      "file": "solarized-light-color-theme.json"
+    },
+    {
+      "sha256": "2BD981500792CDC7710729C22682446891F672BB1532AB29B02D882BAC8A2A2E",
+      "materialSource": "danipen/TextMateSharp@622d1b240a5be474939857c0b2780249022f14a3",
+      "noticeSources": [
+        "Microsoft VS Code"
+      ],
+      "file": "tomorrow-night-blue-color-theme.json"
+    },
+    {
+      "sha256": "E8399E3641DAC605BB4181F7A33DBF3C6BFA6FC10FD421874DBDF182A4F8B86E",
+      "materialSource": "danipen/TextMateSharp@622d1b240a5be474939857c0b2780249022f14a3",
+      "noticeSources": [
+        "TextMateSharp contribution",
+        "Microsoft VS Code"
+      ],
+      "file": "visual-studio-dark-theme.json"
+    },
+    {
+      "sha256": "CC2ADE96BE5DDB2CE257CAAEB855A03E795266C50992E1B90AA8F2E36BA7C15B",
+      "materialSource": "danipen/TextMateSharp@622d1b240a5be474939857c0b2780249022f14a3",
+      "noticeSources": [
+        "TextMateSharp contribution",
+        "Microsoft VS Code"
+      ],
+      "file": "visual-studio-light-theme.json"
+    }
+  ],
+  "licenseSources": [
+    {
+      "url": "https://raw.githubusercontent.com/microsoft/vscode/fee1edb8d6d72a0ddff41e5f71a671c23ed924b9/LICENSE.txt",
+      "repository": "microsoft/vscode",
+      "revision": "fee1edb8d6d72a0ddff41e5f71a671c23ed924b9",
+      "name": "Microsoft VS Code"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/haxo-games/Universal-Assembly-Syntax-Highlighting/db22e2f015a2cac3315141f40f536f3d8534c5eb/LICENSE",
+      "repository": "haxo-games/Universal-Assembly-Syntax-Highlighting",
+      "revision": "db22e2f015a2cac3315141f40f536f3d8534c5eb",
+      "name": "Assembly grammar"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/akamud/vscode-theme-onedark/a8be970644982221f9b61fb1c4b3da74b4beab79/LICENSE",
+      "repository": "akamud/vscode-theme-onedark",
+      "revision": "a8be970644982221f9b61fb1c4b3da74b4beab79",
+      "name": "One Dark conversion"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/akamud/vscode-theme-onelight/5866e900db932d580e978a58db42f65cde07998b/LICENSE",
+      "repository": "akamud/vscode-theme-onelight",
+      "revision": "5866e900db932d580e978a58db42f65cde07998b",
+      "name": "One Light conversion"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/dracula/visual-studio-code/0145b2160444499626bbf87ac8da1d7903eedd44/LICENSE",
+      "repository": "dracula/visual-studio-code",
+      "revision": "0145b2160444499626bbf87ac8da1d7903eedd44",
+      "name": "Dracula"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/atom/one-dark-syntax/9c96f4454362267ac45322063e193ccf9d2debb1/LICENSE.md",
+      "repository": "atom/one-dark-syntax",
+      "revision": "9c96f4454362267ac45322063e193ccf9d2debb1",
+      "name": "Atom One Dark"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/atom/one-light-syntax/d84579027410c576086dfca14d934c4bd74b0438/LICENSE.md",
+      "repository": "atom/one-light-syntax",
+      "revision": "d84579027410c576086dfca14d934c4bd74b0438",
+      "name": "Atom One Light"
+    }
+  ],
+  "cshtml": {
+    "noticeMirror": "microsoft/vscode@93c2f0fbf16c5a4b10e4d5f89737d9c2c25488a3",
+    "proof": "Upstream cgmanifest revision matches exactly",
+    "revision": "e6e54d5a86a28cc1e44609a32aaa10a244cd3f81",
+    "noticeUrl": "https://raw.githubusercontent.com/microsoft/vscode/93c2f0fbf16c5a4b10e4d5f89737d9c2c25488a3/ThirdPartyNotices.txt",
+    "manifestUrl": "https://raw.githubusercontent.com/microsoft/vscode/93c2f0fbf16c5a4b10e4d5f89737d9c2c25488a3/extensions/razor/cgmanifest.json"
+  }
+}

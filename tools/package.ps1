@@ -27,7 +27,7 @@
 # build, not on demand later. See docs/research/proton.md for why the exe is self-contained.
 #
 # Does NOT touch a game install and does NOT run the game. CI runs this on every push and
-# attaches both files to the run; green main builds refresh the rolling pre-release.
+# attaches both files to the run; releases require explicit tested-tag promotion.
 # Tested v* tags require manual numbered promotion (.github/workflows/release.yml). The symbols zip is CI-artifact-only -
 # it is never attached to a GitHub release, only kept for maintainers to pull off a CI run.
 #

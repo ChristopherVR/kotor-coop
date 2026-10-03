@@ -6,7 +6,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $noticeRoot = Join-Path (Split-Path $PSScriptRoot -Parent) 'third-party'
 $manifest = Get-Content (Join-Path $noticeRoot 'manifest.json') -Raw | ConvertFrom-Json
-foreach ($entry in @(@('NOTICES.txt', $manifest.noticesSha256), @('grammar-origins.json', $manifest.grammarOriginsSha256))) {
+foreach ($entry in @(@('NOTICES.txt', $manifest.noticesSha256), @('grammar-origins.json', $manifest.grammarOriginsSha256), @('embedded-resource-provenance.json', $manifest.embeddedProvenanceSha256))) {
     if ((Get-FileHash -LiteralPath (Join-Path $noticeRoot $entry[0])).Hash -ne $entry[1]) {
         throw "Notice manifest hash mismatch: $($entry[0])"
     }

@@ -24,3 +24,4 @@
 # Preserve audited notice/provenance bytes so manifest hashes survive every checkout.
 third-party/NOTICES.txt -text
 third-party/grammar-origins.json text eol=lf
+third-party/embedded-resource-provenance.json text eol=lf

@@ -184,7 +184,7 @@ internal static class InstallCommand
         else
         {
             Cli.Heading($"kotor-coop {installed} is installed here; this package is "
-                + $"{incoming ?? "an unversioned dev build"} - upgrading.");
+                + $"{incoming ?? "an unversioned dev build"} - installing this package.");
         }
     }
 

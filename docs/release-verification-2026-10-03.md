@@ -663,3 +663,28 @@ legal files. No gameplay code changed and the gameplay suite was not rerun.
 The audit is not complete: cshtml's pinned upstream source is unavailable, the
 assembly grammar lacks a pinned source revision, and embedded themes need complete
 provenance/notice mapping. These specific cases remain public-distribution gates.
+
+### r17 beta preparation and recovered notices
+
+Recovered cshtml's MIT copyright notice from Microsoft's pinned VS Code 1.50.0
+ThirdPartyNotices, whose razor cgmanifest names the identical grammar revision.
+Matched the assembly grammar against its archived upstream after newline/final
+whitespace normalization and collected its MIT notice. Recorded hashes and notice
+sources for all 21 bundled themes, including full Microsoft, Atom, One Dark/Light
+conversion and Dracula notices. Source URLs/revisions are retained in
+third-party/embedded-resource-provenance.json; packaging verifies its hash too.
+The valid guard passed and altered provenance was rejected.
+
+Prepared VERSION 0.1.0-beta.1, explicit beta download links and player release notes.
+Replaced the active readiness page with current remaining gates, preserving earlier
+evidence here. Publication now requires manual tagged promotion of tested CI
+artifacts; no automatic rolling release is recreated and beta tags stay prereleases.
+Workflow YAML and Release Bash syntax checks passed. Warnings-as-errors native x86,
+Windows and Linux packaging passed; the local Windows beta passed 50 installer
+checks. This is fixture/package evidence, not a retail gameplay retest. Hosted CI
+and publication results belong to the subsequent tagged promotion record.
+
+Existing release metadata and assets were backed up under ignored artifacts before
+replacement. Source tags/history and repository visibility are preserved. The owner
+authorized this experimental beta; human gameplay, independent-PC/network, complete
+campaign and game/media/custom-license legal gates remain open.

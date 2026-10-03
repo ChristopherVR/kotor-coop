@@ -22,7 +22,7 @@ Updates preserve coop.ini. Setup previews player settings matching older default
 and asks before applying changes, with a backup first. Decline to keep those values.
 KotorCoop.DEFAULTS.ini contains this package's defaults for comparison.
 
-What to expect. This is an experimental build; public-release sign-off is pending.
+What to expect. This is an experimental beta. General-release sign-off is pending.
 A complete co-op campaign from start to finish
 has NOT been verified. Early-game routes and selected later scenes have been tested;
 three-to-eight-player campaign play is less extensively tested. Either player can

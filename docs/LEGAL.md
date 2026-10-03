@@ -31,9 +31,9 @@ to distribute game copies, keys, cracks or bypass licensing/DRM.
   approvals privately. A new license neither revokes earlier grants nor assigns
   copyrights.
 - **Dependencies:** [full collected notices](../third-party/NOTICES.txt) now ship,
-  with published-version and content-hash guards. Resolve the two unavailable/
-  unversioned embedded grammar sources and theme provenance listed in the
-  [notice inventory](../THIRD-PARTY-NOTICES.md). Complete the audit against exact packaged runtime,
+  with published-version and content-hash guards. The remaining cshtml, assembly
+  and theme notices have been recovered and their sources recorded in the
+  [notice inventory](../THIRD-PARTY-NOTICES.md). Recheck against exact packaged runtime,
   native-library and dependency versions, including embedded grammars. Ship
   required full copyright/license texts. Their terms apply independently;
   project restrictions cannot replace them. See [the inventory](../THIRD-PARTY-NOTICES.md).
