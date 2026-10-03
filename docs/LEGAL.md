@@ -30,7 +30,10 @@ to distribute game copies, keys, cracks or bypass licensing/DRM.
   employer/contractor rights holders before licensing earlier material. Record
   approvals privately. A new license neither revokes earlier grants nor assigns
   copyrights.
-- **Dependencies:** complete the notice audit against exact packaged runtime,
+- **Dependencies:** [full collected notices](../third-party/NOTICES.txt) now ship,
+  with published-version and content-hash guards. Resolve the two unavailable/
+  unversioned embedded grammar sources and theme provenance listed in the
+  [notice inventory](../THIRD-PARTY-NOTICES.md). Complete the audit against exact packaged runtime,
   native-library and dependency versions, including embedded grammars. Ship
   required full copyright/license texts. Their terms apply independently;
   project restrictions cannot replace them. See [the inventory](../THIRD-PARTY-NOTICES.md).

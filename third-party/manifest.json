@@ -1,0 +1,31 @@
+{
+  "grammarOriginsSha256": "32316F7356B00871B2563D5C24464E51E95CD7EEDDE1147405A8CA455FC0934C",
+  "packages": [
+    "ColorHelper/1.8.1",
+    "JetBrains.Annotations/2026.2.0",
+    "Markdig/1.3.2",
+    "Microsoft.Extensions.Configuration.Abstractions/10.0.11",
+    "Microsoft.Extensions.Configuration.Binder/10.0.11",
+    "Microsoft.Extensions.Configuration.FileExtensions/10.0.11",
+    "Microsoft.Extensions.Configuration.Json/10.0.11",
+    "Microsoft.Extensions.Configuration/10.0.11",
+    "Microsoft.Extensions.DependencyInjection.Abstractions/10.0.11",
+    "Microsoft.Extensions.FileProviders.Abstractions/10.0.11",
+    "Microsoft.Extensions.FileProviders.Physical/10.0.11",
+    "Microsoft.Extensions.FileSystemGlobbing/10.0.11",
+    "Microsoft.Extensions.Logging.Abstractions/10.0.7",
+    "Microsoft.Extensions.Options/10.0.11",
+    "Microsoft.Extensions.Primitives/10.0.11",
+    "Onigwrap/1.0.11",
+    "runtimepack.Microsoft.NETCore.App.Runtime.win-x64/10.0.12",
+    "System.IO.Abstractions/22.2.0",
+    "Terminal.Gui/2.5.0",
+    "TestableIO.System.IO.Abstractions.Wrappers/22.2.0",
+    "TestableIO.System.IO.Abstractions/22.2.0",
+    "Testably.Abstractions.FileSystem.Interface/10.3.0",
+    "TextMateSharp.Grammars/2.0.4",
+    "TextMateSharp/2.0.4",
+    "Wcwidth/4.0.1"
+  ],
+  "noticesSha256": "E01321519B1DCBE7299B3C76D8414995C82365FC6ED22E16F21ECF43F2E6B8FA"
+}

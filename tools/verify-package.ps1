@@ -58,7 +58,7 @@ try {
             [IO.File]::WriteAllText((Join-Path $game 'dinput8.dll'), $foreign)
         }
         Invoke-Installer "$layout-install" @('install', '--game-path', $game)
-        foreach ($notice in @('KotorCoop.LICENSE.txt', 'KotorCoop.LEGAL.txt', 'KotorCoop.THIRD-PARTY-NOTICES.txt')) {
+        foreach ($notice in @('KotorCoop.LICENSE.txt', 'KotorCoop.LEGAL.txt', 'KotorCoop.THIRD-PARTY-NOTICES.txt', 'KotorCoop.THIRD-PARTY-INVENTORY.md')) {
             Assert-Check ((Get-FileHash -LiteralPath (Join-Path $game $notice)).Hash -eq
                 (Get-FileHash -LiteralPath (Join-Path $packageRoot $notice)).Hash) "$layout installs $notice unchanged"
         }

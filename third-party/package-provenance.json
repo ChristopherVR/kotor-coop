@@ -1,0 +1,177 @@
+[
+  {
+    "commit": "",
+    "repository": "https://github.com/iamartyom/ColorHelper",
+    "authors": "Artyom Gritsuk",
+    "copyright": "",
+    "package": "ColorHelper/1.8.1"
+  },
+  {
+    "commit": "",
+    "repository": "https://github.com/JetBrains/JetBrains.Annotations.git",
+    "authors": "JetBrains",
+    "copyright": "Copyright (c) 2016-2025 JetBrains s.r.o.",
+    "package": "JetBrains.Annotations/2026.2.0"
+  },
+  {
+    "commit": "fc705234fa211d179ee1d5e7656b51ab99f70ca9",
+    "repository": "https://github.com/xoofx/markdig",
+    "authors": "Alexandre Mutel",
+    "copyright": "Alexandre Mutel",
+    "package": "Markdig/1.3.2"
+  },
+  {
+    "commit": "e2f47b0110ed922f21a1522da67279133ce28f32",
+    "repository": "https://github.com/dotnet/dotnet",
+    "authors": "Microsoft",
+    "copyright": "© Microsoft Corporation. All rights reserved.",
+    "package": "Microsoft.Extensions.Configuration/10.0.11"
+  },
+  {
+    "commit": "e2f47b0110ed922f21a1522da67279133ce28f32",
+    "repository": "https://github.com/dotnet/dotnet",
+    "authors": "Microsoft",
+    "copyright": "© Microsoft Corporation. All rights reserved.",
+    "package": "Microsoft.Extensions.Configuration.Abstractions/10.0.11"
+  },
+  {
+    "commit": "e2f47b0110ed922f21a1522da67279133ce28f32",
+    "repository": "https://github.com/dotnet/dotnet",
+    "authors": "Microsoft",
+    "copyright": "© Microsoft Corporation. All rights reserved.",
+    "package": "Microsoft.Extensions.Configuration.Binder/10.0.11"
+  },
+  {
+    "commit": "e2f47b0110ed922f21a1522da67279133ce28f32",
+    "repository": "https://github.com/dotnet/dotnet",
+    "authors": "Microsoft",
+    "copyright": "© Microsoft Corporation. All rights reserved.",
+    "package": "Microsoft.Extensions.Configuration.FileExtensions/10.0.11"
+  },
+  {
+    "commit": "e2f47b0110ed922f21a1522da67279133ce28f32",
+    "repository": "https://github.com/dotnet/dotnet",
+    "authors": "Microsoft",
+    "copyright": "© Microsoft Corporation. All rights reserved.",
+    "package": "Microsoft.Extensions.Configuration.Json/10.0.11"
+  },
+  {
+    "commit": "e2f47b0110ed922f21a1522da67279133ce28f32",
+    "repository": "https://github.com/dotnet/dotnet",
+    "authors": "Microsoft",
+    "copyright": "© Microsoft Corporation. All rights reserved.",
+    "package": "Microsoft.Extensions.DependencyInjection.Abstractions/10.0.11"
+  },
+  {
+    "commit": "e2f47b0110ed922f21a1522da67279133ce28f32",
+    "repository": "https://github.com/dotnet/dotnet",
+    "authors": "Microsoft",
+    "copyright": "© Microsoft Corporation. All rights reserved.",
+    "package": "Microsoft.Extensions.FileProviders.Abstractions/10.0.11"
+  },
+  {
+    "commit": "e2f47b0110ed922f21a1522da67279133ce28f32",
+    "repository": "https://github.com/dotnet/dotnet",
+    "authors": "Microsoft",
+    "copyright": "© Microsoft Corporation. All rights reserved.",
+    "package": "Microsoft.Extensions.FileProviders.Physical/10.0.11"
+  },
+  {
+    "commit": "e2f47b0110ed922f21a1522da67279133ce28f32",
+    "repository": "https://github.com/dotnet/dotnet",
+    "authors": "Microsoft",
+    "copyright": "© Microsoft Corporation. All rights reserved.",
+    "package": "Microsoft.Extensions.FileSystemGlobbing/10.0.11"
+  },
+  {
+    "commit": "b16286c2284fecf303dbc12a0bb152476d662e44",
+    "repository": "https://github.com/dotnet/dotnet",
+    "authors": "Microsoft",
+    "copyright": "© Microsoft Corporation. All rights reserved.",
+    "package": "Microsoft.Extensions.Logging.Abstractions/10.0.7"
+  },
+  {
+    "commit": "e2f47b0110ed922f21a1522da67279133ce28f32",
+    "repository": "https://github.com/dotnet/dotnet",
+    "authors": "Microsoft",
+    "copyright": "© Microsoft Corporation. All rights reserved.",
+    "package": "Microsoft.Extensions.Options/10.0.11"
+  },
+  {
+    "commit": "e2f47b0110ed922f21a1522da67279133ce28f32",
+    "repository": "https://github.com/dotnet/dotnet",
+    "authors": "Microsoft",
+    "copyright": "© Microsoft Corporation. All rights reserved.",
+    "package": "Microsoft.Extensions.Primitives/10.0.11"
+  },
+  {
+    "commit": "95017c711e6afc1085133d440e42b4bd78155701",
+    "repository": "https://github.com/dotnet/dotnet",
+    "authors": "Microsoft",
+    "copyright": "© Microsoft Corporation. All rights reserved.",
+    "package": "Microsoft.NET.ILLink.Tasks/10.0.12"
+  },
+  {
+    "commit": "dd8a1cbbe3190c18033b96f2922b95c1761ae793",
+    "repository": "https://github.com/aikawayataro/Onigwrap.git",
+    "authors": "Aikawa Yataro",
+    "copyright": "Copyright (c) 2024 Aikawa Yataro",
+    "package": "Onigwrap/1.0.11"
+  },
+  {
+    "commit": "ec68061d1cf181d50f089f979301f874885bf0be",
+    "repository": "https://github.com/TestableIO/System.IO.Abstractions.git",
+    "authors": "Tatham Oddie & friends",
+    "copyright": "Copyright © Tatham Oddie & friends 2010-2026",
+    "package": "System.IO.Abstractions/22.2.0"
+  },
+  {
+    "commit": "ece73d25c37df9bb17cb0c0d2171abd4d98eeaff",
+    "repository": "https://github.com/tui-cs/Terminal.Gui.git",
+    "authors": "Miguel de Icaza, Tig Kindel (@tig), @BDisp",
+    "copyright": "",
+    "package": "Terminal.Gui/2.5.0"
+  },
+  {
+    "commit": "ec68061d1cf181d50f089f979301f874885bf0be",
+    "repository": "https://github.com/TestableIO/System.IO.Abstractions.git",
+    "authors": "Tatham Oddie & friends",
+    "copyright": "Copyright © Tatham Oddie & friends 2010-2026",
+    "package": "TestableIO.System.IO.Abstractions/22.2.0"
+  },
+  {
+    "commit": "ec68061d1cf181d50f089f979301f874885bf0be",
+    "repository": "https://github.com/TestableIO/System.IO.Abstractions.git",
+    "authors": "Tatham Oddie & friends",
+    "copyright": "Copyright © Tatham Oddie & friends 2010-2026",
+    "package": "TestableIO.System.IO.Abstractions.Wrappers/22.2.0"
+  },
+  {
+    "commit": "9b967ee024caa2d47e3ac27a23d26ea55cd20ded",
+    "repository": "https://github.com/Testably/Testably.Abstractions.git",
+    "authors": "Testably",
+    "copyright": "Copyright (c) 2024- 2026 Testably",
+    "package": "Testably.Abstractions.FileSystem.Interface/10.3.0"
+  },
+  {
+    "commit": "622d1b240a5be474939857c0b2780249022f14a3",
+    "repository": "https://github.com/danipen/TextMateSharp",
+    "authors": "Daniel Peñalba",
+    "copyright": "",
+    "package": "TextMateSharp/2.0.4"
+  },
+  {
+    "commit": "622d1b240a5be474939857c0b2780249022f14a3",
+    "repository": "",
+    "authors": "Daniel Peñalba",
+    "copyright": "",
+    "package": "TextMateSharp.Grammars/2.0.4"
+  },
+  {
+    "commit": "64a3f523d5dc27124e04ff9079137ac2c5c72143",
+    "repository": "https://github.com/spectreconsole/wcwidth",
+    "authors": "Patrik Svensson and contributors",
+    "copyright": "",
+    "package": "Wcwidth/4.0.1"
+  }
+]

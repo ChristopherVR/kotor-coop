@@ -181,7 +181,11 @@ Get-ChildItem (Join-Path $repo 'profiles\mods') -File -Filter '*.json' |
 
 # --- installer wrapper + README ------------------------------------------------------------
 Copy-Item (Join-Path $repo 'LICENSE') (Join-Path $staging 'KotorCoop.LICENSE.txt')
-Copy-Item (Join-Path $repo 'THIRD-PARTY-NOTICES.md') (Join-Path $staging 'KotorCoop.THIRD-PARTY-NOTICES.txt')
+Copy-Item (Join-Path $repo 'THIRD-PARTY-NOTICES.md') (Join-Path $staging 'KotorCoop.THIRD-PARTY-INVENTORY.md')
+& (Join-Path $PSScriptRoot 'Stage-ThirdPartyNotices.ps1') `
+    -AgentDepsPath (Join-Path $agentPublishDir '..\KotorCoop.Agent.deps.json') `
+    -PluginAssetsPath (Join-Path $repo 'src\KotorCoop.Plugin\obj\project.assets.json') `
+    -Destination (Join-Path $staging 'KotorCoop.THIRD-PARTY-NOTICES.txt')
 Copy-Item (Join-Path $repo 'docs\LEGAL.md') (Join-Path $staging 'KotorCoop.LEGAL.txt')
 Copy-Item (Join-Path $PSScriptRoot 'install.ps1') (Join-Path $staging 'install.ps1')
 Copy-Item (Join-Path $PSScriptRoot 'KotorCoop.CollectLogs.cmd') (Join-Path $staging 'KotorCoop.CollectLogs.cmd')

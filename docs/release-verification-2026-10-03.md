@@ -643,3 +643,23 @@ Final local r15 Windows archive: kotor-coop-0.11.0-readiness-20261003-r15-window
 SHA-256: `5ED584A4C01EE883F99C003422460A7C4306362DAB78F9380ECA3CC0DC2ADEB3`.
 The final rebuilt archive passed the 48-check package matrix. This is a local,
 pre-commit candidate; do not treat it as a hosted release artifact.
+
+### r16 dependency-notice collection
+
+Collected full upstream library licenses, .NET 10.0.12 runtime/NativeAOT notices,
+Onigwrap notices and available embedded-grammar licenses into third-party/NOTICES.txt.
+Recorded exact published dependencies, NuGet author/copyright/source metadata and
+57 upstream grammar repository revisions. A malformed Go grammar source URL was
+corrected for retrieval while preserving the original recorded provenance.
+
+Packaging now ships the full text plus the inventory, verifies notice/provenance
+hashes, and refuses changes to the published dependency set or NativeAOT runtime
+version until reviewed. Notice/provenance bytes are preserved across Git checkouts.
+The valid staging path and rejection of an injected unreviewed dependency passed.
+Warnings-as-errors Windows/Linux packaging passed; the actual Windows package
+passed 50 installer checks, including unchanged installation of all four notice/
+legal files. No gameplay code changed and the gameplay suite was not rerun.
+
+The audit is not complete: cshtml's pinned upstream source is unavailable, the
+assembly grammar lacks a pinned source revision, and embedded themes need complete
+provenance/notice mapping. These specific cases remain public-distribution gates.

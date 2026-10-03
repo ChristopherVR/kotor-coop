@@ -62,7 +62,8 @@ eight-player campaign reliability.
 1. Close [LEGAL.md](LEGAL.md): review game/store terms and original-code ownership,
    resolve extracted game media in both current files and accessible history, review
    promotional footage, and ship full notices for the exact packaged dependencies.
-   `THIRD-PARTY-NOTICES.md` is currently an inventory, not the completed notice bundle.
+   Full collected notices now ship from third-party/NOTICES.txt. Two embedded grammar
+   origins and theme provenance remain unresolved in THIRD-PARTY-NOTICES.md.
    Forks intended for pull requests back to the official project are explicitly allowed.
    Public GitHub platform permissions also apply; restrictions concern independent
    releases and commercial reuse, within the project's rights.
@@ -141,8 +142,9 @@ are recorded at the top of this page; this publication review changed documentat
    symbols for supported releases beyond the current 30-day CI retention so older reports remain
    diagnosable. Prevent an older completed CI run replacing a newer rolling release.
 6. **Distribution metadata:** the custom top-level LICENSE, legal gates and third-party inventory
-   now ship in both packages, with unchanged-copy installer checks. Full upstream copyright,
-   license and nested notices are still missing; complete that audit before public distribution.
+   now ship in both packages, with unchanged-copy installer checks. Full collected upstream
+   copyright/license texts now ship with version guards. Complete the remaining embedded
+   grammar/theme provenance audit before public distribution.
    Custom-license and game/media legal review also remain open.
 7. **Helper recovery:** automatic helper launch works on the r3 package. After a forced helper exit,
    its replacement waited in menu mode and the joiner remained in reconnecting state for 120 seconds.
