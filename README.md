@@ -54,12 +54,9 @@ players, and it is the page to read before you plan a long session.
 
 ## Install
 
-Download the file for your computer from the
-[Releases page](https://github.com/ChristopherVR/kotor-coop/releases): the newest numbered release
-is a fixed version, and **latest** is the newest build of the main branch that passed its automatic
-checks. The tag named **latest** is a rolling prerelease; GitHub's **Latest** stable-release
-label can point to an older numbered build. Automatic checks do not certify a complete
-campaign or public-release readiness; see the candidate sign-off above.
+Download the **Windows zip** from [v0.1 beta](https://github.com/ChristopherVR/kotor-coop/releases/tag/v0.1.0-beta.1).
+This is a fixed experimental prerelease. Automatic checks do not certify a complete
+campaign; read the beta limitations and back up your saves before testing.
 
 - **Windows:** `kotor-coop-<version>-windows.zip`. Close KOTOR and its agent, extract the zip into
   its own folder, and double-click `KotorCoop.Agent.exe`. It finds
@@ -171,11 +168,11 @@ live-rig and release reference is [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
 
 Before promoting a build for general use, follow [the release-readiness checklist](docs/RELEASE-READINESS.md).
 
-The release number is the `VERSION` file. Every push to `main` that passes build and tests refreshes
-the rolling **latest** pre-release if that commit is still the tip of `main`. A VERSION bump or
-tag push validates a candidate without publishing a numbered release. After sign-off, manually
+The release number is the `VERSION` file. Branch pushes validate packages without
+creating or replacing releases; tag that tested commit. After candidate review, manually
 run the Release workflow on the tested `v<VERSION>` tag with `promote_release` enabled; the tag,
-package version and VERSION must agree. See [the release instructions](docs/CONTRIBUTING.md#ci-and-releases).
+package version and VERSION must agree. Prerelease versions are labelled as beta/RC
+prereleases rather than stable releases. See [the release instructions](docs/CONTRIBUTING.md#ci-and-releases).
 
 ### How it works
 

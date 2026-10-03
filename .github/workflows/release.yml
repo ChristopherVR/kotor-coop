@@ -2,9 +2,9 @@
 # and reuses its packages — the release is the exact pair of artifacts that passed the tests
 # (and whose Linux tarball CI's linux-install job installed), never a second build.
 #
-#   push to main            -> CI green -> rolling pre-release "latest" (replaced every time)
-#   v* tag -> CI validates packages; publication requires an explicit manual promotion.
-#   Actions tab (dispatch) -> rolling main build, or promote a tested v* tag explicitly.
+#   push to main            -> CI validates packages; no automatic publication.
+#   v* tag -> point at a CI-validated commit; publication requires manual promotion.
+#   Actions tab (dispatch) -> promote a tested v* tag explicitly.
 name: Release
 
 on:
@@ -69,18 +69,8 @@ jobs:
                 kind=skip
               fi ;;
             main)
-              if [ "$PROMOTE_RELEASE" = true ]; then
-                echo "::error::Select a tested v* tag to promote a numbered release."
-                exit 1
-              fi
-              tip=$(git ls-remote origin refs/heads/main | cut -f1)
-              if [ -z "$tip" ]; then echo "::error::Cannot resolve current main tip."; exit 1; fi
-              if [ "$tip" != "$sha" ]; then
-                echo "superseded main build; rolling release unchanged"
-                kind=skip
-              else
-                kind=latest
-              fi ;;
+              echo "Main packages validated. Select a tested v* tag and enable promotion to publish."
+              kind=skip ;;
             *)       echo "ref $ref is neither main nor a v* tag; nothing to publish"; kind=skip ;;
           esac
 
@@ -144,9 +134,9 @@ jobs:
           # The notes lead with the one thing a visitor is here for: which file is for their
           # machine, a direct link to it, and how to install it. GitHub lists assets below the
           # notes, but nothing there says which file is which or what to do with it.
-          # $1 = the release tag the download links point at, $2 = tag | latest.
+          # $1 = the explicit release tag the download links point at.
           make_notes() {
-            local tag="$1" kind="$2"
+            local tag="$1"
             local base="https://github.com/${{ github.repository }}/releases/download/$tag"
             {
               echo "## Download"
@@ -166,20 +156,16 @@ jobs:
               echo
               echo "SHA-256 \`$zip_sha256\` ($zip_name) · \`$tgz_sha256\` ($tgz_name) · built by CI run [${{ steps.what.outputs.run_id }}](https://github.com/${{ github.repository }}/actions/runs/${{ steps.what.outputs.run_id }}) from \`${sha:0:7}\`."
               echo
-              if [ "$kind" = latest ]; then
-                echo "> Rolling build of \`main\`: every push that passes build + test replaces this release. Numbered releases are fixed versions; passing CI does not certify a complete campaign."
-                echo
-              fi
-              echo "> Public playtest: a complete co-op campaign has not been verified. Read the [current limitations](https://github.com/${{ github.repository }}/blob/$sha/docs/limitations.md) before starting."
+              echo "> Experimental beta: a complete co-op campaign has not been verified. Read the [current limitations](https://github.com/${{ github.repository }}/blob/$sha/docs/limitations.md) before starting."
             } > notes.md
           }
 
           # A numbered release. Plain-language notes live in docs/release-notes/<tag>.md when
           # present (written by hand for players); otherwise GitHub's generated change list is
-          # appended. --latest makes it the repository's "Latest" release.
+          # appended. Prerelease tags stay explicitly marked as prereleases.
           create_numbered() {
             local vtag="$1"
-            make_notes "$vtag" tag
+            make_notes "$vtag"
             local extra=(--generate-notes)
             if git cat-file -e "$sha:docs/release-notes/$vtag.md" 2>/dev/null; then
               git show "$sha:docs/release-notes/$vtag.md" > human-notes.md
@@ -187,18 +173,10 @@ jobs:
               mv notes-final.md notes.md
               extra=()
             fi
+            local status=(--latest)
+            if [[ "$vtag" == *-* ]]; then status=(--prerelease --latest=false); fi
             gh release create "$vtag" "$zip" "$tgz" --target "$sha" --title "$vtag" \
-              --notes-file notes.md "${extra[@]}" --latest
+              --notes-file notes.md "${extra[@]}" "${status[@]}"
           }
 
-          if [ "$kind" = tag ]; then
-            create_numbered "$ref"
-          else
-            make_notes latest latest
-            # One rolling pre-release that always points at the newest green main build.
-            # Delete + recreate rather than upload --clobber so the tag moves to the new sha
-            # and the notes say which commit it is.
-            gh release delete latest --yes --cleanup-tag 2>/dev/null || true
-            gh release create latest "$zip" "$tgz" --prerelease --target "$sha" \
-              --title "latest (main @ ${sha:0:7})" --notes-file notes.md
-          fi
+          create_numbered "$ref"

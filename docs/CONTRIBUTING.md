@@ -141,20 +141,20 @@ pwsh tools/verify-package.ps1 -PackageDirectory <extracted-package>
 The latest local release-verification results and remaining live gates are in
 [RELEASE-READINESS.md](RELEASE-READINESS.md).
 
-`.github/workflows/release.yml` runs **after CI succeeds** (`workflow_run`) and publishes
-the very two packages that run produced — it never rebuilds. Every green push to `main` replaces the
-rolling `latest` pre-release, provided that commit is still the tip of `main`. Publication jobs
-are serialized so an older run cannot replace a newer rolling build. **The release number is
-the `VERSION` file at the repo root.** A VERSION bump alone never publishes a numbered release.
+CI validates branch pushes and pull requests. Releases require explicit manual promotion
+and reuse the exact two packages from a successful push CI run; they never rebuild.
+There is no automatically recreated rolling release. **The release number is the
+`VERSION` file at the repo root.** A VERSION bump alone never publishes a release.
 `tools/package.ps1` names a build exactly `<VERSION>` on the commit that changed
-the file and `<VERSION>-<commits since>-g<sha>` after it. A hand-pushed `v*` tag
-still goes through CI, but its automatic publication run skips the numbered release. After
-completing the [release-readiness sign-off](RELEASE-READINESS.md), manually run the Release workflow
-on that tested tag with `promote_release` enabled. The tag, packaged version and VERSION must
+the file and `<VERSION>-<commits since>-g<sha>` after it. Tag the VERSION-changing
+commit that already passed CI; tag pushes do not repeat that same test suite. After
+reviewing the [release scope and remaining gates](RELEASE-READINESS.md), manually run the Release workflow
+on that tag with `promote_release` enabled. The tag, packaged version and VERSION must
 agree; tag the VERSION-changing commit so its package has the exact numbered version. Promotion
-uses that commit's successful CI artifacts and marks the numbered release Latest. It uses
+uses that commit's successful CI artifacts. Beta/RC tags remain prereleases; only stable
+versions are marked Latest. It uses
 `docs/release-notes/v<VERSION>.md` when present, otherwise GitHub's generated notes. Manual runs
-on `main` with promotion disabled refresh only the rolling pre-release. Both packages contain
+on `main` do not publish. Both packages contain
 a `README.txt` (`tools/package-README.txt`,
 version-stamped by `package.ps1`) that explains install, play, chain mode and troubleshooting
 to someone who has never seen this repo.
