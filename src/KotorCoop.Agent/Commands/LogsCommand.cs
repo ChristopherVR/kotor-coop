@@ -192,4 +192,14 @@ public static class LogsCommand
         Console.WriteLine("and character names, so look inside first if that matters to you.");
         return 0;
     }
+
+    internal static int RunInteractive(AgentOptions options)
+    {
+        bool interactive = !Console.IsInputRedirected && !Console.IsOutputRedirected;
+        string here = AppContext.BaseDirectory;
+        string? game = options.HasGamePath ? options.GamePath
+            : PackageInstaller.IsGameDirectory(here) ? here
+            : InstallCommand.ChooseGameDirectory(interactive, options.Rescan, "Collect logs from");
+        return game is null ? 1 : Run(options with { GamePath = game, HasGamePath = true });
+    }
 }

@@ -33,6 +33,7 @@ public enum AgentCommand
 
     /// <summary>Zip the co-op logs, the crash record and a redacted coop.ini for a bug report.</summary>
     Logs,
+    Support,
 
     /// <summary>No arguments at all: the double-click experience - find the game, install, launch.</summary>
     Setup,
@@ -219,6 +220,7 @@ public sealed record AgentOptions
     /// <summary>install: report the install layout and verify it (chain entries, markers,
     /// coop.ini) without changing anything.</summary>
     public bool Check { get; init; }
+    public bool UpdateDefaults { get; init; }
 
     /// <summary>install/setup: skip InstallScanCache and do a full drive/registry/Steam-library
     /// sweep, e.g. after installing a new copy of the game the cache does not know about yet.</summary>
@@ -262,6 +264,7 @@ public sealed record AgentOptions
             "install" => AgentCommand.Install,
             "uninstall" => AgentCommand.Uninstall,
             "logs" => AgentCommand.Logs,
+            "support" => AgentCommand.Support,
             "setup" => AgentCommand.Setup,
             _ => AgentCommand.Help,
         };
@@ -291,6 +294,7 @@ public sealed record AgentOptions
         bool force = false;
         bool check = false;
         bool rescan = false;
+        bool updateDefaults = false;
         bool windowed = false;
         bool viaSteam = false;
         int instance = 1;
@@ -394,6 +398,9 @@ public sealed record AgentOptions
 
                 case "--check":
                     check = true;
+                    break;
+                case "--update-defaults":
+                    updateDefaults = true;
                     break;
 
                 case "--rescan":
@@ -596,6 +603,7 @@ public sealed record AgentOptions
             Force = force,
             Check = check,
             Rescan = rescan,
+            UpdateDefaults = updateDefaults,
             ViaSteam = viaSteam,
             Instance = instance,
             LoadSave = loadSave,
@@ -679,6 +687,9 @@ public sealed record AgentOptions
           uninstall Remove what install placed (--game-path); keeps coop.ini, restores a
                     kept dinput8.dll. Run from the extracted zip, not the game directory.
           logs      Zip the co-op logs, crash record and a redacted coop.ini into one file for a bug report.
+          support   Interactive log collection; also available through KotorCoop.CollectLogs.cmd.
+          install --update-defaults
+                    Back up coop.ini and apply settings matching older defaults from the incoming template.
           install --check
                     Report the install layout found (plain / chain / foreign-only / none)
                     and verify it - every dinput8.chain entry exists, the loader and

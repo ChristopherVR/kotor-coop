@@ -11,11 +11,13 @@
 #   dinput8.chain.example       the annotated chain list
 #   README.txt                  install / play / configure / troubleshoot, version-stamped
 #   install.ps1                 [zip only] command-line wrapper over `KotorCoop.Agent.exe install`
-#   CoopIniDefaults.ps1         [zip only] the coop.ini upgrade-drift table install.ps1 dot-sources
+#   KotorCoop.DEFAULTS.ini      incoming player defaults, kept separately from coop.ini
+#   KotorCoop.CollectLogs.cmd   double-click local support collection
 #   install.sh                  [tar.gz only] the native Linux installer (bash), mode 0755
 #
 # The tarball has one top-level directory (kotor-coop-<version>/) as tarballs do; the zip has
-# none, so "extract here" in Explorer is the install. The game binaries inside are identical:
+# none. Extract into a separate folder and use the installer for safe updates and chaining.
+# The game binaries inside are identical:
 # KOTOR is a Windows program on every platform, so there is no separate Linux build of the mod.
 #
 # The agent's own pdbs are NOT in either player package (dead weight for a player - they carry
@@ -160,6 +162,7 @@ foreach ($pdb in $agentPdbs) { Copy-Item $pdb.FullName (Join-Path $symbolsDir $p
 $iniSource = Join-Path $repo 'profiles\coop.ini.example'
 if (-not (Test-Path $iniSource)) { throw "coop.ini.example not found at $iniSource" }
 Copy-Item $iniSource (Join-Path $staging 'coop.ini')
+Copy-Item $iniSource (Join-Path $staging 'KotorCoop.DEFAULTS.ini')
 "staged coop.ini <- $iniSource"
 
 # --- k_coop_ override assets the plugin needs (phantom blueprint, spawn waypoint) ----------
@@ -181,14 +184,12 @@ Copy-Item (Join-Path $repo 'LICENSE') (Join-Path $staging 'KotorCoop.LICENSE.txt
 Copy-Item (Join-Path $repo 'THIRD-PARTY-NOTICES.md') (Join-Path $staging 'KotorCoop.THIRD-PARTY-NOTICES.txt')
 Copy-Item (Join-Path $repo 'docs\LEGAL.md') (Join-Path $staging 'KotorCoop.LEGAL.txt')
 Copy-Item (Join-Path $PSScriptRoot 'install.ps1') (Join-Path $staging 'install.ps1')
-# install.ps1 dot-sources this for the coop.ini drift check on a re-install; without it the
-# wrapper failed AFTER placing every file (found live 2026-09-03 running the zip against a
-# game dir that already had a coop.ini).
-Copy-Item (Join-Path $PSScriptRoot 'CoopIniDefaults.ps1') (Join-Path $staging 'CoopIniDefaults.ps1')
+Copy-Item (Join-Path $PSScriptRoot 'KotorCoop.CollectLogs.cmd') (Join-Path $staging 'KotorCoop.CollectLogs.cmd')
+# Settings migration runs in the agent; no separate PowerShell drift table is required.
 
 $readme = (Get-Content (Join-Path $PSScriptRoot 'package-README.txt') -Raw).Replace('{{VERSION}}', $Version)
 Set-Content -Path (Join-Path $staging 'README.txt') -Value $readme -Encoding UTF8 -NoNewline
-"staged install.ps1 + CoopIniDefaults.ps1 + README.txt"
+"staged install.ps1 + log collector + README.txt"
 
 # --- Windows: zip it up ----------------------------------------------------------------------
 if (-not (Test-Path $OutDir)) { New-Item -ItemType Directory -Path $OutDir | Out-Null }
@@ -209,7 +210,7 @@ Compress-Archive -Path (Join-Path $symbolsDir '*') -DestinationPath $symbolsZipP
 # as 0666, so a `tar xzf` on Linux would leave install.sh without its exec bit. install.sh is
 # also normalised to LF here (the repo has *.sh eol=lf in .gitattributes; this is the belt to
 # that brace, an autocrlf checkout must not ship a script bash cannot parse).
-Remove-Item (Join-Path $staging 'install.ps1'), (Join-Path $staging 'CoopIniDefaults.ps1')
+Remove-Item (Join-Path $staging 'install.ps1')
 $installSh = (Get-Content (Join-Path $PSScriptRoot 'install.sh') -Raw) -replace "`r`n", "`n"
 [System.IO.File]::WriteAllText((Join-Path $staging 'install.sh'), $installSh, [System.Text.UTF8Encoding]::new($false))
 

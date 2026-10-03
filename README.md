@@ -8,13 +8,19 @@ the internet, and the mod keeps everyone in one shared world, each in their own 
 plays the way a seamless co-op mod does: nobody sets up a "server". You start the game, press
 **Co-op** on the main menu, and connect.
 
-The game executable is unchanged. The mod loads the way the game already loads its own helper library, and
+The game executable on disk is unchanged; the mod hooks the running game. The mod loads the way the game already loads its own helper library, and
 it can share that spot with other mods such as ReShade.
 
 **Players:** the plain-language install and play guides are in [`site/`](site/). This README covers
 the same ground for anyone reading the repository, players and developers both.
 
 ## What to expect
+
+**Development candidate, awaiting public-release sign-off.** Recent fixes for dialogue
+starting over the host's equipment menu and Trask disappearing on the joining player's
+screen still need ordinary in-game confirmation. Save-name input, container responsiveness,
+dialogue presentation and the post-save enemy-sighted banner also need confirmation.
+See the [current release gates](docs/RELEASE-READINESS.md) before choosing a build.
 
 Two people (up to eight) each run KOTOR. One hosts, the other presses **Connect**, and from then on
 you see each other as real characters, walk through the same doors, fly to the same planets, fight
@@ -51,7 +57,9 @@ players, and it is the page to read before you plan a long session.
 Download the file for your computer from the
 [Releases page](https://github.com/ChristopherVR/kotor-coop/releases): the newest numbered release
 is a fixed version, and **latest** is the newest build of the main branch that passed its automatic
-checks. These checks do not certify a complete campaign; treat the current mod as a public playtest.
+checks. The tag named **latest** is a rolling prerelease; GitHub's **Latest** stable-release
+label can point to an older numbered build. Automatic checks do not certify a complete
+campaign or public-release readiness; see the candidate sign-off above.
 
 - **Windows:** `kotor-coop-<version>-windows.zip`. Close KOTOR and its agent, extract the zip into
   its own folder, and double-click `KotorCoop.Agent.exe`. It finds
@@ -60,6 +68,11 @@ checks. These checks do not certify a complete campaign; treat the current mod a
 If another mod already uses the same helper file (ReShade, an ASI loader and similar), the installer
 notices and sets the two up side by side automatically. See [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
 if anything looks off.
+
+Updates preserve coop.ini. Setup can show player settings matching older defaults
+and offer to update them after creating a backup; declining preserves them. Compare
+the packaged **KotorCoop.DEFAULTS.ini** when adjusting settings yourself. For a bug
+report, double-click **KotorCoop.CollectLogs.cmd** to collect a local support zip.
 
 Direct extraction into the game folder is only suitable for a clean install without an existing
 `dinput8.dll` or `coop.ini`. Use the installer for updates: extracting over existing files can

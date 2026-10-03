@@ -14,10 +14,16 @@ v1.0.3), on 64-bit Windows. Each player needs their own copy -- on one machine o
 -- and this package bridges them into one shared world: you see each other as real in-game
 characters, travel, fight, loot, talk and pause together.
 
-The game executable is unchanged. Mod files live beside swkotor.exe and can be removed.
+The game executable on disk is unchanged; the mod hooks the running game.
+Mod files live beside swkotor.exe and can be removed.
 Co-op play writes dedicated saves and uses the game's Auto Save slot; see "Play" below.
 
-What to expect. This is a public playtest. A complete co-op campaign from start to finish
+Updates preserve coop.ini. Setup previews player settings matching older defaults
+and asks before applying changes, with a backup first. Decline to keep those values.
+KotorCoop.DEFAULTS.ini contains this package's defaults for comparison.
+
+What to expect. This is an experimental build; public-release sign-off is pending.
+A complete co-op campaign from start to finish
 has NOT been verified. Early-game routes and selected later scenes have been tested;
 three-to-eight-player campaign play is less extensively tested. Either player can
 lead through doors and area changes, and either player can pick the destination on the galaxy
@@ -365,8 +371,8 @@ Something is wrong
   swkotor.exe (read dinput8-chain.log if you use the chain loader).
 - Second instance on one machine exits immediately: start it through the helper (see
   Requirements), which renames the game's single-instance mutex.
-- The game crashed and you want to report it: run  KotorCoop.Agent.exe logs  (from the
-  folder you extracted this package into). It puts kotorcoop-support-<date>.zip on your
+- The game crashed and you want to report it: double-click KotorCoop.CollectLogs.cmd
+  in the game folder or extracted package. It puts kotorcoop-support-<date>.zip on your
   Desktop: the co-op logs, the crash record and a copy of coop.ini with the password and
   host address blanked. Attach that one file. Nothing is uploaded, and the logs can still
   show IP addresses and character names. For a crash the log itself can't explain (the game just vanishes,

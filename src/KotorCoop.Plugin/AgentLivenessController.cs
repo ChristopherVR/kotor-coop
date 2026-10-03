@@ -33,6 +33,8 @@ internal sealed unsafe class AgentLivenessController(SharedBlockView block)
     private AgentLivenessState _lastState = AgentLivenessState.NeverLive;
     private string? _lastMessageText;
     private byte[] _messageBytes = [];
+    private bool _wasHosting;
+    private bool _needsRehost;
 
     /// <summary>
     /// True while the agent is judged Stale or Dead. <see cref="PhantomController"/>
@@ -47,6 +49,19 @@ internal sealed unsafe class AgentLivenessController(SharedBlockView block)
         long now = Environment.TickCount64;
         long lastBeat = block.AgentHeartbeat;
         AgentLivenessState state = AgentLiveness.Evaluate(lastBeat, now);
+        bool hasRole = block.TryGetLocalSessionRole(out bool isHost);
+        if (state is AgentLivenessState.Stale or AgentLivenessState.Dead && _wasHosting)
+        {
+            _needsRehost = true;
+        }
+        if (state == AgentLivenessState.Live)
+        {
+            if (hasRole)
+            {
+                _needsRehost = false;
+            }
+            _wasHosting = hasRole && isHost;
+        }
 
         if (state != _lastState)
         {
@@ -69,6 +84,8 @@ internal sealed unsafe class AgentLivenessController(SharedBlockView block)
         string? message = state switch
         {
             AgentLivenessState.Stale or AgentLivenessState.Dead => StaleText,
+            AgentLivenessState.Live when _needsRehost =>
+                "Host session ended. Press ~ and type host, or choose Co-op > Host on the main menu.",
 
             // A relaunch (or the player starting one by hand) can still land after this —
             // once the heartbeat moves at all the state leaves NeverLive and the line stops

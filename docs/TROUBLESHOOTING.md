@@ -6,7 +6,10 @@ see [CONFIG.md](CONFIG.md) for its default and where it's read; for a console ve
 
 ## Reporting a problem: one file with everything
 
-Run `KotorCoop.Agent.exe logs` (from the folder you extracted the package into, or add `--game-path` pointing at `swkotor.exe`).
+Double-click **KotorCoop.CollectLogs.cmd** in the installed game folder or extracted package.
+From the game folder it collects that install; from a package it lets you select the game
+folder when needed. No terminal command is required. Alternatively, run
+`KotorCoop.Agent.exe logs` and add `--game-path` when multiple installs exist.
 It writes `kotorcoop-support-<date>.zip` to your Desktop with the plugin log, the agent log (both with their older
 rotated copies), the crash record that survives a hard crash, a copy of `coop.ini` with the `password` and `host` values
 blanked, and a short note on the game and mod files present. Attach that one file. Nothing is uploaded. The logs can

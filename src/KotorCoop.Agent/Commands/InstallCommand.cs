@@ -43,6 +43,10 @@ internal static class InstallCommand
         Console.WriteLine();
         Console.WriteLine("The game loads DirectInput from its own directory before the system one, so this is");
         Console.WriteLine("picked up on next launch. Nothing else was modified; remove it with: KotorCoop.Agent.exe uninstall");
+        if (ok)
+        {
+            OfferDefaults(package, game, interactive: false, options.UpdateDefaults);
+        }
         return ok ? 0 : 1;
     }
 
@@ -77,6 +81,7 @@ internal static class InstallCommand
                 // silently offering a launch that will not actually be co-op.
                 if (PackageInstaller.Check(here, Cli.Log))
                 {
+                    OfferDefaults(here, here, interactive, options.UpdateDefaults);
                     return OfferLaunch(here, interactive);
                 }
 
@@ -144,6 +149,7 @@ internal static class InstallCommand
                 return Pause(interactive, 1);
             }
 
+            OfferDefaults(here, game, interactive, options.UpdateDefaults);
             return OfferLaunch(game, interactive);
         }
         catch (Exception ex)
@@ -182,7 +188,7 @@ internal static class InstallCommand
         }
     }
 
-    private static string? ChooseGameDirectory(bool interactive, bool rescan)
+    internal static string? ChooseGameDirectory(bool interactive, bool rescan, string action = "Install into")
     {
         // Cli.Spinner is a no-op flash when InstallScanCache already has the answer - it only
         // matters when there's no cache yet, or --rescan is forcing the full sweep back on.
@@ -254,8 +260,8 @@ internal static class InstallCommand
                 }
 
                 Cli.Prompt(supported.Count == 1
-                    ? "Install into which? [1], a number, or type another folder: "
-                    : $"Install into which? 1-{supported.Count}, or type another folder: ");
+                    ? $"{action} which? [1], a number, or type another folder: "
+                    : $"{action} which? 1-{supported.Count}, or type another folder: ");
             });
 
             string answer = (Console.ReadLine() ?? string.Empty).Trim().Trim('"');
@@ -283,6 +289,39 @@ internal static class InstallCommand
             }
 
             warning = $"No swkotor.exe in {answer}, and not a valid number (1-{supported.Count}). Try again.";
+        }
+    }
+
+    private static void OfferDefaults(string package, string game, bool interactive, bool update)
+    {
+        string template = Path.Combine(package, "KotorCoop.DEFAULTS.ini");
+        if (!File.Exists(template))
+        {
+            template = Path.Combine(package, "coop.ini");
+        }
+        string player = Path.Combine(game, "coop.ini");
+        if (Path.GetFullPath(template).Equals(Path.GetFullPath(player), StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+        IReadOnlyList<SettingsMigration.Change> changes = SettingsMigration.Find(player, template);
+        if (changes.Count == 0)
+        {
+            return;
+        }
+        Cli.Warn("These settings match older defaults; they may also be deliberate custom choices:");
+        foreach (SettingsMigration.Change change in changes)
+        {
+            Console.WriteLine($"  {change.Key}: {change.OldValue} -> {change.NewValue}");
+        }
+        if (update || Ask("Apply these defaults and back up coop.ini first?", false, interactive))
+        {
+            string backup = SettingsMigration.Apply(player, changes);
+            Cli.Success($"Updated settings. Previous settings: {backup}");
+        }
+        else
+        {
+            Cli.Dim("Settings preserved. Compare KotorCoop.DEFAULTS.ini or use install --update-defaults.");
         }
     }
 

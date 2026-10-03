@@ -14,6 +14,13 @@ played yet, so expect the odd rough edge in places nobody has tried.
 
 This page describes the current development version, which may be newer than a downloadable release.
 
+**Current candidate warning (3 October 2026).** Dialogue appearing over the host's equipment
+menu and Trask disappearing on the joining player's screen have fixes awaiting ordinary
+in-game retesting. Save-name input, container responsiveness, subtitles/skipping and the
+enemy-sighted banner after saving also await confirmation. Historical **Works** results
+below do not close these newer reports. Public distribution is still gated by the
+[release checklist](RELEASE-READINESS.md), including legal review.
+
 ## How to read the status words
 
 | Word | What it means |
@@ -40,6 +47,7 @@ This page describes the current development version, which may be newer than a d
 | Reconnecting after a drop | **Works** | You come back into the shared world. If the mod cannot tell your world still matches, it reloads you into the host's world after about 15 seconds, keeping your character, backpack and credits. |
 | Your partner quits to the menu | **Works** | Their character disappears and a line on screen says they are away. They reappear when they come back. |
 | The host's game crashes | **Works** | Within about six seconds you are released to play on alone, and the mod reconnects when the host returns. |
+| The host's helper process crashes | **Works, with a catch** | Restarting the helper does not restore the hosted session by itself. The host must choose **Host** again before the joining player can reconnect. A replacement helper waiting in menu mode is not a recovered session. |
 | Three or more players | **Works, with a catch** | Up to eight can connect. Three players made twelve area changes in half an hour, and eight copies travelled and fought a shared enemy together. A whole campaign, and every kind of fight at that size, has not been tried. |
 | Different mods on each side | **Works, with a catch** | The mod compares installs when you connect and tells you on screen what differs and what it switched off because of it. Any difference in the game's core files switches things off cautiously, even a cosmetic one. Checking a large install can make startup slower. |
 | Wrong mod version on one side | **Works** | Refused in about a second with a clear message. |
