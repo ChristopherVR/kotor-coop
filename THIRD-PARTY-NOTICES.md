@@ -10,10 +10,18 @@ TestableIO packages, Testably.Abstractions, TextMateSharp/Grammars, Wcwidth and
 Microsoft.Extensions packages; Markdig declares BSD-2-Clause. The self-contained
 agent and NativeAOT plugin also contain .NET runtime components.
 
-This inventory is not a substitute for required copyright/license texts or
-nested notices. Before public release, verify exact published versions and ship
-full upstream notices, including embedded grammar and native-library licenses.
-The audit remains an explicit [legal release gate](docs/LEGAL.md).
+Full collected copyright/license texts are in [third-party/NOTICES.txt](third-party/NOTICES.txt),
+which ships as KotorCoop.THIRD-PARTY-NOTICES.txt. The bundle includes upstream library
+licenses, .NET 10.0.12 runtime and NativeAOT notices, Onigwrap notices, and the
+recorded notices and available licenses for embedded grammars. Packaging verifies
+its hashes and refuses dependency-version changes until the audit is updated.
+
+The nested-resource audit remains an explicit [legal release gate](docs/LEGAL.md):
+the embedded assembly grammar has no recorded upstream commit; the cshtml source
+revision is unavailable and supplies no full notice. TextMateSharp's theme resources
+also lack a complete source-revision/notice mapping. Preserve the recorded
+[grammar provenance](third-party/grammar-origins.json); do not infer these permissions
+from TextMateSharp's top-level MIT license. Resolve these cases before public distribution.
 
 ## Candidate dependency audit (2026-10-03)
 
