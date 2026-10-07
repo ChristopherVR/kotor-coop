@@ -129,9 +129,29 @@ internal static partial class NativeMethods
         return processId == GetCurrentProcessId();
     }
 
-    /// <summary>Key-is-down, but only while this instance has the keyboard.</summary>
+    /// <summary>Key-is-down, but only while this instance has the keyboard. On an isolated rig
+    /// (coop.ini <c>isolate_real_input</c>) a key held through the <c>input key ... down</c>
+    /// verb also counts, so the plugin's own polled keys (Enter to chat, the pause key, F9,
+    /// console Tab) can be driven unattended; the rig's windows are never foreground.</summary>
     public static bool IsKeyDownHere(int virtualKey) =>
-        IsForeground() && (GetAsyncKeyState(virtualKey) & 0x8000) != 0;
+        (IsForeground() && (GetAsyncKeyState(virtualKey) & 0x8000) != 0)
+        || DirectInputKeyboardHook.IsHeldByRig(DikFor(virtualKey));
+
+    /// <summary>The DirectInput scan code for the virtual keys <see cref="IsKeyDownHere"/> is
+    /// asked about; 0 for any other.</summary>
+    private static byte DikFor(int virtualKey) => virtualKey switch
+    {
+        VkReturn => 0x1C,
+        VkSpace => 0x39,
+        VkEscape => 0x01,
+        VkTab => 0x0F,
+        VkUp => 0xC8,
+        VkDown => 0xD0,
+        VkPageUp => 0xC9,
+        VkPageDown => 0xD1,
+        VkF9 => 0x43,
+        _ => 0,
+    };
 
     // ── Mouse emulation for the gamepad (GamepadController) ─────────────────────────────
     // The engine takes its cursor and clicks from ordinary window messages, position in

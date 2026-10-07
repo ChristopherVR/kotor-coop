@@ -83,6 +83,10 @@ internal static unsafe class DirectInputKeyboardHook
     // costs nothing).
     private static readonly byte[] Held = new byte[256];
 
+    /// <summary>Isolated rig only: whether the <c>input key</c> verb currently holds
+    /// <paramref name="dik"/> down. Always false for a real player.</summary>
+    internal static bool IsHeldByRig(byte dik) => IsolateRealInput && dik != 0 && Held[dik] != 0;
+
     public static bool IsDirectInputWrapped => _directInputProxy != 0;
     public static bool IsKeyboardWrapped => _keyboardProxy != 0;
     public static long InjectedEvents { get; private set; }
