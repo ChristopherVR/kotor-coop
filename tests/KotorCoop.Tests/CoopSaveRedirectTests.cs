@@ -70,6 +70,48 @@ public sealed class CoopSaveRedirectTests : IDisposable
     }
 
     [Fact]
+    public void AStaleHoldbackFromACrashIsRestoredAndThenHeldBackAgain()
+    {
+        string saves = NewSavesDirectory();
+        string quick = Path.Combine(saves, CoopSaveRedirect.QuickSaveFolder);
+        string holdback = Path.Combine(saves, CoopSaveRedirect.HoldbackFolder);
+        WriteFakeSave(quick, "the player's own game");
+
+        // An earlier sequence held the quicksave back, then the game crashed before completing,
+        // and nothing landed.
+        Assert.True(CoopSaveRedirect.BeginHoldback(saves, out _));
+
+        Assert.True(CoopSaveRedirect.BeginHoldback(saves, out string diagnostic));
+        Assert.Contains("restored", diagnostic, StringComparison.OrdinalIgnoreCase);
+
+        Assert.False(CoopSaveRedirect.CompleteRedirect(saves, out _, out _));
+        Assert.Equal("the player's own game", File.ReadAllText(Path.Combine(quick, "SAVEGAME.sav")));
+        Assert.False(Directory.Exists(holdback));
+    }
+
+    [Fact]
+    public void AStaleHoldbackIsKeptAsANumberedSaveWhenTheQuicksaveSlotIsTaken()
+    {
+        string saves = NewSavesDirectory();
+        string quick = Path.Combine(saves, CoopSaveRedirect.QuickSaveFolder);
+        WriteFakeSave(quick, "the player's older quicksave");
+
+        Assert.True(CoopSaveRedirect.BeginHoldback(saves, out _));
+        // Crash; later the player quicksaves again in single-player.
+        WriteFakeSave(quick, "the player's newer quicksave");
+
+        Assert.True(CoopSaveRedirect.BeginHoldback(saves, out string diagnostic));
+        Assert.Contains("kept", diagnostic, StringComparison.OrdinalIgnoreCase);
+
+        string recovered = Assert.Single(Directory.GetDirectories(saves),
+            d => Path.GetFileName(d).EndsWith(CoopSaveRedirect.RecoveredQuickSaveLabel, StringComparison.Ordinal));
+        Assert.Equal("the player's older quicksave", File.ReadAllText(Path.Combine(recovered, "SAVEGAME.sav")));
+
+        CoopSaveRedirect.CompleteRedirect(saves, out _, out _);
+        Assert.Equal("the player's newer quicksave", File.ReadAllText(Path.Combine(quick, "SAVEGAME.sav")));
+    }
+
+    [Fact]
     public void ACompleteWithNothingFreshIsANoOpAndRestoresAnyHoldback()
     {
         string saves = NewSavesDirectory();

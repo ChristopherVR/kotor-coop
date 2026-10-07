@@ -60,12 +60,9 @@ public static class CoopSaveRedirect
     /// <summary>
     /// Moves the player's own <c>000000 - QUICKSAVE</c> aside before a mod-driven save request
     /// is sent, so the engine's clean-then-write cannot touch it. A no-op (true, "nothing to
-    /// hold back") when the slot does not currently exist. Recovers a stale holdback left by a
-    /// crash between <see cref="BeginHoldback"/> and <see cref="CompleteRedirect"/> on a PREVIOUS
-    /// run by deleting it first — the player's real quicksave from that earlier, uncompleted
-    /// sequence is unrecoverable either way (it was already moved into the stale holdback), so
-    /// keeping the newer one is the only sane choice, and no worse than what would already have
-    /// happened before this mechanism existed.
+    /// hold back") when the slot does not currently exist. A stale holdback, left by a crash
+    /// between <see cref="BeginHoldback"/> and <see cref="CompleteRedirect"/> on a PREVIOUS run,
+    /// is the player's own quicksave and is never deleted: see <see cref="RecoverStaleHoldback"/>.
     /// </summary>
     public static bool BeginHoldback(string savesDirectory, out string diagnostic)
     {
@@ -75,19 +72,16 @@ public static class CoopSaveRedirect
             string quick = Path.Combine(savesDirectory, QuickSaveFolder);
             string holdback = Path.Combine(savesDirectory, HoldbackFolder);
 
-            if (Directory.Exists(holdback))
-            {
-                Directory.Delete(holdback, recursive: true);
-            }
+            string recovered = RecoverStaleHoldback(savesDirectory, holdback, quick);
 
             if (!Directory.Exists(quick))
             {
-                diagnostic = "no existing quicksave to hold back";
+                diagnostic = recovered + "no existing quicksave to hold back";
                 return true;
             }
 
             Directory.Move(quick, holdback);
-            diagnostic = "held back the player's quicksave before a co-op save request";
+            diagnostic = recovered + "held back the player's quicksave before a co-op save request";
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -202,6 +196,36 @@ public static class CoopSaveRedirect
             diagnostic = $"could not mirror the adopted world into the co-op slot: {ex.Message}";
             return false;
         }
+    }
+
+    /// <summary>The label a stale holdback is kept under when the quicksave slot is taken.</summary>
+    public const string RecoveredQuickSaveLabel = "Recovered quicksave";
+
+    /// <summary>
+    /// A holdback that survives into a new sequence means an earlier one never completed (game
+    /// crash or kill mid-save). Its content is still the player's own quicksave. Put it back in
+    /// the quicksave slot when that is free; when the slot holds something newer (the player
+    /// quicksaved since, or the interrupted capture landed), keep the old one as an ordinary
+    /// numbered save so it stays in the Load Game list. Returns a diagnostic prefix ("" when
+    /// there was nothing to recover).
+    /// </summary>
+    private static string RecoverStaleHoldback(string savesDirectory, string holdback, string quick)
+    {
+        if (!Directory.Exists(holdback))
+        {
+            return string.Empty;
+        }
+
+        if (!Directory.Exists(quick))
+        {
+            Directory.Move(holdback, quick);
+            return "restored a quicksave held back by an interrupted earlier save; ";
+        }
+
+        string[] existing = [.. Directory.GetDirectories(savesDirectory).Select(Path.GetFileName)!];
+        string folder = CoopSaveSlot.FolderName(CoopSaveSlot.NextIndex(existing), RecoveredQuickSaveLabel);
+        Directory.Move(holdback, Path.Combine(savesDirectory, folder));
+        return $"kept a quicksave held back by an interrupted earlier save as '{folder}'; ";
     }
 
     private static void RestoreHoldbackIfAny(string holdback, string quick)
