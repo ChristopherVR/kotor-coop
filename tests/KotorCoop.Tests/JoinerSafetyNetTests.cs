@@ -130,6 +130,30 @@ public sealed class JoinerSafetyNetTests : IDisposable
     }
 
     [Fact]
+    public void SinglePlayerProgressAfterASessionEndsIsBackedUpOnTheNextJoin()
+    {
+        AutosaveBackup.ResetProcessLatch();
+        string saves = Temp();
+        string autosave = WriteSave(saves, PluginMenuLoader.AutosaveSlot, Sav("pifo"));
+        Assert.True(AutosaveBackup.TryBackupOnce(saves, out _));
+
+        // In co-op the engine autosaves inside the host's world: not backed up again.
+        WriteSave(saves, PluginMenuLoader.AutosaveSlot, Sav("pifo"));
+        Assert.False(AutosaveBackup.TryBackupOnce(saves, out _));
+
+        // The session ends; an autosave older than that is still the co-op one.
+        AutosaveBackup.NoteCoopEnded(DateTime.UtcNow);
+        File.SetLastWriteTimeUtc(Path.Combine(autosave, "SAVEGAME.sav"), DateTime.UtcNow.AddMinutes(-1));
+        Assert.False(AutosaveBackup.TryBackupOnce(saves, out _));
+
+        // Then the player plays on alone and the game autosaves: the next join keeps it.
+        File.SetLastWriteTimeUtc(Path.Combine(autosave, "SAVEGAME.sav"), DateTime.UtcNow.AddMinutes(1));
+        Assert.True(AutosaveBackup.TryBackupOnce(saves, out string diagnostic));
+        Assert.Contains(AutosaveBackup.BackupLabel, diagnostic);
+        AutosaveBackup.ResetProcessLatch();
+    }
+
+    [Fact]
     public void EnableCheatsKeepsCrlfAndTakesAOneTimeBackup()
     {
         string dir = Temp();
