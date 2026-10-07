@@ -103,8 +103,8 @@ public sealed partial class CoopCommandDispatcher
             return;
         }
 
-        _compatibilityAnnouncer.Observe(session.Compatibility, Reply);
-        _behaviourAnnouncer.Observe(session.BehaviourWarnings, Reply);
+        _compatibilityAnnouncer.Observe(session.Compatibility, Reply, Log);
+        _behaviourAnnouncer.Observe(session.BehaviourWarnings, Reply, Log);
     }
 
     /// <summary>
@@ -143,6 +143,33 @@ public sealed partial class CoopCommandDispatcher
         if (StatusToastsEnabled)
         {
             _connectionAnnouncer.Observe(snapshot, Reply);
+        }
+    }
+
+    private readonly HostLossWatch _hostLossWatch = new();
+
+    /// <summary>
+    /// A client that lost its host retries on its own; this puts a human-readable end on that.
+    /// After <see cref="HostLossWatch.WarnAfterMs"/> of failed retrying it says so once, and
+    /// after <see cref="HostLossWatch.GiveUpAfterMs"/> it drops to Disconnected (the session
+    /// manager keeps the last endpoint, so <c>reconnect</c> still works). Not gated on
+    /// <c>status_toasts</c>: a player stuck in a dead session needs to be told how to leave it.
+    /// </summary>
+    private void MaintainHostLossWatch()
+    {
+        bool reconnecting = manager.Current is CoopClient client && client.GetStats().Reconnecting;
+        switch (_hostLossWatch.Observe(reconnecting, SessionClock.NowMs))
+        {
+            case HostLossAction.Warn:
+                Reply(HostLossWatch.WarnLine);
+                break;
+
+            case HostLossAction.GiveUp:
+                Log?.Invoke("host-loss: giving up after no reply from the host");
+                CancelRejoinForExternalSessionChange();
+                manager.Disconnect();
+                Reply(HostLossWatch.GiveUpLine);
+                break;
         }
     }
 
