@@ -66,7 +66,8 @@ public static partial class PackageInstaller
         string GameDirectory,
         bool Chain = false,
         IReadOnlyList<string>? Load = null,
-        bool Force = false);
+        bool Force = false,
+        Func<bool>? AskFirewall = null);
 
     /// <summary>
     /// Thrown for a condition auto-detection cannot resolve on its own — today just
@@ -75,6 +76,52 @@ public static partial class PackageInstaller
     /// longer throws this: it is chained automatically instead (see the class doc comment).
     /// </summary>
     public sealed class RefusedException(string message) : Exception(message);
+
+    /// <summary>
+    /// Windows refused a change in the game folder (typically a copy under Program Files, e.g.
+    /// GOG Galaxy's default library). Raised BEFORE the first change by <see cref="RequireWritable"/>,
+    /// or converted from a stray <see cref="UnauthorizedAccessException"/>, so callers can offer
+    /// to restart elevated instead of showing a raw .NET error.
+    /// </summary>
+    public sealed class NeedsElevationException(string message, Exception? inner = null) : Exception(message, inner);
+
+    /// <summary>The plain-language "Windows is blocking this folder" text for <paramref name="directory"/>.</summary>
+    public static string ProtectedFolderMessage(string directory) =>
+        $"Windows is blocking changes to this folder: {directory}\n"
+        + "Folders under Program Files are protected. Nothing was changed.";
+
+    /// <summary>True when a temp file can be created (and deleted) in <paramref name="directory"/>.
+    /// Only a permission refusal counts as "not writable"; any other I/O problem is left for
+    /// the real work to report.</summary>
+    public static bool IsWritable(string directory)
+    {
+        string probe = Path.Combine(directory, $".kotorcoop-write-test-{Guid.NewGuid():N}.tmp");
+        try
+        {
+            using (new FileStream(probe, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+            }
+
+            File.Delete(probe);
+            return true;
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            return false;
+        }
+        catch (IOException)
+        {
+            return true;
+        }
+    }
+
+    private static void RequireWritable(string game)
+    {
+        if (!IsWritable(game))
+        {
+            throw new NeedsElevationException(ProtectedFolderMessage(game));
+        }
+    }
 
     // The plugin's startup banner (a UTF-16 .NET literal) and the loader's exported marker
     // symbol (ASCII). Byte patterns, so the search is alignment-agnostic.
@@ -199,6 +246,18 @@ public static partial class PackageInstaller
     /// </summary>
     public static bool Install(Options options, Action<string> log)
     {
+        try
+        {
+            return InstallCore(options, log);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            throw new NeedsElevationException(ProtectedFolderMessage(Path.GetFullPath(options.GameDirectory)), ex);
+        }
+    }
+
+    private static bool InstallCore(Options options, Action<string> log)
+    {
         string package = Path.GetFullPath(options.PackageDirectory);
         string game = Path.GetFullPath(options.GameDirectory);
         IReadOnlyList<string> extra = options.Load ?? [];
@@ -227,6 +286,7 @@ public static partial class PackageInstaller
             return Check(game, log);
         }
 
+        RequireWritable(game);
         string proxyTarget = Path.Combine(game, PluginFileName);
         EnsureFilesAvailable(game);
         DinputKind existing = Identify(proxyTarget);
@@ -282,24 +342,45 @@ public static partial class PackageInstaller
                 throw new FileNotFoundException($"{LoaderRelativePath} not found in {package} - this package has no chain loader");
             }
 
-            if (existing == DinputKind.Foreign)
+            string previous = Path.Combine(game, PreviousFileName);
+            bool renamed = false;
+            try
             {
-                string previous = Path.Combine(game, PreviousFileName);
-                if (File.Exists(previous))
+                if (existing == DinputKind.Foreign)
                 {
-                    throw new RefusedException($"{previous} already exists - resolve that first (an earlier chain install?)");
+                    if (File.Exists(previous))
+                    {
+                        throw new RefusedException($"{previous} already exists - resolve that first (an earlier chain install?)");
+                    }
+
+                    File.Move(proxyTarget, previous);
+                    renamed = true;
+                    log($"kept the existing dinput8.dll as {PreviousFileName}");
                 }
 
-                File.Move(proxyTarget, previous);
-                log($"kept the existing dinput8.dll as {PreviousFileName}");
+                File.Copy(loaderSource, proxyTarget, overwrite: true);
+                log($"installed loader -> {proxyTarget}");
+
+                string pluginTarget = Path.Combine(game, ChainPluginFileName);
+                File.Copy(pluginSource, pluginTarget, overwrite: true);
+                log($"installed plugin -> {pluginTarget}");
             }
+            catch (Exception) when (renamed)
+            {
+                // The other mod's dinput8.dll was already moved aside: put it back, so a failed
+                // copy never leaves the game with no dinput8.dll (or half a loader) in the slot.
+                try
+                {
+                    File.Move(previous, proxyTarget, overwrite: true);
+                    log($"install failed; put the other mod's dinput8.dll back at {proxyTarget}");
+                }
+                catch (Exception restore)
+                {
+                    log($"install failed AND could not restore {PreviousFileName} to dinput8.dll ({restore.Message}) - rename it back by hand");
+                }
 
-            File.Copy(loaderSource, proxyTarget, overwrite: true);
-            log($"installed loader -> {proxyTarget}");
-
-            string pluginTarget = Path.Combine(game, ChainPluginFileName);
-            File.Copy(pluginSource, pluginTarget, overwrite: true);
-            log($"installed plugin -> {pluginTarget}");
+                throw;
+            }
 
             // Start from whatever dinput8.chain already lists — a re-run must not drop an
             // entry a player added by hand, or duplicate the ones we manage ourselves — then
@@ -395,11 +476,17 @@ public static partial class PackageInstaller
             string modProfilesTarget = Path.Combine(game, "coop-mods");
             Directory.CreateDirectory(modProfilesTarget);
             int profiles = 0;
+            // The folder is shared with profiles a player may add by hand, so remember which
+            // files are ours for uninstall (not a .json: the profile loader reads *.json only).
+            HashSet<string> ours = new(ReadModProfileManifest(modProfilesTarget), StringComparer.OrdinalIgnoreCase);
             foreach (string profile in Directory.GetFiles(modProfilesSource, "*.json"))
             {
                 File.Copy(profile, Path.Combine(modProfilesTarget, Path.GetFileName(profile)), overwrite: true);
+                ours.Add(Path.GetFileName(profile));
                 profiles++;
             }
+
+            File.WriteAllLines(Path.Combine(modProfilesTarget, ModProfileManifestName), ours.Order(StringComparer.OrdinalIgnoreCase));
             log($"installed mod compatibility profiles -> {modProfilesTarget} ({profiles} files)");
         }
 
@@ -438,12 +525,23 @@ public static partial class PackageInstaller
         // Windows' own prompt.
         if (FirewallEnabled)
         {
-            WindowsFirewall.Install(game, log);
+            WindowsFirewall.Install(game, log, options.AskFirewall);
         }
 
         log(string.Empty);
         log("checking the install...");
         return Check(game, log);
+    }
+
+    public const string ModProfileManifestName = "kotorcoop-installed.txt";
+    public const string OriginalIniName = "swkotor.ini.kcoop-orig";
+
+    private static string[] ReadModProfileManifest(string modProfilesDirectory)
+    {
+        string path = Path.Combine(modProfilesDirectory, ModProfileManifestName);
+        return File.Exists(path)
+            ? File.ReadAllLines(path).Select(l => l.Trim()).Where(l => l.Length > 0 && l == Path.GetFileName(l)).ToArray()
+            : [];
     }
 
     /// <summary>
@@ -546,6 +644,12 @@ public static partial class PackageInstaller
             ? "version: KotorCoop.Agent.exe not found - version unknown"
             : $"version: {installedVersion}");
 
+        string? versionWarning = GameVersionWarning(game);
+        if (versionWarning is not null)
+        {
+            log($"WARNING: {versionWarning}");
+        }
+
         switch (kind)
         {
             case DinputKind.None:
@@ -591,6 +695,22 @@ public static partial class PackageInstaller
                 break;
         }
 
+        // A missing plugin next to the rest of our files is almost always antivirus software
+        // quarantining it (the DLL hooks the game, which heuristics dislike). Already a FAIL
+        // above; this says why and how to get it back.
+        string? missingPlugin = kind switch
+        {
+            DinputKind.None when OtherKotorCoopFilesPresent(game) => PluginFileName,
+            DinputKind.Loader when !hasChainPlugin && OtherKotorCoopFilesPresent(game) => ChainPluginFileName,
+            _ => null,
+        };
+        if (missingPlugin is not null)
+        {
+            log($"NOTE: {missingPlugin} is missing but other kotor-coop files are still here - antivirus software has probably "
+                + "removed it. Add the game folder as an exclusion in your antivirus (Windows Security > Virus & threat "
+                + $"protection > Manage settings > Exclusions), then run KotorCoop.Agent.exe setup again to restore it.");
+        }
+
         string iniPath = Path.Combine(game, "coop.ini");
         Report(File.Exists(iniPath), File.Exists(iniPath) ? $"{iniPath} exists" : $"{iniPath} is MISSING");
 
@@ -604,11 +724,67 @@ public static partial class PackageInstaller
         return ok;
     }
 
+    private static bool OtherKotorCoopFilesPresent(string game) =>
+        Directory.EnumerateFiles(game, "KotorCoop.*").Any(f =>
+            !string.Equals(Path.GetFileName(f), ChainPluginFileName, StringComparison.OrdinalIgnoreCase))
+        || File.Exists(Path.Combine(game, ChainFileName))
+        || File.Exists(Path.Combine(game, ChainPluginFileName));
+
+    /// <summary>
+    /// A warning when <c>swkotor.exe</c> is present but is not a recognised KOTOR 1.03 build
+    /// (neither the DRM-free nor the Steam-wrapped form), else null. A warning, never a refusal:
+    /// every engine address this mod uses is for 1.03.
+    /// </summary>
+    public static string? GameVersionWarning(string gameDirectory)
+    {
+        string exe = Path.Combine(gameDirectory, GameExecutable);
+        if (!File.Exists(exe) || SteamBuild.InspectFile(exe, out _) != KotorExecutableForm.Unknown)
+        {
+            return null;
+        }
+
+        return "swkotor.exe is not a recognised KOTOR 1 version 1.03 build. This mod needs version 1.03; "
+            + "update the game through GOG or Steam (verify/repair the install) and run setup again.";
+    }
+
+    /// <summary>True for a path under the temp folder or inside a zip viewer's extraction
+    /// folder (Explorer's "Temp1_name.zip", WinRAR's "Rar$..", 7-Zip's "7z..") - what running
+    /// the exe straight from inside the zip looks like.</summary>
+    public static bool IsTemporaryPath(string path)
+    {
+        char[] separators = ['\\', '/'];
+        string full = Path.GetFullPath(path).TrimEnd(separators);
+        string temp = Path.GetFullPath(Path.GetTempPath()).TrimEnd(separators);
+        if (full.Equals(temp, StringComparison.OrdinalIgnoreCase)
+            || full.StartsWith(temp + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return full.Split(separators).Any(segment =>
+            segment.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)
+            || segment.StartsWith("Rar$", StringComparison.OrdinalIgnoreCase)
+            || Regex.IsMatch(segment, @"^Temp\d+_", RegexOptions.IgnoreCase));
+    }
+
     /// <summary>Removes only what Install placed, recognising our DLLs by marker; restores a
     /// foreign dinput8.dll kept by chain mode; keeps coop.ini.</summary>
     public static void Uninstall(string gameDirectory, Action<string> log)
     {
+        try
+        {
+            UninstallCore(gameDirectory, log);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            throw new NeedsElevationException(ProtectedFolderMessage(Path.GetFullPath(gameDirectory)), ex);
+        }
+    }
+
+    private static void UninstallCore(string gameDirectory, Action<string> log)
+    {
         string game = Path.GetFullPath(gameDirectory);
+        RequireWritable(game);
         EnsureFilesAvailable(game);
         string proxy = Path.Combine(game, PluginFileName);
 
@@ -640,13 +816,28 @@ public static partial class PackageInstaller
             log($"restored the other mod's dinput8.dll from {PreviousFileName}");
         }
 
-        foreach (string name in new[] { "kotorcoop-plugin.log", "dinput8-chain.log" })
+        foreach (string name in new[] { "kotorcoop-plugin.log", "dinput8-chain.log", "kotorcoop-last-address.txt" })
         {
             string logFile = Path.Combine(game, name);
             if (File.Exists(logFile))
             {
                 File.Delete(logFile);
                 log($"removed {logFile}");
+            }
+        }
+
+        // The agent's log (and its rotated copies). A locked one is skipped, not fatal.
+        foreach (string agentLog in Directory.GetFiles(game, "kotorcoop-agent*")
+                     .Where(f => Path.GetFileName(f).Contains(".log", StringComparison.OrdinalIgnoreCase)))
+        {
+            try
+            {
+                File.Delete(agentLog);
+                log($"removed {agentLog}");
+            }
+            catch (IOException)
+            {
+                log($"could not remove {agentLog} (in use)");
             }
         }
 
@@ -674,9 +865,234 @@ public static partial class PackageInstaller
             }
         }
 
+        RemoveModProfiles(game, log);
+        RestoreEnableCheats(game, log);
+
         if (FirewallEnabled)
         {
             WindowsFirewall.Remove(game, log);
+        }
+
+        ReportLeftInPlace(game, log);
+    }
+
+    /// <summary>Deletes the <c>coop-mods\*.json</c> files Install recorded in its manifest (a
+    /// profile a player added by hand is never in it), then the folder if that left it empty.</summary>
+    private static void RemoveModProfiles(string game, Action<string> log)
+    {
+        string directory = Path.Combine(game, "coop-mods");
+        if (!Directory.Exists(directory))
+        {
+            return;
+        }
+
+        foreach (string name in ReadModProfileManifest(directory))
+        {
+            string file = Path.Combine(directory, name);
+            if (File.Exists(file))
+            {
+                File.Delete(file);
+                log($"removed {file}");
+            }
+        }
+
+        string manifest = Path.Combine(directory, ModProfileManifestName);
+        if (File.Exists(manifest))
+        {
+            File.Delete(manifest);
+        }
+
+        if (!Directory.EnumerateFileSystemEntries(directory).Any())
+        {
+            Directory.Delete(directory);
+            log($"removed {directory}");
+        }
+        else
+        {
+            log($"left {directory} in place: it holds files kotor-coop did not install");
+        }
+    }
+
+    /// <summary>
+    /// Puts <c>[Game Options] EnableCheats</c> back to what the player had before the plugin
+    /// first switched it on, from the copy it saved as <c>swkotor.ini.kcoop-orig</c> - and
+    /// touches ONLY that key (the file is read and written as Latin-1, so every other byte,
+    /// line ending and BOM survives). The write goes through a temp file.
+    /// </summary>
+    private static void RestoreEnableCheats(string game, Action<string> log)
+    {
+        string orig = Path.Combine(game, OriginalIniName);
+        if (!File.Exists(orig))
+        {
+            return;
+        }
+
+        string current = Path.Combine(game, "swkotor.ini");
+        string? wanted = FindEnableCheats(Encoding.Latin1.GetString(File.ReadAllBytes(orig)));
+        if (File.Exists(current))
+        {
+            string before = Encoding.Latin1.GetString(File.ReadAllBytes(current));
+            string after = SetEnableCheats(before, wanted);
+            if (!string.Equals(before, after, StringComparison.Ordinal))
+            {
+                string temp = current + ".kcoop-tmp";
+                File.WriteAllBytes(temp, Encoding.Latin1.GetBytes(after));
+                File.Replace(temp, current, null);
+            }
+
+            log(wanted is null
+                ? "restored swkotor.ini: EnableCheats removed again (your original had none)"
+                : $"restored swkotor.ini: EnableCheats={wanted} (your original setting)");
+        }
+
+        File.Delete(orig);
+        log($"removed {orig}");
+    }
+
+    /// <summary>The raw <c>EnableCheats</c> value inside <c>[Game Options]</c>, or null when absent.</summary>
+    public static string? FindEnableCheats(string iniText)
+    {
+        bool inSection = false;
+        foreach (string raw in iniText.Split('\n'))
+        {
+            string line = raw.Trim();
+            if (line.StartsWith('['))
+            {
+                inSection = line.Equals("[Game Options]", StringComparison.OrdinalIgnoreCase);
+            }
+            else if (inSection && TryKeyValue(line, out string key, out string value)
+                && key.Equals("EnableCheats", StringComparison.OrdinalIgnoreCase))
+            {
+                return value;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool TryKeyValue(string line, out string key, out string value)
+    {
+        int equals = line.IndexOf('=');
+        key = equals > 0 ? line[..equals].Trim() : string.Empty;
+        value = equals > 0 ? line[(equals + 1)..].Trim() : string.Empty;
+        return equals > 0;
+    }
+
+    /// <summary>
+    /// <paramref name="iniText"/> with <c>[Game Options] EnableCheats</c> set to
+    /// <paramref name="value"/> (null = remove the key), every other line and every line ending
+    /// untouched. A missing section/key is added using the file's own line ending.
+    /// </summary>
+    public static string SetEnableCheats(string iniText, string? value)
+    {
+        // Lines keep their own terminator so nothing but the one key line can change.
+        List<(string Text, string Eol)> lines = [];
+        int start = 0;
+        for (int i = 0; i < iniText.Length; i++)
+        {
+            if (iniText[i] == '\n')
+            {
+                bool cr = i > start && iniText[i - 1] == '\r';
+                lines.Add((iniText[start..(cr ? i - 1 : i)], cr ? "\r\n" : "\n"));
+                start = i + 1;
+            }
+        }
+
+        if (start < iniText.Length)
+        {
+            lines.Add((iniText[start..], string.Empty));
+        }
+
+        string eol = lines.Any(l => l.Eol == "\r\n") ? "\r\n" : "\n";
+
+        int section = -1;
+        int keyLine = -1;
+        for (int i = 0; i < lines.Count && keyLine < 0; i++)
+        {
+            string trimmed = lines[i].Text.Trim();
+            if (trimmed.StartsWith('['))
+            {
+                if (section >= 0)
+                {
+                    break;
+                }
+
+                if (trimmed.Equals("[Game Options]", StringComparison.OrdinalIgnoreCase))
+                {
+                    section = i;
+                }
+            }
+            else if (section >= 0 && TryKeyValue(trimmed, out string key, out _)
+                && key.Equals("EnableCheats", StringComparison.OrdinalIgnoreCase))
+            {
+                keyLine = i;
+            }
+        }
+
+        if (keyLine >= 0)
+        {
+            if (value is null)
+            {
+                lines.RemoveAt(keyLine);
+            }
+            else
+            {
+                lines[keyLine] = ($"EnableCheats={value}", lines[keyLine].Eol);
+            }
+        }
+        else if (value is not null)
+        {
+            if (section >= 0)
+            {
+                // A header with no terminator is the last line: give it one before inserting after it.
+                if (lines[section].Eol.Length == 0)
+                {
+                    lines[section] = (lines[section].Text, eol);
+                }
+
+                lines.Insert(section + 1, ($"EnableCheats={value}", eol));
+            }
+            else
+            {
+                if (lines.Count > 0 && lines[^1].Eol.Length == 0)
+                {
+                    lines[^1] = (lines[^1].Text, eol);
+                }
+
+                lines.Add(("[Game Options]", eol));
+                lines.Add(($"EnableCheats={value}", eol));
+            }
+        }
+
+        return string.Concat(lines.Select(l => l.Text + l.Eol));
+    }
+
+    /// <summary>What uninstall deliberately keeps, so the player knows it is still on disk.</summary>
+    private static void ReportLeftInPlace(string game, Action<string> log)
+    {
+        List<string> kept = [];
+        if (File.Exists(Path.Combine(game, "coop.ini")))
+        {
+            kept.Add("coop.ini (your co-op settings)");
+        }
+
+        string saves = Path.Combine(game, "saves");
+        if (Directory.Exists(saves))
+        {
+            if (Directory.EnumerateDirectories(saves, "*Co-op*").Any())
+            {
+                kept.Add("the \"Co-op\" save in the saves folder (your co-op progress)");
+            }
+
+            if (Directory.EnumerateFiles(saves, "kotorcoop-character.*").Any())
+            {
+                kept.Add("saves\\kotorcoop-character.* (your co-op character)");
+            }
+        }
+
+        if (kept.Count > 0)
+        {
+            log("left in place on purpose (delete by hand if you want them gone): " + string.Join("; ", kept));
         }
     }
 
