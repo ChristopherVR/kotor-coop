@@ -93,7 +93,7 @@ public static partial class PackageInstaller
     /// <summary>True when a temp file can be created (and deleted) in <paramref name="directory"/>.
     /// Only a permission refusal counts as "not writable"; any other I/O problem is left for
     /// the real work to report.</summary>
-    internal static bool IsWritable(string directory)
+    public static bool IsWritable(string directory)
     {
         string probe = Path.Combine(directory, $".kotorcoop-write-test-{Guid.NewGuid():N}.tmp");
         try
@@ -950,7 +950,7 @@ public static partial class PackageInstaller
     }
 
     /// <summary>The raw <c>EnableCheats</c> value inside <c>[Game Options]</c>, or null when absent.</summary>
-    internal static string? FindEnableCheats(string iniText)
+    public static string? FindEnableCheats(string iniText)
     {
         bool inSection = false;
         foreach (string raw in iniText.Split('\n'))
@@ -983,7 +983,7 @@ public static partial class PackageInstaller
     /// <paramref name="value"/> (null = remove the key), every other line and every line ending
     /// untouched. A missing section/key is added using the file's own line ending.
     /// </summary>
-    internal static string SetEnableCheats(string iniText, string? value)
+    public static string SetEnableCheats(string iniText, string? value)
     {
         // Lines keep their own terminator so nothing but the one key line can change.
         List<(string Text, string Eol)> lines = [];
