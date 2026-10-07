@@ -31,6 +31,9 @@ public enum AgentCommand
     /// <summary>Remove what Install placed.</summary>
     Uninstall,
 
+    /// <summary>Hidden: add the inbound firewall rule. Run elevated by setup, never by hand.</summary>
+    Firewall,
+
     /// <summary>Zip the co-op logs, the crash record and a redacted coop.ini for a bug report.</summary>
     Logs,
     Support,
@@ -232,6 +235,9 @@ public sealed record AgentOptions
     /// <summary>install: report the install layout and verify it (chain entries, markers,
     /// coop.ini) without changing anything.</summary>
     public bool Check { get; init; }
+
+    /// <summary>`firewall --add`: the hidden elevated child of interactive setup.</summary>
+    public bool FirewallAdd { get; init; }
     public bool UpdateDefaults { get; init; }
 
     /// <summary>install/setup: skip InstallScanCache and do a full drive/registry/Steam-library
@@ -275,6 +281,7 @@ public sealed record AgentOptions
             "craft-save" => AgentCommand.CraftSave,
             "install" => AgentCommand.Install,
             "uninstall" => AgentCommand.Uninstall,
+            "firewall" => AgentCommand.Firewall,
             "logs" => AgentCommand.Logs,
             "support" => AgentCommand.Support,
             "setup" => AgentCommand.Setup,
@@ -305,6 +312,7 @@ public sealed record AgentOptions
         List<string> chainLoad = [];
         bool force = false;
         bool check = false;
+        bool firewallAdd = false;
         bool rescan = false;
         bool updateDefaults = false;
         bool windowed = false;
@@ -409,6 +417,10 @@ public sealed record AgentOptions
 
                 case "--force":
                     force = true;
+                    break;
+
+                case "--add":
+                    firewallAdd = true;
                     break;
 
                 case "--check":
@@ -629,6 +641,7 @@ public sealed record AgentOptions
             ChainLoad = chainLoad,
             Force = force,
             Check = check,
+            FirewallAdd = firewallAdd,
             Rescan = rescan,
             UpdateDefaults = updateDefaults,
             ViaSteam = viaSteam,
