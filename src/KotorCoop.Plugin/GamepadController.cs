@@ -19,7 +19,7 @@ namespace KotorCoop.Plugin;
 /// released the moment the pad disconnects, the window loses focus, or the ~ console opens,
 /// so a stuck W can never survive a state the pad no longer sees.
 ///
-/// coop.ini: <c>gamepad = 1</c> (0 disables the layer entirely — no XInput load, no
+/// coop.ini: <c>gamepad = 1</c> (off by default; 0 or absent disables the layer entirely — no XInput load, no
 /// DirectInput wrap use), <c>gamepad_cursor_speed = 1.0</c> (multiplier on
 /// <see cref="GamepadCursorRule.BaseSpeed"/>). The <c>gamepad</c> console verb reports
 /// status and, for the unattended rig, drives a virtual pad (<c>gamepad sim ly=1</c>).
@@ -76,7 +76,7 @@ internal sealed partial class GamepadController
 
     public GamepadController(string gameDirectory)
     {
-        _configured = PluginConfig.ReadBool("gamepad", true);
+        _configured = PluginConfig.ReadBool("gamepad", false);
         _enabled = _configured;
         _cursorSpeed = PluginConfig.ReadFloat("gamepad_cursor_speed", 1.0f);
         _keymap = LoadKeymap(gameDirectory);
@@ -90,7 +90,7 @@ internal sealed partial class GamepadController
         PluginHost.Log(_configured
             ? $"gamepad: enabled (cursor speed x{_cursorSpeed:0.##}); "
                 + (XInputSource.IsAvailable ? $"XInput via {XInputSource.Library}" : "XInput not available on this machine")
-            : "gamepad: disabled (coop.ini gamepad = 0)");
+            : "gamepad: disabled (coop.ini gamepad = 1 turns it on)");
     }
 
     private static GamepadKeymap LoadKeymap(string gameDirectory)

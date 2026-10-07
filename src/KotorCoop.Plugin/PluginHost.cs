@@ -534,52 +534,12 @@ internal static unsafe partial class PluginHost
                 return;
             }
 
-            List<string> lines = [.. File.ReadAllLines(path)];
-            int section = -1;
-            int keyLine = -1;
-
-            for (int i = 0; i < lines.Count; i++)
+            // Backs up the original (swkotor.ini.kcoop-orig, once) and rewrites via a temp file
+            // only when the key is not already 1; line endings and encoding are preserved.
+            if (IniCheatsFile.EnableCheats(path) == IniCheatsFile.Result.Enabled)
             {
-                string trimmed = lines[i].Trim();
-                if (trimmed.StartsWith('[') && trimmed.EndsWith(']'))
-                {
-                    if (trimmed.Equals("[Game Options]", StringComparison.OrdinalIgnoreCase))
-                    {
-                        section = i;
-                    }
-                    else if (section >= 0 && keyLine < 0)
-                    {
-                        break; // left the section without finding the key
-                    }
-                }
-                else if (section >= 0 && trimmed.StartsWith("EnableCheats", StringComparison.OrdinalIgnoreCase))
-                {
-                    keyLine = i;
-                    break;
-                }
+                Log("enabled the developer console in swkotor.ini ([Game Options] EnableCheats=1)");
             }
-
-            if (keyLine >= 0)
-            {
-                if (lines[keyLine].Trim().EndsWith('1'))
-                {
-                    return; // already enabled
-                }
-
-                lines[keyLine] = "EnableCheats=1";
-            }
-            else if (section >= 0)
-            {
-                lines.Insert(section + 1, "EnableCheats=1");
-            }
-            else
-            {
-                lines.Add("[Game Options]");
-                lines.Add("EnableCheats=1");
-            }
-
-            File.WriteAllLines(path, lines);
-            Log("enabled the developer console in swkotor.ini ([Game Options] EnableCheats=1)");
         }
         catch (Exception ex)
         {
@@ -934,9 +894,8 @@ internal static unsafe partial class PluginHost
     /// live "*.log" file is ever a rotation SOURCE, the shift plan is what produces the rest —
     /// and "kotorcoop-agent.log" on purpose: that file belongs to the agent process
     /// AgentLauncher spawns, and it rotates it itself right before opening it (see
-    /// AgentLauncher.RotateAgentLogIfNeeded), not as part of this directory-wide sweep. It
-    /// cannot be rotated mid-session by either side: see the comment on
-    /// AgentLauncher.Launch's StartupInfo.StdOutput assignment.
+    /// AgentLauncher.RotateAgentLogIfNeeded), not as part of this directory-wide sweep. It is capped mid-session by the agent
+    /// itself (RotatingLogWriter via --console-log; see AgentLauncher).
     /// </summary>
     private static void RotateLogFilesOverCap(string directory)
     {

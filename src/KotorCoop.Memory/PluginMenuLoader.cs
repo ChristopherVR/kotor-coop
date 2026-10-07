@@ -211,6 +211,10 @@ public static class PluginMenuLoader
 
         try
         {
+            // The player's own single-player autosave is about to be overwritten: keep it as a
+            // visible numbered save the first time (AutosaveBackup; best-effort, never throws).
+            _ = AutosaveBackup.TryBackupOnce(savesDirectory, out _);
+
             if (Directory.Exists(autosave))
             {
                 Directory.Delete(autosave, recursive: true);

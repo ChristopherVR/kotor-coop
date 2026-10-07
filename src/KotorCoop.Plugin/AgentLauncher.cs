@@ -111,7 +111,7 @@ internal static unsafe class AgentLauncher
     private static extern uint ResumeThread(nint thread);
 
     private const uint GenericWrite = 0x40000000;
-    private const uint FileShareReadWrite = 0x00000003;
+    private const uint FileShareReadWriteDelete = 0x00000007; // DELETE share lets the agent rotate the file it also holds
     private const uint CreateAlways = 2;
     private const uint FileAttributeNormal = 0x00000080;
     private const int UseStdHandles = 0x00000100;
@@ -219,6 +219,9 @@ internal static unsafe class AgentLauncher
             // without a console.
             string logPath = Path.Combine(gameDirectory, "kotorcoop-agent.log");
             RotateAgentLogIfNeeded(gameDirectory, logPath);
+            commandLine.Append($" --console-log \"{logPath}\"")
+                .Append(" --console-log-mb ").Append(ReadLogCapMb(gameDirectory))
+                .Append(" --console-log-keep ").Append(ReadLogKeep(gameDirectory));
 
             SecurityAttributes inheritable = new()
             {
@@ -228,23 +231,20 @@ internal static unsafe class AgentLauncher
             };
 
             nint log = CreateFileW(
-                logPath, GenericWrite, FileShareReadWrite, ref inheritable,
+                logPath, GenericWrite, FileShareReadWriteDelete, ref inheritable,
                 CreateAlways, FileAttributeNormal, 0);
 
             StartupInfo startup = default;
             startup.Cb = sizeof(StartupInfo);
 
-            // ⚠ LIMITATION: kotorcoop-agent.log only rotates HERE, right before the handle
-            // below is opened — never mid-session, from either side. This is a raw inherited
-            // OS file handle, not something the child reopens itself: the agent's own
-            // Console.Out (AgentDashboard's IsOutputRedirected path) writes straight through
-            // it, so there is no File.Move the agent could safely perform on a path a live
-            // handle already has open — Windows does not require the handle to be closed
-            // first, but the agent has no way to also swap what Console.Out itself is backed
-            // by mid-process. The plugin cannot rotate it either: RotateLogFilesOverCap skips
-            // this file by name for exactly this reason. A very long single agent session
-            // (the plugin normally only relaunches it on a crash/hang) is therefore uncapped
-            // until the next relaunch. See docs/TROUBLESHOOTING.md's log-growth section.
+            // kotorcoop-agent.log is capped mid-session by the AGENT, not by us: this handle is a
+            // raw inherited OS handle that follows the file wherever it is renamed, so only the
+            // writing process can close it, shift the generations and reopen the path. We hand
+            // it --console-log/-mb/-keep below; the agent then routes Console.Out/Error through
+            // RotatingLogWriter (same cap/generations as the plugin log). This handle stays as
+            // the fallback for the agent's first moments and for an agent that cannot open the
+            // file; it is opened with FILE_SHARE_DELETE so the agent's rename is never blocked.
+            // RotateLogFilesOverCap still skips this file by name (the agent owns it).
             bool haveLog = log != InvalidHandle && log != 0;
             if (haveLog)
             {
@@ -312,9 +312,8 @@ internal static unsafe class AgentLauncher
     /// CreateFileW below always opens with CREATE_ALWAYS, so without this a launch that
     /// follows a very long agent session (the dashboard runs for hours, logging the whole
     /// time) would simply overwrite it and lose it; this is the same cap applied before that
-    /// overwrite happens rather than after. It cannot help a single session that grows past
-    /// the cap while still running — the agent holds this handle open for its whole life, the
-    /// same "never rotate mid-session" rule PluginHost follows for its own log.
+    /// overwrite happens rather than after. A single session that grows past the cap while
+    /// running is capped by the agent itself (RotatingLogWriter, started via --console-log).
     /// </summary>
     private static void RotateAgentLogIfNeeded(string gameDirectory, string logPath)
     {
@@ -325,19 +324,8 @@ internal static unsafe class AgentLauncher
                 return;
             }
 
-            string? capSetting = ReadSetting(gameDirectory, "log_max_mb");
-            int capMb = capSetting is not null && int.TryParse(capSetting,
-                System.Globalization.NumberStyles.Integer,
-                System.Globalization.CultureInfo.InvariantCulture, out int parsed)
-                ? parsed
-                : LogRotation.DefaultCapMb;
-
-            string? keepSetting = ReadSetting(gameDirectory, "log_keep");
-            int keepGenerations = keepSetting is not null && int.TryParse(keepSetting,
-                System.Globalization.NumberStyles.Integer,
-                System.Globalization.CultureInfo.InvariantCulture, out int parsedKeep)
-                ? parsedKeep
-                : LogRotation.DefaultKeepGenerations;
+            int capMb = ReadLogCapMb(gameDirectory);
+            int keepGenerations = ReadLogKeep(gameDirectory);
 
             FileInfo info = new(logPath);
             if (LogRotation.ShouldRotate(info.Length, LogRotation.CapBytes(capMb)))
@@ -389,6 +377,20 @@ internal static unsafe class AgentLauncher
     /// plugin is NativeAOT x86 and cannot reference the agent's assemblies, and only two
     /// keys are needed here. Same shape the agent's own reader accepts.
     /// </summary>
+    private static int ReadLogCapMb(string gameDirectory) =>
+        int.TryParse(ReadSetting(gameDirectory, "log_max_mb"),
+            System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture, out int parsed)
+            ? parsed
+            : LogRotation.DefaultCapMb;
+
+    private static int ReadLogKeep(string gameDirectory) =>
+        int.TryParse(ReadSetting(gameDirectory, "log_keep"),
+            System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture, out int parsed)
+            ? parsed
+            : LogRotation.DefaultKeepGenerations;
+
     private static string? ReadSetting(string gameDirectory, string key)
     {
         string path = Path.Combine(gameDirectory, "coop.ini");
