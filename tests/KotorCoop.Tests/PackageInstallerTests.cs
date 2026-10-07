@@ -569,4 +569,241 @@ public sealed class PackageInstallerTests : IDisposable
         Assert.False(ok);
         Assert.Contains(_log, l => l.StartsWith("layout: foreign-only"));
     }
+
+    // ---------------------------------------------------------------------------------------
+    // Protected folders, rollback, version/antivirus notes, uninstall leftovers.
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public void IsTemporaryPathRecognisesTempAndZipExtractionFolders()
+    {
+        Assert.True(PackageInstaller.IsTemporaryPath(Path.Combine(Path.GetTempPath(), "kotor-coop")));
+        Assert.True(PackageInstaller.IsTemporaryPath(@"C:\Users\x\AppData\Local\Temp\Temp1_kotor-coop-v0.1.zip\kotor-coop"));
+        Assert.True(PackageInstaller.IsTemporaryPath(@"C:\Users\x\Downloads\kotor-coop.zip\kotor-coop"));
+        Assert.True(PackageInstaller.IsTemporaryPath(@"C:\Users\x\AppData\Local\Temp\Rar$EXa1234.5\kotor-coop"));
+        Assert.False(PackageInstaller.IsTemporaryPath(@"D:\Games\kotor-coop"));
+    }
+
+    [Fact]
+    public void ChainRenameIsRolledBackWhenTheLoaderCopyFails()
+    {
+        string root = NewRoot();
+        string package = CreatePackage(root);
+        string game = CreateGameDirectory(root);
+        WriteForeignDinput(game, ReShadeDll());
+
+        // An exclusively-held loader source makes File.Copy throw after the rename happened.
+        using var held = new FileStream(Path.Combine(package, PackageInstaller.LoaderRelativePath),
+            FileMode.Open, FileAccess.Read, FileShare.None);
+
+        Assert.ThrowsAny<IOException>(() => PackageInstaller.Install(new PackageInstaller.Options(package, game), Log));
+
+        Assert.Equal(ReShadeDll(), File.ReadAllBytes(Path.Combine(game, PackageInstaller.PluginFileName)));
+        Assert.False(File.Exists(Path.Combine(game, PackageInstaller.PreviousFileName)));
+        Assert.Contains(_log, l => l.Contains("put the other mod's dinput8.dll back"));
+    }
+
+    [Fact]
+    public void InstallIntoAFolderWindowsBlocksAsksForElevationAndChangesNothing()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        string root = NewRoot();
+        string package = CreatePackage(root);
+        string game = CreateGameDirectory(root);
+        WriteForeignDinput(game, ReShadeDll());
+
+        var info = new DirectoryInfo(game);
+        string user = System.Security.Principal.WindowsIdentity.GetCurrent().Name;
+        var deny = new System.Security.AccessControl.FileSystemAccessRule(user,
+            System.Security.AccessControl.FileSystemRights.CreateFiles | System.Security.AccessControl.FileSystemRights.Delete
+            | System.Security.AccessControl.FileSystemRights.DeleteSubdirectoriesAndFiles,
+            System.Security.AccessControl.AccessControlType.Deny);
+        var acl = info.GetAccessControl();
+        acl.AddAccessRule(deny);
+        info.SetAccessControl(acl);
+        try
+        {
+            Assert.False(PackageInstaller.IsWritable(game));
+            var ex = Assert.Throws<PackageInstaller.NeedsElevationException>(
+                () => PackageInstaller.Install(new PackageInstaller.Options(package, game), Log));
+            Assert.Contains("Windows is blocking changes to this folder", ex.Message);
+            Assert.Throws<PackageInstaller.NeedsElevationException>(() => PackageInstaller.Uninstall(game, Log));
+            Assert.Equal(ReShadeDll(), File.ReadAllBytes(Path.Combine(game, PackageInstaller.PluginFileName)));
+            Assert.False(File.Exists(Path.Combine(game, PackageInstaller.PreviousFileName)));
+        }
+        finally
+        {
+            acl = info.GetAccessControl();
+            acl.RemoveAccessRule(deny);
+            info.SetAccessControl(acl);
+        }
+
+        Assert.True(PackageInstaller.IsWritable(game));
+    }
+
+    [Fact]
+    public void CheckWarnsAboutAnUnrecognisedGameBuildButDoesNotFailBecauseOfIt()
+    {
+        string root = NewRoot();
+        string package = CreatePackage(root);
+        string game = CreateGameDirectory(root); // swkotor.exe is the text "fake exe"
+
+        Assert.NotNull(PackageInstaller.GameVersionWarning(game));
+        Assert.True(PackageInstaller.Install(new PackageInstaller.Options(package, game), Log));
+        Assert.Contains(_log, l => l.StartsWith("WARNING: swkotor.exe is not a recognised KOTOR 1 version 1.03 build")
+            && l.Contains("update the game through GOG or Steam"));
+
+        File.Delete(Path.Combine(game, PackageInstaller.GameExecutable));
+        Assert.Null(PackageInstaller.GameVersionWarning(game));
+    }
+
+    [Fact]
+    public void CheckSaysAntivirusProbablyRemovedAMissingPlugin()
+    {
+        string root = NewRoot();
+        string package = CreatePackage(root);
+        string game = CreateGameDirectory(root);
+        Assert.True(PackageInstaller.Install(new PackageInstaller.Options(package, game), Log));
+        File.Delete(Path.Combine(game, PackageInstaller.PluginFileName));
+
+        _log.Clear();
+        Assert.False(PackageInstaller.Check(game, Log));
+        Assert.Contains(_log, l => l.StartsWith("NOTE: dinput8.dll is missing") && l.Contains("antivirus") && l.Contains("exclusion"));
+
+        // Chain mode: the loader is there, the plugin it loads is gone.
+        string chainGame = CreateGameDirectory(root, "chaingame");
+        WriteForeignDinput(chainGame, ReShadeDll());
+        Assert.True(PackageInstaller.Install(new PackageInstaller.Options(package, chainGame), Log));
+        File.Delete(Path.Combine(chainGame, PackageInstaller.ChainPluginFileName));
+
+        _log.Clear();
+        Assert.False(PackageInstaller.Check(chainGame, Log));
+        Assert.Contains(_log, l => l.StartsWith("NOTE: KotorCoop.Plugin.dll is missing") && l.Contains("antivirus"));
+    }
+
+    [Fact]
+    public void CheckOnAFolderWithNoKotorCoopFilesDoesNotBlameAntivirus()
+    {
+        string root = NewRoot();
+        string game = CreateGameDirectory(root);
+        PackageInstaller.Check(game, Log);
+        Assert.DoesNotContain(_log, l => l.Contains("antivirus"));
+    }
+
+    [Fact]
+    public void UninstallRemovesOwnLeftoversAndReportsWhatItKept()
+    {
+        string root = NewRoot();
+        string package = CreatePackage(root);
+        string game = CreateGameDirectory(root);
+        Directory.CreateDirectory(Path.Combine(package, "coop-mods"));
+        File.WriteAllText(Path.Combine(package, "coop-mods", "campaign.json"), "{}");
+        Assert.True(PackageInstaller.Install(new PackageInstaller.Options(package, game), Log));
+        File.WriteAllText(Path.Combine(game, "kotorcoop-agent.log"), "x");
+        File.WriteAllText(Path.Combine(game, "kotorcoop-agent.log.1"), "x");
+        File.WriteAllText(Path.Combine(game, "kotorcoop-last-address.txt"), "1.2.3.4");
+        Directory.CreateDirectory(Path.Combine(game, "saves", "000002 - Co-op"));
+        File.WriteAllText(Path.Combine(game, "saves", "kotorcoop-character.json"), "{}");
+
+        _log.Clear();
+        PackageInstaller.Uninstall(game, Log);
+
+        Assert.False(Directory.Exists(Path.Combine(game, "coop-mods")));
+        Assert.False(File.Exists(Path.Combine(game, "kotorcoop-agent.log")));
+        Assert.False(File.Exists(Path.Combine(game, "kotorcoop-agent.log.1")));
+        Assert.False(File.Exists(Path.Combine(game, "kotorcoop-last-address.txt")));
+        Assert.True(File.Exists(Path.Combine(game, "coop.ini")));
+        Assert.True(Directory.Exists(Path.Combine(game, "saves", "000002 - Co-op")));
+        Assert.True(File.Exists(Path.Combine(game, "saves", "kotorcoop-character.json")));
+        string kept = Assert.Single(_log, l => l.StartsWith("left in place on purpose"));
+        Assert.Contains("coop.ini", kept);
+        Assert.Contains("\"Co-op\" save", kept);
+        Assert.Contains("kotorcoop-character", kept);
+    }
+
+    [Fact]
+    public void UninstallKeepsAProfileThePlayerAddedToCoopMods()
+    {
+        string root = NewRoot();
+        string package = CreatePackage(root);
+        string game = CreateGameDirectory(root);
+        Directory.CreateDirectory(Path.Combine(package, "coop-mods"));
+        File.WriteAllText(Path.Combine(package, "coop-mods", "campaign.json"), "{}");
+        Assert.True(PackageInstaller.Install(new PackageInstaller.Options(package, game), Log));
+        File.WriteAllText(Path.Combine(game, "coop-mods", "mine.json"), "{}");
+
+        PackageInstaller.Uninstall(game, Log);
+
+        Assert.False(File.Exists(Path.Combine(game, "coop-mods", "campaign.json")));
+        Assert.True(File.Exists(Path.Combine(game, "coop-mods", "mine.json")));
+        Assert.False(File.Exists(Path.Combine(game, "coop-mods", PackageInstaller.ModProfileManifestName)));
+    }
+
+    [Theory]
+    [InlineData("\r\n")]
+    [InlineData("\n")]
+    public void UninstallRestoresOnlyEnableCheatsFromTheSavedOriginal(string eol)
+    {
+        string root = NewRoot();
+        string package = CreatePackage(root);
+        string game = CreateGameDirectory(root);
+        Assert.True(PackageInstaller.Install(new PackageInstaller.Options(package, game), Log));
+
+        string Ini(string cheats) => string.Join(eol, "[Graphics Options]", "Width=1920", "[Game Options]", "Difficulty=1",
+            cheats, "Subtitles=1", "[Sound Options]", "Volume=5", "");
+        File.WriteAllText(Path.Combine(game, PackageInstaller.OriginalIniName), Ini("EnableCheats=0"));
+        // The player changed Width after the plugin enabled cheats: that must survive.
+        File.WriteAllText(Path.Combine(game, "swkotor.ini"), Ini("EnableCheats=1").Replace("Width=1920", "Width=2560"));
+
+        PackageInstaller.Uninstall(game, Log);
+
+        Assert.Equal(Ini("EnableCheats=0").Replace("Width=1920", "Width=2560"), File.ReadAllText(Path.Combine(game, "swkotor.ini")));
+        Assert.False(File.Exists(Path.Combine(game, PackageInstaller.OriginalIniName)));
+        Assert.False(File.Exists(Path.Combine(game, "swkotor.ini.kcoop-tmp")));
+    }
+
+    [Fact]
+    public void UninstallRemovesEnableCheatsWhenTheOriginalHadNoSuchKey()
+    {
+        string root = NewRoot();
+        string package = CreatePackage(root);
+        string game = CreateGameDirectory(root);
+        Assert.True(PackageInstaller.Install(new PackageInstaller.Options(package, game), Log));
+        File.WriteAllText(Path.Combine(game, PackageInstaller.OriginalIniName), "[Game Options]\r\nDifficulty=1\r\n");
+        File.WriteAllText(Path.Combine(game, "swkotor.ini"), "[Game Options]\r\nEnableCheats=1\r\nDifficulty=1\r\n");
+
+        PackageInstaller.Uninstall(game, Log);
+
+        Assert.Equal("[Game Options]\r\nDifficulty=1\r\n", File.ReadAllText(Path.Combine(game, "swkotor.ini")));
+        Assert.False(File.Exists(Path.Combine(game, PackageInstaller.OriginalIniName)));
+    }
+
+    [Fact]
+    public void SetEnableCheatsHandlesMissingSectionAndMissingTrailingNewline()
+    {
+        Assert.Equal("[Graphics]\r\nW=1\r\n[Game Options]\r\nEnableCheats=0\r\n",
+            PackageInstaller.SetEnableCheats("[Graphics]\r\nW=1", "0"));
+        Assert.Equal("[Game Options]\nEnableCheats=0\n", PackageInstaller.SetEnableCheats("[Game Options]", "0"));
+        Assert.Equal("[Game Options]\nA=1\n", PackageInstaller.SetEnableCheats("[Game Options]\nA=1\n", null));
+        Assert.Null(PackageInstaller.FindEnableCheats("[Other]\nEnableCheats=1\n[Game Options]\nA=1\n"));
+        Assert.Equal("1", PackageInstaller.FindEnableCheats("[Game Options]\r\nenablecheats = 1\r\n"));
+    }
+
+    [Fact]
+    public void UninstallWithNoSavedOriginalLeavesSwkotorIniAlone()
+    {
+        string root = NewRoot();
+        string package = CreatePackage(root);
+        string game = CreateGameDirectory(root);
+        Assert.True(PackageInstaller.Install(new PackageInstaller.Options(package, game), Log));
+        File.WriteAllText(Path.Combine(game, "swkotor.ini"), "[Game Options]\r\nEnableCheats=1\r\n");
+
+        PackageInstaller.Uninstall(game, Log);
+
+        Assert.Equal("[Game Options]\r\nEnableCheats=1\r\n", File.ReadAllText(Path.Combine(game, "swkotor.ini")));
+    }
 }
