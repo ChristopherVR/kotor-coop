@@ -225,8 +225,8 @@ internal static class InputInjectionController
 
         if (!DirectInputKeyboardHook.IsKeyboardWrapped)
         {
-            return "input key: the keyboard is not proxied yet (coop.ini gamepad = 0, or "
-                + "no IDirectInputDevice8 keyboard created yet) - nothing queued";
+            return "input key: the keyboard is not proxied yet (the game has not created its "
+                + "IDirectInputDevice8 keyboard yet, or the wrap failed - see the plugin log) - nothing queued";
         }
 
         EnsureUnfocusedDelivery();
