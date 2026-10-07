@@ -39,8 +39,18 @@ internal static class InstallCommand
             Cli.Error(ex.Message.Replace("  chain ", "  --chain ").Replace("  force ", "  --force "));
             return 2;
         }
+        catch (PackageInstaller.NeedsElevationException ex)
+        {
+            ReportNeedsElevation(ex);
+            return 2;
+        }
 
         Console.WriteLine();
+        if (PackageInstaller.GameVersionWarning(game) is { } versionWarning)
+        {
+            Cli.Warn(versionWarning);
+        }
+
         Console.WriteLine("The game loads DirectInput from its own directory before the system one, so this is");
         Console.WriteLine("picked up on next launch. Nothing else was modified; remove it with: KotorCoop.Agent.exe uninstall");
         if (ok)
@@ -58,9 +68,69 @@ internal static class InstallCommand
             return 1;
         }
 
-        PackageInstaller.Uninstall(game, Cli.Log);
+        try
+        {
+            PackageInstaller.Uninstall(game, Cli.Log);
+        }
+        catch (PackageInstaller.NeedsElevationException ex)
+        {
+            ReportNeedsElevation(ex);
+            return 2;
+        }
+
         return 0;
     }
+
+    /// <summary>The hidden verb interactive setup runs elevated (one UAC prompt) to add the
+    /// firewall rule: exit 0 when the rule was added.</summary>
+    public static int Firewall(AgentOptions options)
+    {
+        if (!options.FirewallAdd || !options.HasGamePath)
+        {
+            Cli.Error("usage: KotorCoop.Agent.exe firewall --add --game-path <folder with swkotor.exe>");
+            return 2;
+        }
+
+        return WindowsFirewall.IsElevated() && WindowsFirewall.AddRules(options.GamePath, Cli.Log) ? 0 : 1;
+    }
+
+    /// <summary>The CLI wording for a protected folder (setup offers a restart instead, see
+    /// <see cref="OfferElevatedRestart"/>).</summary>
+    private static void ReportNeedsElevation(PackageInstaller.NeedsElevationException ex)
+    {
+        Cli.Error(ex.Message);
+        Cli.Error("Right-click KotorCoop.Agent.exe and choose Run as administrator, or run this command from an Administrator prompt.");
+    }
+
+    /// <summary>Setup hit a protected folder: say so plainly, then offer to restart itself as
+    /// Administrator (the same arguments) through the Windows UAC prompt.</summary>
+    private static int OfferElevatedRestart(PackageInstaller.NeedsElevationException ex, bool interactive)
+    {
+        Cli.Error(ex.Message);
+        if (interactive && !WindowsFirewall.IsElevated()
+            && Ask("Restart setup as administrator now? (Windows will ask for permission)", defaultYes: true, interactive))
+        {
+            switch (Elevation.RelaunchSelf())
+            {
+                case Elevation.Outcome.Succeeded:
+                    Cli.Dim("Setup is continuing in the administrator window.");
+                    return 0;
+                case Elevation.Outcome.Declined:
+                    Cli.Warn("Permission was declined, so nothing was changed.");
+                    break;
+                default:
+                    Cli.Warn("Could not restart as administrator.");
+                    break;
+            }
+        }
+
+        Cli.Error("Right-click KotorCoop.Agent.exe and choose Run as administrator, then try again.");
+        return Pause(interactive, 1);
+    }
+
+    private const string FindFolderHelp =
+        "To find the folder that contains swkotor.exe: on Steam, right-click the game > Manage > Browse local files; "
+        + "on GOG Galaxy, select the game > the settings (cog) > Manage installation > Show folder.";
 
     public static int Setup(AgentOptions options)
     {
@@ -102,7 +172,9 @@ internal static class InstallCommand
             if (!PackageInstaller.IsPackageDirectory(here))
             {
                 Cli.Error($"{here} is neither an extracted kotor-coop package nor a game directory.");
-                Cli.Error("Extract the whole zip somewhere and run KotorCoop.Agent.exe from there.");
+                Cli.Error(PackageInstaller.IsTemporaryPath(here)
+                    ? "This looks like it is running from inside the zip file. Extract the whole zip first, then run it from the extracted folder."
+                    : "Extract the whole zip somewhere and run KotorCoop.Agent.exe from there.");
                 return Pause(interactive, 1);
             }
 
@@ -136,8 +208,15 @@ internal static class InstallCommand
             }
 
             Console.WriteLine();
-            bool ok = PackageInstaller.Install(new PackageInstaller.Options(here, game, chain, null, force), Cli.Log);
+            bool ok = PackageInstaller.Install(new PackageInstaller.Options(here, game, chain, null, force,
+                interactive ? () => Ask("Allow friends to connect to games you host? (Windows will ask for permission)", defaultYes: true, interactive) : null),
+                Cli.Log);
             Console.WriteLine();
+            if (PackageInstaller.GameVersionWarning(game) is { } versionWarning)
+            {
+                Cli.Warn(versionWarning);
+            }
+
             if (ok)
             {
                 Cli.Success("Installed. From now on just start the game: the Co-op button is on the main menu.");
@@ -151,6 +230,15 @@ internal static class InstallCommand
 
             OfferDefaults(here, game, interactive, options.UpdateDefaults);
             return OfferLaunch(game, interactive);
+        }
+        catch (PackageInstaller.NeedsElevationException ex)
+        {
+            return OfferElevatedRestart(ex, interactive);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return OfferElevatedRestart(new PackageInstaller.NeedsElevationException(
+                PackageInstaller.ProtectedFolderMessage(ex.Message), ex), interactive);
         }
         catch (Exception ex)
         {
@@ -209,9 +297,16 @@ internal static class InstallCommand
 
         if (!interactive)
         {
-            Cli.Error(supported.Count == 0
-                ? "No GOG KOTOR install found. Run: KotorCoop.Agent.exe install --game-path <folder with swkotor.exe>"
-                : "More than one install found. Run: KotorCoop.Agent.exe install --game-path <one of the above>");
+            if (supported.Count == 0)
+            {
+                Cli.Error("No GOG or Steam KOTOR install found. Run: KotorCoop.Agent.exe install --game-path <folder with swkotor.exe>");
+                Cli.Error(FindFolderHelp);
+            }
+            else
+            {
+                Cli.Error("More than one install found. Run: KotorCoop.Agent.exe install --game-path <one of the above>");
+            }
+
             return null;
         }
 
@@ -219,7 +314,9 @@ internal static class InstallCommand
         if (supported.Count == 0)
         {
             Cli.FlushInput();
-            Cli.Prompt("No GOG KOTOR install was found. Type the folder that contains swkotor.exe: ");
+            Cli.Warn("No GOG or Steam KOTOR install was found.");
+            Cli.Dim(FindFolderHelp);
+            Cli.Prompt("Type the folder that contains swkotor.exe: ");
             string typed = (Console.ReadLine() ?? string.Empty).Trim().Trim('"');
             if (typed.Length > 0 && PackageInstaller.IsGameDirectory(typed))
             {
@@ -402,7 +499,7 @@ internal static class InstallCommand
         }
 
         Cli.Error(supported.Count == 0
-            ? "no GOG KOTOR install found; pass --game-path <folder with swkotor.exe>"
+            ? "no GOG or Steam KOTOR install found; pass --game-path <folder with swkotor.exe>\n" + FindFolderHelp
             : "more than one KOTOR install found; pass --game-path:\n  " + string.Join("\n  ", supported.Select(c => c.Directory)));
         _ = interactive;
         return null;

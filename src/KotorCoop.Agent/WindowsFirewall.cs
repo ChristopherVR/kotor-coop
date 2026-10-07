@@ -162,7 +162,7 @@ public static class WindowsFirewall
     /// the exact commands. Silent on non-Windows and under Wine — a Linux host opens the port in
     /// its distribution's own firewall (tools/install.sh's header and the package README say so).
     /// </summary>
-    public static void Install(string gameDirectory, Action<string> log)
+    public static void Install(string gameDirectory, Action<string> log, Func<bool>? offerElevated = null)
     {
         if (!OperatingSystem.IsWindows() || KotorCoop.Memory.WineDetection.IsWine)
         {
@@ -171,14 +171,21 @@ public static class WindowsFirewall
 
         string exe = AgentExecutable(gameDirectory);
         int port = SessionPortFor(gameDirectory);
-        IReadOnlyList<string> commands = AddCommands(exe, port);
 
         if (!IsElevated())
         {
+            // Interactive setup: ask once and add the rule through a single UAC prompt (the
+            // hidden `firewall --add` verb), instead of making a player copy commands.
+            if (offerElevated is not null && Exists(exe) != true && offerElevated())
+            {
+                AddElevated(gameDirectory, log);
+                return;
+            }
+
             log($"Windows Firewall: not running as Administrator, so the inbound rule '{RuleName}' was not added.");
             log("  The agent runs behind the game, so Windows' own firewall prompt is easy to miss; to let");
             log("  friends reach a game you host, run these once from an Administrator prompt:");
-            foreach (string command in commands)
+            foreach (string command in AddCommands(exe, port))
             {
                 log($"    {command}");
             }
@@ -186,6 +193,17 @@ public static class WindowsFirewall
             return;
         }
 
+        AddRules(gameDirectory, log);
+    }
+
+    /// <summary>Elevated only: replaces any previous rule with a fresh one for the current
+    /// port. Returns whether both netsh entries were added. This is what the elevated
+    /// <c>firewall --add</c> child runs.</summary>
+    public static bool AddRules(string gameDirectory, Action<string> log)
+    {
+        string exe = AgentExecutable(gameDirectory);
+        int port = SessionPortFor(gameDirectory);
+        IReadOnlyList<string> commands = AddCommands(exe, port);
         foreach (string command in DeleteCommands(exe))
         {
             RunNetsh(command["netsh ".Length..]);
@@ -200,6 +218,36 @@ public static class WindowsFirewall
         log(added
             ? $"Windows Firewall: inbound rule '{RuleName}' added for {exe} (UDP {port},{ServerDiscovery.DiscoveryPort}; TCP {port})"
             : $"Windows Firewall: could not add the inbound rule '{RuleName}' - run this as Administrator: {commands[0]}");
+        return added;
+    }
+
+    /// <summary>Starts the elevated child (one UAC prompt for both netsh commands) and reports
+    /// plainly how it went, verifying by asking netsh afterwards rather than trusting the exit code.</summary>
+    private static void AddElevated(string gameDirectory, Action<string> log)
+    {
+        string exe = AgentExecutable(gameDirectory);
+        Elevation.Outcome outcome = Elevation.Run(["firewall", "--add", "--game-path", gameDirectory], wait: true, hidden: true);
+        if (outcome == Elevation.Outcome.Declined)
+        {
+            log("Windows Firewall: permission was declined, so friends may not be able to connect to games you host.");
+            log("  Run setup again and say yes, or run this once from an Administrator prompt:");
+            log($"    {AddCommands(exe, SessionPortFor(gameDirectory))[0]}");
+            return;
+        }
+
+        if (outcome == Elevation.Outcome.Succeeded || Exists(exe) == true)
+        {
+            log("Windows Firewall: friends can now connect to games you host (inbound rule added).");
+        }
+        else
+        {
+            log("Windows Firewall: could not add the rule, so friends may not be able to connect to games you host.");
+            log("  Run these once from an Administrator prompt:");
+            foreach (string command in AddCommands(exe, SessionPortFor(gameDirectory)))
+            {
+                log($"    {command}");
+            }
+        }
     }
 
     /// <summary>The <c>install --check</c> step: a PASS line when the rule exists, a NOTE (not a

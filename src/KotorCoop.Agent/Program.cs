@@ -42,6 +42,7 @@ internal static class Program
                 AgentCommand.Run => await RunCommand.RunAsync(options).ConfigureAwait(false),
                 AgentCommand.Install => InstallCommand.Install(options),
                 AgentCommand.Uninstall => InstallCommand.Uninstall(options),
+                AgentCommand.Firewall => InstallCommand.Firewall(options),
                 AgentCommand.Logs => LogsCommand.Run(options),
                 AgentCommand.Support => LogsCommand.RunInteractive(options),
                 AgentCommand.Setup => InstallCommand.Setup(options),
