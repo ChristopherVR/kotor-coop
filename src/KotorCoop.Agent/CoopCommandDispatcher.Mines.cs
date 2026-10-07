@@ -13,7 +13,8 @@ public sealed partial class CoopCommandDispatcher
             || !bridge.TryReadWorldLoadSerial(out uint afterSerial)
             || serial != afterSerial)
         {
-            Reply("mineaction refused: current world identity is unavailable");
+            Log?.Invoke("mineaction refused: current world identity is unavailable");
+            Reply("mineaction: not ready yet - try again after the area finishes loading");
             return;
         }
 
@@ -30,7 +31,8 @@ public sealed partial class CoopCommandDispatcher
             || !bridge.TryReadCurrentModule(out string module)
             || string.IsNullOrWhiteSpace(module))
         {
-            Reply("placedmineaction refused: current world identity is unavailable");
+            Log?.Invoke("placedmineaction refused: current world identity is unavailable");
+            Reply("placedmineaction: not ready yet - try again after the area finishes loading");
             return;
         }
 

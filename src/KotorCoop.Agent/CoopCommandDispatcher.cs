@@ -166,6 +166,7 @@ public sealed partial class CoopCommandDispatcher(
                     AnnouncePeerChanges();
                     AnnounceCompatibilityChanges();
                     AnnounceConnectionStatus();
+                    MaintainHostLossWatch();
                     AnnounceHostSaveAvailability();
                     AnnouncePublicAddress();
                     AnnounceRejectedJoins();

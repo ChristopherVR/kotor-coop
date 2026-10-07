@@ -36,7 +36,7 @@ public sealed class BehaviourAnnouncer
     /// whatever is new. Null (no session, or a session that has not compared yet) says
     /// nothing.
     /// </summary>
-    public void Observe(BehaviourComparisonResult? result, Action<string> announce)
+    public void Observe(BehaviourComparisonResult? result, Action<string> announce, Action<string>? log = null)
     {
         ArgumentNullException.ThrowIfNull(announce);
 
@@ -52,7 +52,8 @@ public sealed class BehaviourAnnouncer
                 continue;
             }
 
-            announce($"co-op [{BehaviourDifference.Tag}] {diff.Text}");
+            log?.Invoke($"co-op [{BehaviourDifference.Tag}] {diff.Text}");
+            announce($"co-op: {PlainLanguage.SettingDifference(diff, BoolWord)}");
 
             if (diff.HostAuthoritative)
             {

@@ -1771,12 +1771,17 @@ public sealed partial class CoopCommandDispatcher
 
         if (!bridge.TryReadWorldLoadSerial(out uint startingWorldLoadSerial))
         {
-            Reply("loadgame: could not read the current world-load serial; request was not sent");
+            Log?.Invoke("loadgame: could not read the current world-load serial; request was not sent");
+            Reply("loadgame: not ready yet - try again after the area finishes loading");
             return;
         }
 
         if (!bridge.TryReadLivenessEpoch(out uint startingPartyEpoch) || startingPartyEpoch == 0)
-        { Reply("loadgame: native world epoch unavailable; request was not sent"); return; }
+        {
+            Log?.Invoke("loadgame: native world epoch unavailable; request was not sent");
+            Reply("loadgame: not ready yet - try again after the area finishes loading");
+            return;
+        }
 
         if (!_kotor.TryRequestStagedMidSessionLoad(out string request, out uint requestId, manualIntent: true))
         {
