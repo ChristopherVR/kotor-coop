@@ -30,6 +30,82 @@ The bundle includes `dinput8-chain.log` when present and records the collecting 
 build version plus the version installed in the selected game folder. It does not include
 saved games; if reproducing needs one, keep a separate copy of that save folder.
 
+## Windows says it is unsafe, or antivirus removed a file
+
+The download is not code-signed, so Windows SmartScreen may show "Windows protected your PC".
+Choose **More info**, then **Run anyway**. To check you have the file we published, compare
+its SHA-256 with the one on the release page.
+
+Some antivirus programs quarantine `dinput8.dll` after install. When that happens the
+**Co-op** button does not appear. Add the game folder as an exclusion (Windows Security >
+Virus & threat protection > Manage settings > Exclusions), then run `KotorCoop.Agent.exe`
+again to restore the file. `KotorCoop.Agent.exe install --check` now says when the file is
+missing.
+
+## Setup cannot find the game, or says it cannot change the folder
+
+- **"No GOG or Steam KOTOR install found."** Point setup at the folder that holds
+  `swkotor.exe`. On Steam, right-click the game, then Manage > Browse local files. In GOG
+  Galaxy, open the game, click the settings cog, then Manage installation > Show folder.
+  Then run `KotorCoop.Agent.exe install --game-path "<that folder>"`.
+- **It says it is running from inside the zip file.** Extract the whole zip into its own
+  folder first, then run `KotorCoop.Agent.exe` from there.
+- **"Windows is blocking changes to this folder."** A game under Program Files (GOG
+  Galaxy's default library) is protected by Windows. Setup offers to restart as
+  administrator; say yes. Nothing is changed before that. This replaces older advice to
+  move the game or to start the whole thing as administrator by hand.
+- **A warning that `swkotor.exe` is not version 1.03.** The mod needs KOTOR 1 version 1.03.
+  Update or repair the game through GOG or Steam and run setup again.
+- **The host cannot be reached by friends.** Setup asks "Allow friends to connect to games
+  you host?" and Windows then asks for permission. If you said no or never saw the prompt,
+  run `KotorCoop.Agent.exe` again and say yes.
+
+## Messages you may see when joining
+
+Join and compatibility problems now appear on screen as plain sentences, for example:
+
+- "Your co-op mod version differs from the host's ... Both players need the same release."
+  Both players install the same release.
+- "Your game executable differs from the host's. Both players need KOTOR 1 version 1.03."
+- "Wrong password. Ask the host for the password and try again."
+- "Your game files differ from the host's (area layouts), so ... are off ..." The sentence
+  names what was switched off. Rejoin, or reach an area that matches, to get it back.
+
+The short technical tags (`E_PROTO`, `E_EXE`, `E_PASSWORD`, `W_GIT`, `W_SAVE` and the
+others) are written to the logs only. If a developer asks which tag fired, it is in the
+agent log in your support bundle.
+
+## The host stopped responding
+
+After about 60 seconds without the host, a joiner sees "The host has stopped responding.
+Still trying - type `disconnect` to play on alone." The mod keeps trying in the background.
+After 5 minutes it gives up: "Gave up on the host after 5 minutes. Use Co-op > Connect, or
+type `reconnect`, to try again." Type `reconnect` in the `~` console, or choose Co-op >
+Connect, once the host is hosting again.
+
+## The `~` console and `swkotor.ini`
+
+The mod turns on the game's cheat console setting (`EnableCheats=1` in `swkotor.ini`) so
+the `~` console works. The first time, it keeps your original file as
+`swkotor.ini.kcoop-orig`, and uninstall puts your original setting back. If the console
+does not open, check that `swkotor.ini` still has `EnableCheats=1` under `[Game Options]`.
+
+## Uninstalling
+
+Run `KotorCoop.Agent.exe uninstall` from the extracted zip folder (add `--game-path
+"<folder>"` if it finds two installs). It removes the mod files, the `coop-mods` folder, the
+`kotorcoop-agent` logs and `kotorcoop-last-address.txt`, and it restores your original
+`EnableCheats` setting. It keeps, on purpose, `coop.ini`, the "Co-op" save and
+`saves\kotorcoop-character.*`, and lists them when it finishes. Delete them by hand if you
+want them gone.
+
+## Your own saves
+
+Before co-op uses the Auto Save slot, your own single-player autosave is kept as a save
+called "Autosave before co-op" (the two most recent are kept). If the game crashes while a
+co-op save is being written, your own Quick Save is put back, or kept as "Recovered
+quicksave". Look for both in the Load Game list.
+
 ## Setup refuses an update or removal because a file is in use
 
 Close the game window for that installation and its co-op helper before updating or
@@ -55,13 +131,14 @@ not establish that the multiplayer session has recovered.
 Keep both players' logs and the last good checkpoint. Restart the game and load that
 checkpoint, then connect again. Unsaved progress is not guaranteed to survive a hard
 exit; a local forced-exit check restored saved credits and lost the later unsaved change.
-If you see `W_SAVE` or `W_GIT`, shared channels are disabled. Follow the world-recovery
-steps below and wait for normal control and the connection to return before continuing.
+If the game tells you your world differs from the host's (the logs call this `W_SAVE` or
+`W_GIT`), shared channels are disabled. Follow the world-recovery steps below and wait for normal control and the connection to return before continuing.
 Successful reconnection alone does not confirm that shared objects are syncing.
 
 ## Shared objects stop syncing after an object-mapping warning
 
-`W_GIT` means the saved object IDs differ between the two worlds. The mod disables affected
+The on-screen sentence "Your game files differ from the host's (area layouts), so ... are
+off ..." (logged as `W_GIT`) means the saved object IDs differ between the two worlds. The mod disables affected
 channels because applying a door, enemy or item update to the wrong object would be unsafe.
 Keep both players' logs and save folders before trying recovery.
 
@@ -83,6 +160,9 @@ shorter Co-op name. The r5 verification package completed the same capture in 1.
 That package is a local candidate; check your installed build when comparing results.
 
 ## "Co-op" button doesn't appear on the main menu
+
+If antivirus removed `dinput8.dll` (see "Windows says it is unsafe" above), add the game
+folder as an exclusion and run `KotorCoop.Agent.exe` again.
 
 `menu_button` defaults ON in the code (both readers — see CONFIG.md) and the shipped
 `coop.ini` sets `menu_button = 1`. A `coop.ini` from before 2026-08-27 shipped with
@@ -215,7 +295,9 @@ default was a Steam path.
 
 - Host and client `port` must match (`coop.ini port=`; the code's own default is 27015,
   but the shipped `coop.ini.example` sets `port = 27140` explicitly — see CONFIG.md).
-- A session `password` must match exactly on both sides, or be left empty on both.
+- A session `password` must match exactly on both sides, or be left empty on both. A wrong
+  one shows "Wrong password. Ask the host for the password and try again."
+- The host must have said yes to the firewall question in setup (see below).
 - `connect_timeout_ms` (default: the built-in 15000) is how long a client waits before
   giving up; raise it on a slow network.
 - Firewalls: this is a direct UDP connection (star relay — clients talk only to the host),
@@ -226,7 +308,9 @@ default was a Steam path.
 The agent starts windowless behind a fullscreen game, so Windows' "allow this app through
 the firewall?" prompt on the host's first listen lands where nobody sees it — and an
 unanswered prompt is a silent deny: the host's own status line looks fine while no joiner's
-datagram ever arrives. Since 2026-09-18 the installer handles this (`WindowsFirewall.cs`):
+datagram ever arrives. The installer handles this (`WindowsFirewall.cs`). Setup asks "Allow friends to connect to
+games you host?"; answer yes and Windows asks for permission. If you skipped it, run setup
+again. Details:
 
 - Run as Administrator, `KotorCoop.Agent.exe install` (and `setup`, `install.ps1`,
   `build.ps1 -Install`) adds one inbound program rule named `KotorCoop Agent` for
@@ -242,24 +326,31 @@ datagram ever arrives. Since 2026-09-18 the installer handles this (`WindowsFire
 
 ## Internet play: what the status line's reachability wording means
 
-`status` / `public_address` on a hosting player no longer says a bare "UPnP mapped" — on
-2026-09-10 that was reported while the port was unreachable from outside
+Automatic port opening (UPnP) was tried once on a real home connection and did not work.
+If a friend cannot connect, use a tunnel such as playit.gg.
+
+`status` / `public_address` on a hosting player never says a bare "UPnP mapped", because a
+mapping alone does not prove the port is reachable from outside
 ([network-topology.md §16](research/network-topology.md)). After the router answers, the host
 probes itself (§17 there: the router's WAN address vs the address STUN sees, plus a datagram
-sent from a second socket to its own public address to see whether it comes back in through
-the session's listener) and the line says one of:
+sent from a second socket to its own public address) and the line says one of:
 
-- `UPnP mapped - reachable from the internet` — the self-probe came back; share the address.
-- `UPnP mapped but NOT reachable (your ISP shares your address - use a tunnel such as
-  playit.gg)` — the router's WAN address is not the address the internet sees (or is itself
-  a private/carrier-NAT range such as 100.64.x.x). No port forward on your router can fix
-  this; a tunnel is the only path. `UPnP unavailable and your ISP shares your address ...`
-  is the same verdict with the mapping refused: do not bother forwarding by hand.
-- `UPnP mapped - could not confirm it is reachable; ...` — nothing contradicted the mapping
-  but the probe did not come back (most home routers do not "hairpin" traffic to their own
-  public address). Try it with your friend; if they cannot connect, use a tunnel.
-- `UPnP unavailable but port N is reachable from the internet` — you forwarded it by hand
-  and the probe confirms it.
+- `UPnP mapped - local self-test passed; internet access unconfirmed` — the probe came back
+  locally. That tests a local UDP path, not the internet. Share the address and have your
+  friend try.
+- `UPnP mapped - possible additional NAT; check upstream routers or use a tunnel such as
+  playit.gg` — the router's WAN address is not the address the internet sees (another router,
+  or an ISP that shares addresses). This does not prove forwarding is impossible, but a
+  tunnel is the dependable path. `UPnP unavailable - possible additional NAT; ...` is the
+  same with the mapping refused.
+- `UPnP mapped - could not confirm it is reachable; if a friend cannot connect, use a tunnel
+  such as playit.gg` — nothing contradicted the mapping but the probe did not come back
+  (most home routers do not "hairpin" traffic to their own public address). Try it with
+  your friend.
+- `UPnP unavailable - local self-test passed on port N; internet access unconfirmed` — the
+  port answered locally, for example because you forwarded it by hand.
+- `UPnP unavailable - forward UDP+TCP N manually` — forward that port to this PC, both UDP
+  and TCP, or use a tunnel.
 
 `public_address` prints a second `reachability:` line with the evidence (router WAN address,
 STUN address, what the probe did). The probe runs once, a few seconds after hosting starts,
@@ -267,7 +358,9 @@ after STUN and UPnP have both answered (up to 30 s).
 
 ## Host disconnected (crashed, quit, or the network dropped)
 
-A client that loses its host is not stuck: within `host_loss_timeout_ms` of silence (default
+A client that loses its host is not stuck. For the player-facing messages (after about 60
+seconds, then giving up at 5 minutes) see "The host stopped responding" above. Within
+`host_loss_timeout_ms` of silence (default
 5000ms, same as the ordinary reconnect trigger — near-instant instead if the host shut down
 cleanly rather than crashing) every co-op lock releases and you keep playing solo — companions
 respond to clicks again, doors and dialogue work normally, nothing stays frozen. A HUD/chat
@@ -306,7 +399,8 @@ grace period. Gated by `host_loss_release` like the other two triggers (`HostAwa
 
 ## The host sees nothing when a friend on the wrong build (or wrong password) tries to join
 
-Fixed 2026-09-18. The joiner always got a typed `E_PROTO` / `E_PASSWORD` reject; the host
+Fixed 2026-09-18. The joiner always got a typed `E_PROTO` / `E_PASSWORD` reject (now shown to the joiner as a
+plain sentence; the tag stays in the logs); the host
 now also gets a chat/console/log line — `co-op: a player at 203.0.113.9 on an older build
 tried to join (v50 vs your v52) - both sides need the same kotor-coop version`, or `... tried
 to join with the wrong password` — once per address per 30 s, however often that client
@@ -421,15 +515,11 @@ generation was ever kept, and a mid-session rotation could overwrite the evidenc
 bug (a corrupt damage effect logged, then rotated away) before anyone had a chance to read it
 — see `LogRotation.ShiftPlan`.
 
-`kotorcoop-agent.log` (the log for the agent process the plugin auto-starts) is different: it
-only rotates once, right before that agent process is launched (`AgentLauncher.RotateAgentLogIfNeeded`).
-It cannot rotate mid-session from either side — the agent's console output is a raw OS file
-handle inherited from the plugin's `CreateProcess` call (see the comment on
-`AgentLauncher.Launch`'s `StartupInfo.StdOutput` assignment), not a stream either side can
-safely re-point at a fresh file while the process is running. In practice this rarely matters:
-the plugin only relaunches the agent on a crash/hang (`AgentLiveness`), which is also when the
-log rotates. A single agent process kept alive for an unusually long session is the one case
-where this file can grow past the cap before the next relaunch.
+`kotorcoop-agent.log` (the log for the agent process the plugin auto-starts) also rotates
+during a session now: `kotorcoop-agent.log`, then `.1`, `.2` and `.3`, each capped at 8 MB by
+default (`log_max_mb`; `log_keep` sets how many older copies stay). It also rotates when the
+agent is launched (`AgentLauncher.RotateAgentLogIfNeeded`), so a long session no longer grows
+one file without limit.
 
 The `--log` file `tools/demo.ps1`/`verify.ps1` point the agent at directly (`agent1.log`,
 `agent2.log` under `$env:TEMP\kotorcoop-demo\`) is a plain scratch file the agent writes with
