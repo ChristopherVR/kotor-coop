@@ -39,7 +39,7 @@ public class BehaviourAnnouncerTests
         announcer.Observe(result, lines.Add);
 
         string line = Assert.Single(lines);
-        Assert.StartsWith("co-op [W_CFG] local_combat", line);
+        Assert.StartsWith("co-op: Your co-op setting 'local_combat' differs", line);
     }
 
     [Fact]
@@ -52,7 +52,7 @@ public class BehaviourAnnouncerTests
         announcer.Observe(result, lines.Add);
 
         Assert.Equal(2, lines.Count);
-        Assert.StartsWith("co-op [W_CFG] effect_sync", lines[0]);
+        Assert.StartsWith("co-op: Your co-op setting 'effect_sync' differs", lines[0]);
         Assert.Equal("co-op: adopted host's effect_sync (on; local setting was off)", lines[1]);
     }
 

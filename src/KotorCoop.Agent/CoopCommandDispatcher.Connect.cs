@@ -320,7 +320,8 @@ public sealed partial class CoopCommandDispatcher
                 }
                 else
                 {
-                    Reply($"failed - {manager.Detail}");
+                    Log?.Invoke($"connect failed: {manager.Detail}");
+                    Reply($"failed - {PlainLanguage.Reject(manager.Detail)}");
                 }
 
                 // A refused join (wrong password, incompatible save...) must never load a

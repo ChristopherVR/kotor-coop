@@ -28,7 +28,7 @@ public sealed class CompatibilityAnnouncer
     /// Diffs <paramref name="verdict"/> against the last observation and announces what
     /// changed. Null (no session, or a session that has not compared yet) says nothing.
     /// </summary>
-    public void Observe(CompatibilityVerdict? verdict, Action<string> announce)
+    public void Observe(CompatibilityVerdict? verdict, Action<string> announce, Action<string>? log = null)
     {
         ArgumentNullException.ThrowIfNull(announce);
 
@@ -42,9 +42,10 @@ public sealed class CompatibilityAnnouncer
             _refusal = verdict.Refusal;
             if (verdict.Refusal != RefusalReason.None)
             {
-                // The refusal line carries its code (E_SAVE, E_EXE...) so a player can be
-                // told what to do about it, and a script can match on it.
-                announce($"co-op refused this world: {verdict.Summary}");
+                // The screen gets a plain sentence; the code (E_SAVE, E_EXE...) a script
+                // matches on stays in the log.
+                log?.Invoke($"co-op refused this world: {verdict.Summary}");
+                announce($"co-op refused this world: {PlainLanguage.Refusal(verdict.Refusal)}");
             }
         }
 
@@ -52,7 +53,8 @@ public sealed class CompatibilityAnnouncer
         {
             if (_announced.Add(note.Code))
             {
-                announce($"co-op [{note.Tag}] {note.Text}");
+                log?.Invoke($"co-op [{note.Tag}] {note.Text}");
+                announce($"co-op: {PlainLanguage.Note(note)}");
             }
         }
 

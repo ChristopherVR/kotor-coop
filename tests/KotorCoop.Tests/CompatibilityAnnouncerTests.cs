@@ -35,8 +35,15 @@ public class CompatibilityAnnouncerTests
         announcer.Observe(verdict, lines.Add);
 
         string line = Assert.Single(lines);
-        Assert.Contains("W_GIT", line, StringComparison.Ordinal);
-        Assert.Contains("tar_m03aa", line, StringComparison.Ordinal);
+        Assert.DoesNotContain("W_GIT", line, StringComparison.Ordinal);
+        Assert.Contains("area layouts", line, StringComparison.Ordinal);
+
+        // The tag and the technical text (which names the module) go to the log.
+        List<string> logged = [];
+        new CompatibilityAnnouncer().Observe(verdict, _ => { }, logged.Add);
+        string log = Assert.Single(logged);
+        Assert.Contains("W_GIT", log, StringComparison.Ordinal);
+        Assert.Contains("tar_m03aa", log, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -51,14 +58,14 @@ public class CompatibilityAnnouncerTests
         announcer.Observe(warning, lines.Add);
         announcer.Observe(warning, lines.Add);
         Assert.Single(lines);
-        Assert.Contains("W_DIFFICULTY", lines[0], StringComparison.Ordinal);
+        Assert.Contains("difficulty", lines[0], StringComparison.Ordinal);
 
         announcer.Observe(Verdict(SessionCapabilities.All), lines.Add);
         lines.Clear();
         announcer.Observe(warning, lines.Add);
 
         Assert.Single(lines);
-        Assert.Contains("W_DIFFICULTY", lines[0], StringComparison.Ordinal);
+        Assert.Contains("difficulty", lines[0], StringComparison.Ordinal);
     }
 
     [Fact]
@@ -88,7 +95,12 @@ public class CompatibilityAnnouncerTests
             Verdict(SessionCapabilities.All & ~ContentCompatibility.ObjectIdKeyed, GitNote("tat_m17aa")),
             lines.Add);
 
-        Assert.Contains(lines, l => l.Contains("tat_m17aa", StringComparison.Ordinal));
+        List<string> logged = [];
+        new CompatibilityAnnouncer().Observe(
+            Verdict(SessionCapabilities.All & ~ContentCompatibility.ObjectIdKeyed, GitNote("tat_m17aa")),
+            _ => { }, logged.Add);
+        Assert.Contains(logged, l => l.Contains("tat_m17aa", StringComparison.Ordinal));
+        Assert.Contains(lines, l => l.Contains("area layouts", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -100,7 +112,8 @@ public class CompatibilityAnnouncerTests
         announcer.Observe(new CompatibilityVerdict(
             RefusalReason.SaveGame, SessionCapabilities.None, []), lines.Add);
 
-        Assert.Contains(lines, l => l.Contains("E_SAVE", StringComparison.Ordinal));
+        Assert.Contains(lines, l => l.Contains("different saves", StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, l => l.Contains("E_SAVE", StringComparison.Ordinal));
     }
 
     [Fact]
