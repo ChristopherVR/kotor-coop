@@ -12,9 +12,9 @@ scenes (the Leviathan, Manaan, the dark-side temple, the Star Forge). Eight copi
 travelled and fought together. A complete start-to-finish campaign with two people has **not** been
 played yet, so expect the odd rough edge in places nobody has tried.
 
-This page describes the current development version, which may be newer than a downloadable release.
+This page was written for the v0.1 beta release.
 
-**Current candidate warning (3 October 2026).** Dialogue appearing over the host's equipment
+**Beta warning.** Dialogue appearing over the host's equipment
 menu and Trask disappearing on the joining player's screen have fixes awaiting ordinary
 in-game retesting. Save-name input, container responsiveness, subtitles/skipping and the
 enemy-sighted banner after saving also await confirmation. Historical **Works** results
@@ -39,9 +39,9 @@ below do not close these newer reports. Public distribution is still gated by th
 | | Status | What to expect |
 | --- | --- | --- |
 | Starting from the game's own menu | **Works** | There is a **Co-op** button on the main menu. One player presses **Host**; the other picks the server and presses **Connect**. Nothing to launch by hand. |
-| Your own character | **Works** | The first time you join, the normal character-creation screen opens and you make your character. That character comes with you every time you join, and your single-player games are never touched. While you are connected, the mod keeps a save called **Co-op** in your Load Game list; load that one, not Auto Save. |
+| Your own character | **Works** | The first time you join, the normal character-creation screen opens and you make your character. That character comes with you every time you join, and your named single-player saves are not touched. While you are connected, the mod keeps a save called **Co-op** in your Load Game list; load that one, not Auto Save. Joining uses the Auto Save slot, so your own autosave is first kept as a save called **Autosave before co-op** (the two most recent are kept). If the game crashes during a co-op save, your own quick save is put back, or kept as **Recovered quicksave**. |
 | Bringing your own backpack and credits | **Works** | Your items and credits stay yours. If you disconnect and come back, you get your own back, not your partner's. |
-| Playing over the internet | **Works, with a catch** | The reliable way is a free tunnel program such as playit.gg, run by the host. The built-in automatic port opening was tried once on a real home connection and did not work, probably because of the internet provider. If your friend cannot connect, use a tunnel. The host must allow the agent through Windows Firewall. Setup adds rules when run as Administrator; otherwise it prints the commands to run. There is no relay server. |
+| Playing over the internet | **Works, with a catch** | The reliable way is a free tunnel program such as playit.gg, run by the host. The built-in automatic port opening was tried once on a real home connection and did not work, probably because of the internet provider. If your friend cannot connect, use a tunnel. The host must allow the agent through Windows Firewall: setup asks "Allow friends to connect to games you host?" and Windows asks for permission, so say yes. If you skipped it, run setup again. There is no relay server. |
 | GOG and Steam copies together | **Works** | Any mix. Two copies on one PC need at least one to be the GOG version. |
 | Saving and loading while connected | **Works** | Either player can save or load, and the other one rejoins by itself in about 10 to 20 seconds. If the host loads a save while the other player is still watching the Endar Spire's opening movie, the other player rejoins as soon as the movie ends. |
 | Reconnecting after a drop | **Works** | You come back into the shared world. If the mod cannot tell your world still matches, it reloads you into the host's world after about 15 seconds, keeping your character, backpack and credits. |
@@ -50,7 +50,8 @@ below do not close these newer reports. Public distribution is still gated by th
 | The host's helper process crashes | **Works, with a catch** | Restarting the helper does not restore the hosted session by itself. The host must choose **Host** again before the joining player can reconnect. A replacement helper waiting in menu mode is not a recovered session. |
 | Three or more players | **Works, with a catch** | Up to eight can connect. Three players made twelve area changes in half an hour, and eight copies travelled and fought a shared enemy together. A whole campaign, and every kind of fight at that size, has not been tried. |
 | Different mods on each side | **Works, with a catch** | The mod compares installs when you connect and tells you on screen what differs and what it switched off because of it. Any difference in the game's core files switches things off cautiously, even a cosmetic one. Checking a large install can make startup slower. |
-| Wrong mod version on one side | **Works** | Refused in about a second with a clear message. |
+| Wrong mod version on one side | **Works** | Refused in about a second with a plain message such as "Your co-op mod version differs from the host's ... Both players need the same release." A wrong game version or password gets its own plain message too ("Wrong password. Ask the host for the password and try again."). |
+| The host stops responding | **Works** | After about a minute you see "The host has stopped responding. Still trying - type `disconnect` to play on alone." After five minutes the mod gives up: "Gave up on the host after 5 minutes. Use Co-op > Connect, or type `reconnect`, to try again." |
 
 ## Moving around the world
 
@@ -145,10 +146,9 @@ through the game's own scripts and conversations.
 - **The joining player's click on a Manaan airlock or on Bastila at the dark-side temple hands the
   scene to the host.** That is deliberate: the host runs those scenes so the story stays in one place.
 - **A settings file from an old install keeps its old values.** The installer never overwrites your
-  settings. If something this page says is on seems off, compare with
-  `profiles/coop.ini.example` in the repository. The packaged PowerShell wrapper offers
-  `install.ps1 -UpdateDefaults` for selected changed defaults; double-click setup does not
-  offer that migration option.
+  settings. Double-click setup previews any settings that still match older defaults and offers
+  to update them, after making a backup; decline to keep yours. If something this page says is on
+  seems off, compare with the packaged `KotorCoop.DEFAULTS.ini`.
 
 ## Not yet tried on real hardware
 
