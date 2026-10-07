@@ -17,6 +17,7 @@ characters, travel, fight, loot, talk and pause together.
 The game executable on disk is unchanged; the mod hooks the running game.
 Mod files live beside swkotor.exe and can be removed.
 Co-op play writes dedicated saves and uses the game's Auto Save slot; see "Play" below.
+Your own autosave is kept first, as a save called "Autosave before co-op".
 
 Updates preserve coop.ini. Setup previews player settings matching older defaults
 and asks before applying changes, with a backup first. Decline to keep those values.
@@ -49,6 +50,17 @@ KotorCoop.Agent.exe. It finds your KOTOR install
 (GOG or Steam, or asks if it finds none or several), copies everything in, and offers to launch
 the game.
 
+Setup asks "Allow friends to connect to games you host?" Say yes, and say yes again when
+Windows asks for permission. If you skipped it, run KotorCoop.Agent.exe again.
+
+If your game is in Program Files (GOG Galaxy's default), Windows protects that folder. Setup
+notices and offers to restart as administrator; say yes. If it says "No GOG or Steam KOTOR
+install found", find the folder yourself: on Steam, right-click the game > Manage > Browse
+local files; in GOG Galaxy, open the game, click the settings cog > Manage installation >
+Show folder. If setup says it is running from inside the zip file, extract the whole zip
+first. If swkotor.exe is not version 1.03, setup warns you; update the game through GOG or
+Steam and run setup again.
+
 Use this installer for updates on every player's computer; it preserves coop.ini.
 If another mod already has dinput8.dll (ReShade, an ASI loader, a
 widescreen fix...) the installer offers to preserve it and load both mods together
@@ -59,6 +71,30 @@ Use the same co-op version and matching game mods for your first session.
 Direct extraction into the game folder is only for a clean install without dinput8.dll
 or coop.ini already there. Extracting over an existing install can overwrite another mod
 and your settings; Explorer cannot run the installer's preservation logic.
+
+Windows says it is unsafe, or antivirus removed a file
+-------------------------------------------------------
+
+The files are not code-signed, so Windows SmartScreen may say "Windows protected your PC".
+Click More info, then Run anyway. To check the download, compare its SHA-256 with the one
+on the release page.
+
+Some antivirus programs quarantine dinput8.dll after install. Then the Co-op button does not
+appear. Add the game folder as an exclusion (Windows Security > Virus & threat protection >
+Manage settings > Exclusions) and run KotorCoop.Agent.exe again to restore the file.
+KotorCoop.Agent.exe install --check says when the file is missing.
+
+What the mod changes
+--------------------
+
+- It adds its files beside swkotor.exe. The game executable itself is not changed.
+- It turns on the game's cheat console setting (EnableCheats=1 in swkotor.ini) so the ~
+  console works. Your original file is kept as swkotor.ini.kcoop-orig, and uninstall puts
+  the original setting back.
+- Before co-op uses the Auto Save slot, your own autosave is kept as a save called "Autosave
+  before co-op" (the two most recent are kept). If the game crashes during a co-op save,
+  your own quick save is restored, or kept as "Recovered quicksave".
+- It adds a "Co-op" save and saves\kotorcoop-character.* for your co-op character.
 
 Play
 ----
@@ -81,10 +117,12 @@ character is separate from any single-player game on the same install: the mod k
 saves\kotorcoop-character.*, refreshes it whenever you save while connected, and drops it into
 the host's world at the area entrance. While connected the mod keeps its own dedicated save --
 "Co-op" in the Load Game list -- refreshed every 10 minutes and as you leave, holding the
-HOST's world. Your Quick Save is never touched by the
-mod. The game's own Auto Save slot is still used to bring the host's world in the instant you
-join or rejoin (an engine requirement), and keeps autosaving through it as you play, same as
-single player always did -- load "Co-op" for the save meant to be kept, not Auto Save. To start
+HOST's world. Your named saves and Quick Save are not touched by the
+mod (if the game crashes during a co-op save, your Quick Save is put back, or kept as
+"Recovered quicksave"). The game's own Auto Save slot is still used to bring the host's world
+in the instant you join or rejoin (an engine requirement), and keeps autosaving through it as
+you play. Your own single-player autosave is kept first, as "Autosave before co-op" (the two
+most recent are kept). Load "Co-op" for the save meant to be kept, not Auto Save. To start
 a brand-new game together, the host plays until the first autosave (or saves once), then hosts.
 
 Want a different co-op character? Set join_mode = newcharacter in coop.ini for one join and
@@ -95,6 +133,17 @@ Related: auto_adopt_world (on by default) is what fetches the host's world whene
 does not match theirs. With it off you can still join, but enemies, doors, containers and the
 party stop being shared -- the two of you are in worlds that disagree about which object is
 which. Neither setting ever writes your named saves.
+
+If the host stops responding, after about a minute you see "The host has stopped responding.
+Still trying - type `disconnect` to play on alone." After five minutes the mod gives up:
+"Gave up on the host after 5 minutes. Use Co-op > Connect, or type `reconnect`, to try
+again." If you join in the first seconds after the host starts, you wait a few seconds for
+the host rather than being refused.
+
+When your install differs from the host's, you get a plain sentence on screen, for example
+"Your co-op mod version differs from the host's ... Both players need the same release." or
+"Wrong password. Ask the host for the password and try again." The short error tags are
+written to the logs only.
 
 Press ~ in game for the console: connect <ip> [password], disconnect, reconnect,
 say <message>. Tab completes, Up/Down recalls history. You don't need the console just to
@@ -165,7 +214,9 @@ The server browser only finds games on your own network. To play with someone el
 
        public address: 203.0.113.5:27140 - UPnP mapped - local self-test passed; internet access unconfirmed
 
-   The router accepted the mapping. The self-test runs from your own PC, not outside:
+   Automatic port opening (UPnP) was tried once on a real home connection and did not work.
+   If a friend cannot connect, use a tunnel such as playit.gg. When it does work, the
+   router accepted the mapping. The self-test runs from your own PC, not outside:
    - "local self-test passed; internet access unconfirmed": share the address and have
      your friend try connecting. This tests a local UDP path, not internet access or TCP.
    - "possible additional NAT": check upstream routers or use a tunnel such as playit.gg.
@@ -181,10 +232,10 @@ The server browser only finds games on your own network. To play with someone el
    and this step is automatic; if yours doesn't, forwarding by hand is the alternative --
    there's no relay of our own.
 
-   Windows Firewall: the installer adds an inbound rule for KotorCoop.Agent.exe when it is
-   run as Administrator (UDP on the session port plus 27016 for the LAN browser, TCP on the
-   session port); otherwise it prints the two netsh commands to run once from an
-   Administrator prompt. KotorCoop.Agent.exe install --check tells you whether the rule
+   Windows Firewall: setup asks "Allow friends to connect to games you host?" and Windows
+   asks for permission (UDP on the session port plus 27016 for the LAN browser, TCP on the
+   session port). Say yes. If you skipped it, run KotorCoop.Agent.exe again, or run the two
+   netsh commands it prints from an Administrator prompt. KotorCoop.Agent.exe install --check tells you whether the rule
    exists. Without it Windows may silently drop your friend's traffic: the agent runs
    behind the game, so its firewall prompt is easy to miss.
 2. Share the address the host was given (or a hostname/DDNS address pointing at it -- connect
@@ -211,6 +262,8 @@ Requirements
 
 - 64-bit Windows. Nothing else to install: KotorCoop.Agent.exe carries its own .NET
   runtime (that is why it is ~40 MB).
+- The game runs at its own 800x600 size in co-op. Wide-screen resolutions were tried and
+  the game fell back to 800x600.
 - KOTOR 1, v1.0.3, from GOG or Steam. Mixed-store sessions have been tested;
   see "Steam" below for same-PC restrictions and optional invites.
 - For two players on one machine: a second copy of the game folder, with this installed
@@ -273,7 +326,8 @@ Screen, Internet play and Advanced. The most commonly-touched ones:
   dialogue_auto_join whether you're pulled into a conversation your partner starts.
   stun_servers       STUN servers asked for the host's public address (see "Play over the
                      internet"). Empty disables it.
-  upnp               1 (default) tries to forward the port automatically when hosting.
+  upnp               1 (default) tries to forward the port automatically when hosting. It has
+                     not worked on the one real home connection tried; use a tunnel if needed.
 
 That's the whole file -- it's deliberately short. The mod has many more internal switches for
 tuning and bisecting bugs during development; they aren't in coop.ini on purpose, since a
@@ -323,8 +377,12 @@ while running from there):
 
     KotorCoop.Agent.exe uninstall --game-path "C:\GOG Games\Star Wars KOTOR (GOG)"
 
-Removes only what was installed (it recognises its own dinput8.dll by a marker and leaves any
-other mod's alone, restoring dinput8.prev.dll to its original name) and keeps your coop.ini.
+Removes what was installed: the mod files, the coop-mods folder, the kotorcoop-agent logs and
+kotorcoop-last-address.txt. It recognises its own dinput8.dll by a marker and leaves any
+other mod's alone, restoring dinput8.prev.dll to its original name, and it puts your original
+EnableCheats setting back in swkotor.ini. It keeps, on purpose, your coop.ini, the "Co-op"
+save and saves\kotorcoop-character.*, and lists them when it finishes. If it finds two
+installs, it asks, or add --game-path.
 install.ps1 -GameDir ... [-Uninstall|-Chain|-Force|-Check] is the same thing for PowerShell
 users.
 
@@ -347,6 +405,8 @@ player's helper. Clients talk only to the host.
 Something is wrong
 -------------------
 
+- No Co-op button, and dinput8.dll is missing: antivirus probably removed it. See "Windows
+  says it is unsafe" above.
 - Not sure the install is right (especially with a chained mod involved): run
   KotorCoop.Agent.exe install --check (or install.ps1 -Check, from the extracted package).
   It reports what's actually there -- plain, chained, or nothing installed -- checks that every
@@ -365,7 +425,8 @@ Something is wrong
   and saves\kotorcoop-character.json in your game folder once and join again -- you will make a
   fresh character, and from then on it is kept correctly.
 - Partner never appears / "no reply from host": ports must match and the host's UDP port
-  must be open; passwords must match exactly.
+  must be open; passwords must match exactly. Your friend can only reach you if you said yes
+  to the firewall question during setup.
 - Nothing happens at all: look for kotorcoop-plugin.log beside the game. If it does
   not exist the plugin never loaded -- dinput8.dll must be in the same folder as
   swkotor.exe (read dinput8-chain.log if you use the chain loader).

@@ -16,7 +16,7 @@ the same ground for anyone reading the repository, players and developers both.
 
 ## What to expect
 
-**Development candidate, awaiting public-release sign-off.** Recent fixes for dialogue
+**Experimental beta, awaiting public-release sign-off.** Recent fixes for dialogue
 starting over the host's equipment menu and Trask disappearing on the joining player's
 screen still need ordinary in-game confirmation. Save-name input, container responsiveness,
 dialogue presentation and the post-save enemy-sighted banner also need confirmation.
@@ -48,6 +48,8 @@ players, and it is the page to read before you plan a long session.
 ## Requirements
 
 - 64-bit Windows. The download needs nothing else installed.
+- The game runs at its own 800x600 size in co-op. Wide-screen resolutions were tried and the
+  game fell back to 800x600.
 - **KOTOR 1, version 1.0.3**, from GOG or Steam. KOTOR 2 is not touched.
 - To run two copies on one PC you need a second copy of the game folder, and at least one of the two
   must be the GOG version (Steam allows only one running copy).
@@ -66,6 +68,32 @@ If another mod already uses the same helper file (ReShade, an ASI loader and sim
 notices and sets the two up side by side automatically. See [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
 if anything looks off.
 
+Setup also handles three things you might otherwise trip over:
+
+- It asks "Allow friends to connect to games you host?" Say yes, and say yes again when Windows
+  asks for permission. If you skipped it, run `KotorCoop.Agent.exe` again.
+- A game in Program Files (GOG Galaxy's default) is protected by Windows. Setup notices and offers
+  to restart as administrator.
+- If Windows SmartScreen says "Windows protected your PC", choose **More info**, then **Run
+  anyway** (the files are not code-signed). Compare the zip's SHA-256 with the one on the release
+  page if you want to check it. If antivirus removes `dinput8.dll`, the Co-op button disappears:
+  add the game folder as an antivirus exclusion and run `KotorCoop.Agent.exe` again.
+
+### What the mod changes
+
+- It adds its files beside `swkotor.exe` (`dinput8.dll`, the plugin, `coop.ini`, a `coop-mods`
+  folder and logs). The game executable is not changed.
+- It turns on the game's cheat console setting (`EnableCheats=1` in `swkotor.ini`) so the `~`
+  console works. Your original file is kept as `swkotor.ini.kcoop-orig`, and uninstall puts the
+  original setting back.
+- It keeps your own autosave as a save called "Autosave before co-op" (the two most recent are
+  kept) before co-op uses the Auto Save slot. If the game crashes during a co-op save, your own
+  quick save is restored, or kept as "Recovered quicksave".
+- It adds a "Co-op" save and `saves\kotorcoop-character.*` for your co-op character.
+- Uninstall (`KotorCoop.Agent.exe uninstall`, run from the extracted zip) removes the mod files,
+  logs and remembered address. It keeps `coop.ini`, the "Co-op" save and your co-op character, and
+  lists them when it finishes.
+
 Updates preserve coop.ini. Setup can show player settings matching older defaults
 and offer to update them after creating a backup; declining preserves them. Compare
 the packaged **KotorCoop.DEFAULTS.ini** when adjusting settings yourself. For a bug
@@ -77,16 +105,24 @@ overwrite another mod and your settings. Back up your `saves` folder before your
 
 ## Your first session
 
-Start KOTOR and click **Co-op** on the main menu.
+1. Extract the zip into its own folder.
+2. Run `KotorCoop.Agent.exe` and follow the prompts.
+3. Say yes to the firewall question ("Allow friends to connect to games you host?").
+4. Launch KOTOR.
+5. On the main menu choose **Co-op > Host**. Your friend picks your server in the list, or
+   chooses **Connect to an address...** and then **Connect**.
+
+In more detail: start KOTOR and click **Co-op** on the main menu.
 
 - **Host:** press **Host** (from any save, or from a new game once you reach the first autosave).
 - **Everyone else:** pick the host in the list and press **Connect**. To join over the internet,
   choose **Connect to an address...** at the bottom of the list and type what the host gives you.
 
 The first time you join, the normal character-creation screen opens and you build your own
-character. That character is yours on every later join, and your named single-player saves are never touched.
+character. That character is yours on every later join, and your named single-player saves are not touched.
 While connected, the mod keeps a save called **Co-op** in your Load Game list. Load that one to keep
-your progress, not Auto Save. Joining uses the game's Auto Save slot, so keep a named save
+your progress, not Auto Save. Joining uses the game's Auto Save slot. Your own autosave is first kept
+as a save called **Autosave before co-op** (the two most recent are kept), but keep a named save
 or backup for any single-player progress you want to preserve.
 
 
@@ -107,7 +143,7 @@ is in [docs/CONSOLE.md](docs/CONSOLE.md).
 | Controls | Works, with catches | [limitations § Controls and interface](docs/limitations.md#controls-and-interface) |
 
 **Mods do not have to match.** When you connect, the two installs compare notes and the mod tells
-you on screen what differs and what it switched off because of it.
+you on screen, in plain sentences, what differs and what it switched off because of it.
 
 For your first session, use matching game mods and the same co-op version. A connection that
 continues with shared features disabled is not proof that different content is compatible.
