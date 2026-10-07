@@ -794,6 +794,15 @@ public sealed class PackageInstallerTests : IDisposable
     }
 
     [Fact]
+    public void HiddenFirewallVerbParsesItsAddFlag()
+    {
+        AgentOptions options = AgentOptions.Parse(["firewall", "--add", "--game-path", @"C:\Games\KOTOR"]);
+        Assert.Equal(AgentCommand.Firewall, options.Command);
+        Assert.True(options.FirewallAdd);
+        Assert.True(options.HasGamePath);
+    }
+
+    [Fact]
     public void UninstallWithNoSavedOriginalLeavesSwkotorIniAlone()
     {
         string root = NewRoot();

@@ -111,8 +111,10 @@ if [ -z "$game" ]; then
     done < <(candidates)
 
     if [ ${#found[@]} -eq 0 ]; then
-        echo "no KOTOR install found (looked in the Steam libraries, ~/Games/Heroic and ~/Games)." >&2
+        echo "no GOG or Steam KOTOR install found (looked in the Steam libraries, ~/Games/Heroic and ~/Games)." >&2
         echo "pass it: bash install.sh --game-dir /path/to/swkotor   (the folder holding swkotor.exe)" >&2
+        echo "to find the folder: Steam - right-click the game > Manage > Browse local files;" >&2
+        echo "Heroic/GOG - game settings > the install path shown there." >&2
         exit 1
     elif [ ${#found[@]} -eq 1 ]; then
         game="${found[0]}"
@@ -133,6 +135,18 @@ fi
 [ -d "$game" ] || { echo "game directory not found: $game" >&2; exit 1; }
 game="$(cd "$game" && pwd)"
 [ -f "$game/swkotor.exe" ] || echo "warning: no swkotor.exe in $game - is this really the game directory?"
+
+# Before ANY change (a read-only mount, another user's folder): the same up-front probe
+# PackageInstaller.RequireWritable does, so nothing is half-changed.
+if [ "$mode" != check ]; then
+    probe="$game/.kotorcoop-write-test-$$"
+    if ! { : > "$probe"; } 2>/dev/null; then
+        echo "cannot write to $game - the folder is protected or read-only. Nothing was changed." >&2
+        echo "run this as the user that owns the game folder (or fix its permissions), then try again." >&2
+        exit 1
+    fi
+    rm -f "$probe"
+fi
 
 proxy="$game/dinput8.dll"
 chain_plugin="$game/KotorCoop.Plugin.dll"
@@ -176,6 +190,18 @@ check() {
                 report 1 "$chain_file is MISSING"
             fi ;;
     esac
+    # A missing plugin beside the rest of our files: antivirus probably quarantined it.
+    other=0
+    for f in "$game"/KotorCoop.*; do
+        [ -e "$f" ] && [ "$(basename "$f")" != KotorCoop.Plugin.dll ] && other=1
+    done
+    { [ -f "$chain_file" ] || [ -f "$chain_plugin" ]; } && other=1
+    missing=''
+    if [ "$kind" = none ] && [ $other = 1 ]; then missing='dinput8.dll'
+    elif [ "$kind" = loader ] && [ ! -f "$chain_plugin" ] && [ $other = 1 ]; then missing='KotorCoop.Plugin.dll'; fi
+    if [ -n "$missing" ]; then
+        echo "NOTE: $missing is missing but other kotor-coop files are still here - antivirus software has probably removed it. Add the game folder as an exclusion in your antivirus, then run install.sh again to restore it."
+    fi
     if [ -f "$game/coop.ini" ]; then report 0 "$game/coop.ini exists"; else report 1 "$game/coop.ini is MISSING"; fi
     if [ -f "$game/KotorCoop.Agent.exe" ]; then report 0 "$game/KotorCoop.Agent.exe is present"; else report 1 "$game/KotorCoop.Agent.exe is MISSING"; fi
     return $ok
@@ -196,8 +222,11 @@ uninstall() {
     if [ -f "$previous" ] && [ ! -f "$proxy" ]; then
         mv "$previous" "$proxy"; echo "restored the other mod's dinput8.dll from dinput8.prev.dll"
     fi
-    for f in kotorcoop-plugin.log dinput8-chain.log; do
+    for f in kotorcoop-plugin.log dinput8-chain.log kotorcoop-last-address.txt; do
         [ -f "$game/$f" ] && { rm -f "$game/$f"; echo "removed $game/$f"; }
+    done
+    for f in "$game"/kotorcoop-agent*.log*; do
+        [ -e "$f" ] && { rm -f "$f"; echo "removed $f"; }
     done
     for f in "$game"/KotorCoop.*; do
         [ -e "$f" ] && { rm -f "$f"; echo "removed $f"; }
@@ -205,6 +234,74 @@ uninstall() {
     for f in "$game"/Override/k_coop_*; do
         [ -e "$f" ] && { rm -f "$f"; echo "removed override $f"; }
     done
+    remove_mod_profiles
+    restore_enable_cheats
+    report_left_in_place
+    return 0
+}
+
+# coop-mods\*.json: only the files install recorded in kotorcoop-installed.txt (a profile a
+# player added by hand is never in it); the folder goes too when that leaves it empty.
+remove_mod_profiles() {
+    dir="$game/coop-mods"
+    [ -d "$dir" ] || return 0
+    if [ -f "$dir/kotorcoop-installed.txt" ]; then
+        while read -r name; do
+            name="$(printf '%s' "$name" | tr -d '\r')"
+            case "$name" in ''|*/*) continue ;; esac
+            [ -f "$dir/$name" ] && { rm -f "$dir/$name"; echo "removed $dir/$name"; }
+        done < "$dir/kotorcoop-installed.txt"
+        rm -f "$dir/kotorcoop-installed.txt"
+    fi
+    if rmdir "$dir" 2>/dev/null; then echo "removed $dir"
+    else echo "left $dir in place: it holds files kotor-coop did not install"; fi
+}
+
+# Puts [Game Options] EnableCheats back to the player's original from swkotor.ini.kcoop-orig
+# (saved by the plugin before it first switched cheats on) and touches ONLY that key: awk
+# keeps every other line and its line ending (\r stays part of the line).
+enable_cheats_of() { # file -> raw value of [Game Options] EnableCheats, empty if absent
+    awk '{ l=$0; sub(/\r$/,"",l) }
+         l ~ /^[[:space:]]*\[/ { insec = (tolower(l) ~ /^[[:space:]]*\[game options\][[:space:]]*$/); next }
+         insec && l ~ /^[[:space:]]*[Ee][Nn][Aa][Bb][Ll][Ee][Cc][Hh][Ee][Aa][Tt][Ss][[:space:]]*=/ {
+             sub(/^[^=]*=[[:space:]]*/,"",l); sub(/[[:space:]]*$/,"",l); print l; exit }' "$1"
+}
+restore_enable_cheats() {
+    orig="$game/swkotor.ini.kcoop-orig"; ini="$game/swkotor.ini"
+    [ -f "$orig" ] || return 0
+    if [ -f "$ini" ]; then
+        has=0; awk 'BEGIN{s=0} { l=$0; sub(/\r$/,"",l) }
+            l ~ /^[[:space:]]*\[/ { s=(tolower(l) ~ /^[[:space:]]*\[game options\][[:space:]]*$/); next }
+            s && l ~ /^[[:space:]]*[Ee][Nn][Aa][Bb][Ll][Ee][Cc][Hh][Ee][Aa][Tt][Ss][[:space:]]*=/ { f=1 }
+            END{exit f?0:1}' "$orig" && has=1
+        want="$(enable_cheats_of "$orig")"
+        tmp="$ini.kcoop-tmp"
+        awk -v has="$has" -v want="$want" '
+            function hdr(l) { return tolower(l) ~ /^[[:space:]]*\[game options\][[:space:]]*$/ }
+            { raw=$0; l=raw; cr=(l ~ /\r$/) ? "\r" : ""; sub(/\r$/,"",l) }
+            l ~ /^[[:space:]]*\[/ { if (hdr(l)) { insec=1; seen=1; print raw; if (has && !done) { print "EnableCheats=" want cr; done=1 } next } insec=0 }
+            insec && l ~ /^[[:space:]]*[Ee][Nn][Aa][Bb][Ll][Ee][Cc][Hh][Ee][Aa][Tt][Ss][[:space:]]*=/ { next }
+            { print raw }
+            END { if (has && !seen) { print "[Game Options]"; print "EnableCheats=" want } }' "$ini" > "$tmp" \
+            && mv -f "$tmp" "$ini"
+        if [ "$has" = 1 ]; then echo "restored swkotor.ini: EnableCheats=$want (your original setting)"
+        else echo "restored swkotor.ini: EnableCheats removed again (your original had none)"; fi
+    fi
+    rm -f "$orig"; echo "removed $orig"
+}
+
+report_left_in_place() {
+    kept=''
+    [ -f "$game/coop.ini" ] && kept="coop.ini (your co-op settings)"
+    if [ -d "$game/saves" ]; then
+        for d in "$game"/saves/*Co-op*; do
+            [ -e "$d" ] && { kept="${kept:+$kept; }the \"Co-op\" save in the saves folder (your co-op progress)"; break; }
+        done
+        for f in "$game"/saves/kotorcoop-character.*; do
+            [ -e "$f" ] && { kept="${kept:+$kept; }saves/kotorcoop-character.* (your co-op character)"; break; }
+        done
+    fi
+    [ -n "$kept" ] && echo "left in place on purpose (delete by hand if you want them gone): $kept"
     return 0
 }
 
@@ -245,8 +342,16 @@ if [ $chain = 1 ]; then
         if [ -f "$previous" ]; then echo "$previous already exists - resolve that first (an earlier chain install?)" >&2; exit 1; fi
         mv "$proxy" "$previous"; echo "kept the existing dinput8.dll as dinput8.prev.dll"
     fi
-    cp -f "$package/chain-loader/dinput8.dll" "$proxy"; echo "installed loader -> $proxy"
-    cp -f "$package/dinput8.dll" "$chain_plugin"; echo "installed plugin -> $chain_plugin"
+    # If a copy fails after the other mod was moved aside, put it back: never leave the game
+    # with no dinput8.dll (PackageInstaller rolls back the same way).
+    if ! { cp -f "$package/chain-loader/dinput8.dll" "$proxy" && cp -f "$package/dinput8.dll" "$chain_plugin"; }; then
+        if [ "$existing" = foreign ]; then
+            mv -f "$previous" "$proxy" && echo "install failed; put the other mod's dinput8.dll back at $proxy"
+        fi
+        exit 1
+    fi
+    echo "installed loader -> $proxy"
+    echo "installed plugin -> $chain_plugin"
 
     entries=()
     while read -r e; do
@@ -290,6 +395,21 @@ for f in "$package"/KotorCoop.*; do
     cp -f "$f" "$game/$(basename "$f")"; n=$((n + 1))
 done
 echo "installed agent -> $game ($n files)"
+
+if [ -d "$package/coop-mods" ]; then
+    mkdir -p "$game/coop-mods"
+    n=0
+    for f in "$package"/coop-mods/*.json; do
+        [ -f "$f" ] || continue
+        cp -f "$f" "$game/coop-mods/$(basename "$f")"; n=$((n + 1))
+    done
+    # Which files are ours, for uninstall (not a .json: the profile loader reads *.json only).
+    { [ -f "$game/coop-mods/kotorcoop-installed.txt" ] && cat "$game/coop-mods/kotorcoop-installed.txt"
+      for f in "$package"/coop-mods/*.json; do [ -f "$f" ] && basename "$f"; done; } 2>/dev/null \
+        | tr -d '\r' | sort -u > "$game/coop-mods/kotorcoop-installed.txt.new" \
+        && mv -f "$game/coop-mods/kotorcoop-installed.txt.new" "$game/coop-mods/kotorcoop-installed.txt"
+    echo "installed mod compatibility profiles -> $game/coop-mods ($n files)"
+fi
 
 if [ -d "$package/Override" ]; then
     mkdir -p "$game/Override"
