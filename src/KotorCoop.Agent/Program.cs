@@ -11,6 +11,23 @@ internal static class Program
     {
         AgentOptions options = AgentOptions.Parse(args);
 
+        // Launched by the plugin with its log path: write the log ourselves so it can rotate
+        // mid-session (RotatingLogWriter). Falls back to the inherited stdout if it cannot open.
+        if (!string.IsNullOrEmpty(options.ConsoleLog))
+        {
+            try
+            {
+                RotatingLogWriter log = new(options.ConsoleLog, options.ConsoleLogMb, options.ConsoleLogKeep);
+                Console.SetOut(log);
+                Console.SetError(log);
+                RotatingLogWriter.ReleaseInheritedStdHandles();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Console.Error.WriteLine($"could not open the rotating log '{options.ConsoleLog}': {ex.Message}");
+            }
+        }
+
         // Linux/Proton: NEEDS-LIVE, no Wine box exists to confirm this against — see
         // KotorCoop.Memory.WineDetection's own doc comment for the detection method. Printed
         // once, before dispatch, so a Linux player sees it whichever verb they ran (including

@@ -137,6 +137,18 @@ public sealed record AgentOptions
     /// this file gets one timestamped line per change, which is the form worth keeping.</summary>
     public string? LogFile { get; init; }
 
+    /// <summary>When set (the plugin's launcher passes <c>kotorcoop-agent.log</c>), Console.Out
+    /// and Console.Error go through a size-capped <see cref="RotatingLogWriter"/> on this path
+    /// instead of the inherited stdout handle, so one very long session cannot grow the file
+    /// without bound.</summary>
+    public string? ConsoleLog { get; init; }
+
+    /// <summary>Cap for <see cref="ConsoleLog"/> in MB (coop.ini log_max_mb).</summary>
+    public int ConsoleLogMb { get; init; } = KotorCoop.Plugin.LogRotation.DefaultCapMb;
+
+    /// <summary>Rotated generations kept for <see cref="ConsoleLog"/> (coop.ini log_keep).</summary>
+    public int ConsoleLogKeep { get; init; } = KotorCoop.Plugin.LogRotation.DefaultKeepGenerations;
+
     /// <summary>craft-save: the save directory to copy from. Untouched by the craft.</summary>
     public string? CraftSource { get; init; }
 
@@ -313,6 +325,9 @@ public sealed record AgentOptions
         bool menuConnect = false;
         string? dropFile = null;
         string? logFile = null;
+        string? consoleLog = null;
+        int consoleLogMb = KotorCoop.Plugin.LogRotation.DefaultCapMb;
+        int consoleLogKeep = KotorCoop.Plugin.LogRotation.DefaultKeepGenerations;
         string? craftSource = null;
         string? craftDest = null;
         List<string> craftBooleans = [];
@@ -519,6 +534,18 @@ public sealed record AgentOptions
                     logFile = Next();
                     break;
 
+                case "--console-log":
+                    consoleLog = Next();
+                    break;
+
+                case "--console-log-mb":
+                    consoleLogMb = int.TryParse(Next(), out int parsedLogMb) ? parsedLogMb : consoleLogMb;
+                    break;
+
+                case "--console-log-keep":
+                    consoleLogKeep = int.TryParse(Next(), out int parsedLogKeep) ? parsedLogKeep : consoleLogKeep;
+                    break;
+
                 case "--source":
                     craftSource = Next();
                     break;
@@ -621,6 +648,9 @@ public sealed record AgentOptions
             MenuConnect = menuConnect,
             DropFile = dropFile,
             LogFile = logFile,
+            ConsoleLog = consoleLog,
+            ConsoleLogMb = consoleLogMb,
+            ConsoleLogKeep = consoleLogKeep,
             CraftSource = craftSource,
             CraftDest = craftDest,
             CraftBooleans = craftBooleans,
