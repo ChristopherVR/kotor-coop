@@ -110,9 +110,7 @@ jobs:
           sha='${{ steps.what.outputs.sha }}'
           kind='${{ steps.what.outputs.kind }}'
           zip_size=$(du -k "$zip" | cut -f1)
-          tgz_size=$(du -k "$tgz" | cut -f1)
           zip_sha256=$(sha256sum "$zip" | cut -d' ' -f1)
-          tgz_sha256=$(sha256sum "$tgz" | cut -d' ' -f1)
           version=${zip_name#kotor-coop-}; version=${version%-windows.zip}
           source_version=$(git show "$sha:VERSION" | tr -d '[:space:]')
           bumped=$(git log -1 --format=%H "$sha" -- VERSION)
@@ -154,7 +152,7 @@ jobs:
               echo
               echo "It contains the plugin (\`dinput8.dll\`), the chain loader for sharing \`dinput8.dll\` with another mod, the agent, the override assets, \`coop.ini\` and a README that covers install, play and troubleshooting."
               echo
-              echo "SHA-256 \`$zip_sha256\` ($zip_name) · \`$tgz_sha256\` ($tgz_name) · built by CI run [${{ steps.what.outputs.run_id }}](https://github.com/${{ github.repository }}/actions/runs/${{ steps.what.outputs.run_id }}) from \`${sha:0:7}\`."
+              echo "SHA-256 \`$zip_sha256\` ($zip_name) · built by CI run [${{ steps.what.outputs.run_id }}](https://github.com/${{ github.repository }}/actions/runs/${{ steps.what.outputs.run_id }}) from \`${sha:0:7}\`."
               echo
               echo "> Experimental beta: a complete co-op campaign has not been verified. Read the [current limitations](https://github.com/${{ github.repository }}/blob/$sha/docs/limitations.md) before starting."
             } > notes.md
@@ -175,7 +173,7 @@ jobs:
             fi
             local status=(--latest)
             if [[ "$vtag" == *-* ]]; then status=(--prerelease --latest=false); fi
-            gh release create "$vtag" "$zip" "$tgz" --target "$sha" --title "$vtag" \
+            gh release create "$vtag" "$zip" --target "$sha" --title "$vtag" \
               --notes-file notes.md "${extra[@]}" "${status[@]}"
           }
 
