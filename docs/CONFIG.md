@@ -116,7 +116,7 @@ fallback (they agree here — `CoopIniExampleDocSyncTests` checks it).
 
 | Key | Default (shipped) | Meaning | Doc |
 | --- | --- | --- | --- |
-| `gamepad` | ON | play with an Xbox-style (XInput) controller; the pad drives the game's own key bindings and cursor. 0 turns it off entirely | [gamepad.md](research/gamepad.md) |
+| `gamepad` | OFF | play with an Xbox-style (XInput) controller; the pad drives the game's own key bindings and cursor. set 1 to turn it on (off by default) | [gamepad.md](research/gamepad.md) |
 | `gamepad_cursor_speed` | `1.0` | cursor speed multiplier for the sticks, 0.1 - 5 | [gamepad.md](research/gamepad.md) |
 
 ### Internet play

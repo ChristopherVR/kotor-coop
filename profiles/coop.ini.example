@@ -150,8 +150,8 @@ chat_overlay_fade_ms = 9000
 ; menu, Back = map, LS click = stealth, RS click = cursor mode (both sticks move the cursor,
 ; A clicks - automatic in menus, conversations and at the main menu). Your swkotor.ini key
 ; bindings are respected. Typing (passwords, chat, the console) still needs a keyboard.
-; 0 turns the controller off entirely.
-gamepad = 1
+; Off by default; set 1 to turn it on.
+gamepad = 0
 
 ; Cursor speed multiplier for the sticks (0.1 - 5).
 gamepad_cursor_speed = 1.0

@@ -353,6 +353,13 @@ public static class WorldAdoption
 
         try
         {
+            // Keep the joiner's own single-player autosave as a visible save before the host's
+            // world replaces it (once per process; best-effort).
+            if (AutosaveBackup.TryBackupOnce(Path.GetDirectoryName(slot)!, out string backupDiagnostic))
+            {
+                log?.Invoke($"world adoption: {backupDiagnostic}");
+            }
+
             WorldTransfer.WriteSaveDirectory(slot, world);
             PersonalPazaak.Restore(player, slot);
 
