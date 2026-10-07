@@ -137,8 +137,7 @@ which. Neither setting ever writes your named saves.
 If the host stops responding, after about a minute you see "The host has stopped responding.
 Still trying - type `disconnect` to play on alone." After five minutes the mod gives up:
 "Gave up on the host after 5 minutes. Use Co-op > Connect, or type `reconnect`, to try
-again." If you join in the first seconds after the host starts, you wait a few seconds for
-the host rather than being refused.
+again."
 
 When your install differs from the host's, you get a plain sentence on screen, for example
 "Your co-op mod version differs from the host's ... Both players need the same release." or

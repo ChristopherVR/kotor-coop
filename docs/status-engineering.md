@@ -306,6 +306,19 @@ and exact log lines are in the linked research sections and in review-seamless-2
 | Memory over a warp soak | **Bounded plugin heap** | the plugin's managed heap stays at 1-5 MB; game private bytes grow ~1.5 MB per warp between two modules (engine-native) |
 | A joiner cannot leave the Ebon Hawk (or any party-select-gated exit) alone | **Crash fix live-CONFIRMED; relay rebuilt to fire the causal trigger (protocol 74), NEEDS-LIVE** | The joiner's own screen was suppressed with nobody able to pick — the host got no notice at all. Crash fix (live-CONFIRMED): the suppression sweep deletes the engine's persistently-reused panel object without nulling `CGuiInGame+0x78` afterward, so `CGuiInGame::ShutDown` double-frees it at the next module unload; fixed by nulling the field right after the sweep, confirmed by a control run (identical host-led Hawk exit, joiner never suppressed a panel first — no crash). Relay, first attempt (protocol 73): called `CGuiInGame::ShowPartySelection` directly on the host with the joiner's captured `exit_script` — live-tested and WRONG: `CGuiInGame+0x78` non-null after the call proves nothing (it is that SAME persistently-reused object), so the host claimed "opened" while a screenshot showed no screen at all. Rebuilt (protocol 74): the client now relays the TRIGGER it correlates with the capture, and the host re-fires that trigger's OnEnter for its own player via `OdysseyTriggers.FireTriggerForLocalPlayer` — the exact call the already-live-proven `firetrigger` dev verb makes — then polls up to 8 s for a real registered panel. `party_select_relay` (default ON) | `galaxy-map-and-party-select.md` 2026-09-25 relay section + "SECOND PASS" |
 
+## Live pass 2026-10-08 — evidence summary
+
+Rig: merged main (commit d090ad36 and the release-packaging commit after it).
+
+| Item | Result | Evidence |
+| --- | --- | --- |
+| Live battery on merged main | **48 pass, 0 fail, 2 skip** | Full battery against the live pair. |
+| Named save through the retail Save Game UI | **Works on the rig** (injected input, not a human) | Injected input drove the retail Save Game screen. It wrote `000901 - Game900` named `ClaudeSave1` and returned to play with no enemy-sighted panel (pause mask 0, hostile present). Caveat: the input was injected by the rig; a person at the keyboard has not confirmed it. |
+| Held Enter in the save-name popup | **Works** | A held Enter in the save-name popup saved without opening chat. The control, the same held Enter in play, opened the say box. Rig-held keys now count for the plugin's polled keys under `isolate_real_input`. |
+| Joiner world-fetch startup race | **Fixed** | The joiner's world fetch ran at 09:25:55 while the host's listener came up at 09:25:56. The fetch now retries while the host's world service starts (commit d090ad36). |
+| Package installer matrix | **50/50** | Installer matrix passed on every case. |
+| Plugin-launched agent | **Works** | The plugin-launched agent writes `--console-log` and exits with the game. |
+
 ## Appendix A — feature status table (moved from README.md, 2026-09-03)
 
 Per-feature status with the flag names, the dates and the research doc behind each row. Rows say
