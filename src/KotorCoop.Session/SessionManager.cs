@@ -207,6 +207,11 @@ public sealed class SessionManager(IGameBridge bridge, AgentSettings agentSettin
         _phase = phase;
         if (previous != phase)
         {
+            if (previous == SessionPhase.Connected && phase is SessionPhase.Disconnected or SessionPhase.Failed)
+            {
+                AutosaveBackup.NoteCoopEnded(DateTime.UtcNow);
+            }
+
             PhaseChanged?.Invoke(previous, phase);
         }
     }

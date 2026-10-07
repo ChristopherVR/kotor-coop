@@ -13,8 +13,7 @@ namespace KotorCoop.Memory;
 /// <c>StagedSave.IsStagedCopy</c> uses (the <c>kotorcoop-staged.json</c> marker still matching
 /// the slot's <c>SAVEGAME.sav</c>, or a neutralised/absent pifo in the autosave slot). That
 /// logic lives in KotorCoop.Session, which this project cannot reference, so the few lines are
-/// mirrored here. Once per process: after the first overwrite the slot holds staged data or an
-/// engine autosave written inside the host's world, neither of which is worth keeping.
+/// mirrored here. Once per co-op stretch: see <see cref="TryBackupOnce"/>.
 ///
 /// Best-effort and non-throwing, like the other save primitives: a failure is a diagnostic and
 /// never blocks the staging that follows.
@@ -30,20 +29,49 @@ public static class AutosaveBackup
     private const string MarkerFileName = "kotorcoop-staged.json";
 
     private static int _done;
+    private static long _coopEndedUtcTicks;
 
     /// <summary>Test hook: forget that this process already took (or skipped) its backup.</summary>
-    public static void ResetProcessLatch() => Interlocked.Exchange(ref _done, 0);
+    public static void ResetProcessLatch()
+    {
+        Interlocked.Exchange(ref _done, 0);
+        Interlocked.Exchange(ref _coopEndedUtcTicks, 0);
+    }
 
-    /// <summary>The once-per-process entry point the staging sites call.</summary>
+    /// <summary>
+    /// A co-op session ended (SessionManager). The game and its agent outlive a session, so a
+    /// player can go on in single-player and rejoin later; an autosave written after this
+    /// moment is their own progress again and earns a fresh backup on the next overwrite.
+    /// </summary>
+    public static void NoteCoopEnded(DateTime utcNow) =>
+        Interlocked.Exchange(ref _coopEndedUtcTicks, utcNow.Ticks);
+
+    /// <summary>The entry point the staging sites call: once per co-op stretch. After the first
+    /// overwrite the slot holds staged data or engine autosaves written inside the host's world,
+    /// which must not push the player's real backup out of <see cref="KeepBackups"/>. Re-armed
+    /// only when the autosave was written after <see cref="NoteCoopEnded"/>.</summary>
     public static bool TryBackupOnce(string savesDirectory, out string diagnostic)
     {
-        if (Interlocked.Exchange(ref _done, 1) != 0)
+        if (Interlocked.Exchange(ref _done, 1) != 0 && !WrittenSinceCoopEnded(savesDirectory))
         {
             diagnostic = "autosave backup already handled this session";
             return false;
         }
 
+        Interlocked.Exchange(ref _coopEndedUtcTicks, 0);
         return TryBackup(savesDirectory, out diagnostic);
+    }
+
+    private static bool WrittenSinceCoopEnded(string savesDirectory)
+    {
+        long ended = Interlocked.Read(ref _coopEndedUtcTicks);
+        if (ended == 0)
+        {
+            return false;
+        }
+
+        string save = Path.Combine(savesDirectory, PluginMenuLoader.AutosaveSlot, SaveFileName);
+        return File.Exists(save) && File.GetLastWriteTimeUtc(save).Ticks > ended;
     }
 
     /// <summary>Moves the autosave to a numbered backup folder when it is the player's own.
