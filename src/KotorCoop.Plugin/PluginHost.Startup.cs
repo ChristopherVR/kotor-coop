@@ -34,6 +34,7 @@ internal static unsafe partial class PluginHost
         DirectInputKeyboardHook.IsolateRealInput = PluginConfig.ReadBool("isolate_real_input", false);
         if (DirectInputKeyboardHook.IsolateRealInput)
         {
+            NativeMethods.RigKeyHeld = DirectInputKeyboardHook.IsHeldByRig;
             Log("input isolation: ON (coop.ini isolate_real_input=1) - real keyboard/mouse "
                 + "input to this game is dropped; the plugin's own synthetic input (input/gamepad "
                 + "console verbs) still works");

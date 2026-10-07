@@ -135,7 +135,11 @@ internal static partial class NativeMethods
     /// console Tab) can be driven unattended; the rig's windows are never foreground.</summary>
     public static bool IsKeyDownHere(int virtualKey) =>
         (IsForeground() && (GetAsyncKeyState(virtualKey) & 0x8000) != 0)
-        || DirectInputKeyboardHook.IsHeldByRig(DikFor(virtualKey));
+        || (RigKeyHeld?.Invoke(DikFor(virtualKey)) ?? false);
+
+    /// <summary>Set at startup on an isolated rig only (DirectInputKeyboardHook.IsHeldByRig);
+    /// null for every real player.</summary>
+    internal static Func<byte, bool>? RigKeyHeld { get; set; }
 
     /// <summary>The DirectInput scan code for the virtual keys <see cref="IsKeyDownHere"/> is
     /// asked about; 0 for any other.</summary>
