@@ -23,9 +23,13 @@ public sealed class WorldAdoptionTests : IDisposable
 {
     private readonly List<string> _tempDirectories = [];
     private readonly CancellationTokenSource _cts = new();
+    private readonly TimeSpan _savedRetryDelay = WorldAdoption.FetchRetryDelay;
+
+    public WorldAdoptionTests() => WorldAdoption.FetchRetryDelay = TimeSpan.FromMilliseconds(200);
 
     public void Dispose()
     {
+        WorldAdoption.FetchRetryDelay = _savedRetryDelay;
         _cts.Cancel();
         _cts.Dispose();
 
@@ -484,6 +488,35 @@ public sealed class WorldAdoptionTests : IDisposable
         Assert.DoesNotContain(log, line => line.Contains("ask them to save once"));
         Assert.DoesNotContain(log, line => line.Contains("could not fetch"));
         Assert.True(noWorldCallback);
+    }
+
+    [Fact]
+    public async Task AHostWhoseWorldServiceComesUpAMomentLateIsRetriedNotReported()
+    {
+        // Live 2026-10-08: the joiner asked one second before the host's listener was up and
+        // was told the host had no save. The fetch now waits a few seconds for it.
+        string hostSave = BuildSave("tar_m02aa", 0x341, "Bastila Shan", [(2u, "n_sith")]);
+        string joinerSave = BuildSave("end_m01aa", 0x127, "Yasuko Kaar", [(2u, "n_trask")]);
+        string joinerGame = BuildGameDirectory();
+        int port = FreePort();
+
+        System.Collections.Concurrent.ConcurrentQueue<string> log = [];
+        Task<AdoptedWorld?> adopting = WorldAdoption.TryAdoptAsync(
+            joinerGame, joinerSave, Local(port), SessionPassword.None,
+            expectedSaveIdentity: 0, log.Enqueue, _cts.Token);
+
+        // The host comes up only once the joiner has already been turned away once.
+        for (int i = 0; i < 200 && !log.Any(line => line.Contains("retrying")); i++)
+        {
+            await Task.Delay(10, _cts.Token);
+        }
+
+        _ = WorldTransfer.ServeAsync(WorldTransfer.ReadSaveDirectory(hostSave), port,
+            SessionPassword.None, 0, null, _cts.Token);
+
+        Assert.NotNull(await adopting);
+        Assert.Contains(log, line => line.Contains("not ready yet - retrying"));
+        Assert.DoesNotContain(log, line => line.Contains("could not fetch"));
     }
 
     [Fact]

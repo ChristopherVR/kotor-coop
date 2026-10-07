@@ -267,6 +267,13 @@ public static class WorldAdoption
         }
     }
 
+    /// <summary>How many times a "not ready yet" fetch is tried, and the wait between tries
+    /// (about 16 s in all). Settable for tests.</summary>
+    public static int FetchAttempts { get; set; } = 5;
+
+    /// <inheritdoc cref="FetchAttempts"/>
+    public static TimeSpan FetchRetryDelay { get; set; } = TimeSpan.FromSeconds(4);
+
     /// <summary>
     /// Everything after the character is decided: fetch the host's world, stage it over the
     /// autosave slot, write the pifo, and prove the staged world fingerprints the same as the
@@ -295,20 +302,64 @@ public static class WorldAdoption
         //    channel) is answered by WorldTransferUdp instead of the ordinary 60s TCP timeout.
         //    Skipped entirely when the fallback is off, so a build/coop.ini that has not opted
         //    in pays no extra round trip and behaves exactly as before.
-        FetchedWorld fetched;
+        //    A host that has only just started answers the session before its world-transfer
+        //    listener is up and its save is registered (live 2026-10-08: the joiner asked at
+        //    09:25:55, the host listened at 09:25:56), so "no world" and transport failures are
+        //    retried for a few seconds before they are reported. Refusals that cannot change
+        //    (password, version, bad data) are not.
+        FetchedWorld fetched = default;
+        bool sawNoWorld = false;
+        Exception? lastFailure = null;
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                bool useUdp = udpFallback && !await ProbeTcpReachableAsync(host, cancellationToken).ConfigureAwait(false);
+                if (useUdp)
+                {
+                    log?.Invoke(
+                        "world adoption: the world-transfer port did not answer TCP - "
+                        + "falling back to the UDP path (world_transfer_udp_fallback)");
+                }
+
+                fetched = useUdp
+                    ? await WorldTransferUdp.FetchAsync(host, passwordHash, cancellationToken).ConfigureAwait(false)
+                    : await WorldTransfer.FetchAsync(host, passwordHash, cancellationToken).ConfigureAwait(false);
+                lastFailure = null;
+                break;
+            }
+            catch (Exception ex) when ((ex is WorldTransferRefusedException { NoWorldAvailable: true }
+                or IOException or System.Net.Sockets.SocketException) && attempt < FetchAttempts)
+            {
+                sawNoWorld |= ex is WorldTransferRefusedException;
+                lastFailure = ex;
+                if (attempt == 1)
+                {
+                    log?.Invoke("world adoption: the host's world is not ready yet - retrying");
+                }
+
+                await Task.Delay(FetchRetryDelay, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is WorldTransferRefusedException or InvalidDataException
+                or IOException or System.Net.Sockets.SocketException)
+            {
+                sawNoWorld |= ex is WorldTransferRefusedException { NoWorldAvailable: true };
+                lastFailure = ex;
+                break;
+            }
+        }
+
         try
         {
-            bool useUdp = udpFallback && !await ProbeTcpReachableAsync(host, cancellationToken).ConfigureAwait(false);
-            if (useUdp)
+            if (lastFailure is not null)
             {
-                log?.Invoke(
-                    "world adoption: the world-transfer port did not answer TCP - "
-                    + "falling back to the UDP path (world_transfer_udp_fallback)");
-            }
+                if (sawNoWorld && lastFailure is not WorldTransferRefusedException { NoWorldAvailable: false })
+                {
+                    throw new WorldTransferRefusedException("no world", noWorldAvailable: true);
+                }
 
-            fetched = useUdp
-                ? await WorldTransferUdp.FetchAsync(host, passwordHash, cancellationToken).ConfigureAwait(false)
-                : await WorldTransfer.FetchAsync(host, passwordHash, cancellationToken).ConfigureAwait(false);
+                throw lastFailure;
+            }
         }
         catch (WorldTransferRefusedException ex) when (ex.NoWorldAvailable)
         {
