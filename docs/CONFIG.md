@@ -71,7 +71,7 @@ fallback (they agree here — `CoopIniExampleDocSyncTests` checks it).
 | Key | Default (shipped) | Meaning | Doc |
 | --- | --- | --- | --- |
 | `mode` | `join` | `host` a session or `join` one | [connect-flow.md](research/connect-flow.md) |
-| `host` | example address, unset in code | for `mode = join`: the host's address. Also seeds the in-game address box (with `port`) until the box is first used; after that the last typed address wins, kept in `kotorcoop-last-address.txt` beside the game — neither side ever writes coop.ini | [connect-flow.md](research/connect-flow.md), [server-browser.md](research/server-browser.md) |
+| `host` | blank (shipped `host =` is empty; unset in code) | for `mode = join`: the host's address. Also seeds the in-game address box (with `port`) until the box is first used; after that the last typed address wins, kept in `kotorcoop-last-address.txt` beside the game — neither side ever writes coop.ini | [connect-flow.md](research/connect-flow.md), [server-browser.md](research/server-browser.md) |
 | `port` | `27140`⁸ | UDP port; host and client must match | [network-topology.md](research/network-topology.md) |
 | `password` | empty | session password | [connect-flow.md](research/connect-flow.md) |
 | `name` | unset | your name/character name shown to peers | — |
@@ -116,7 +116,7 @@ fallback (they agree here — `CoopIniExampleDocSyncTests` checks it).
 
 | Key | Default (shipped) | Meaning | Doc |
 | --- | --- | --- | --- |
-| `gamepad` | OFF | play with an Xbox-style (XInput) controller; the pad drives the game's own key bindings and cursor. set 1 to turn it on (off by default) | [gamepad.md](research/gamepad.md) |
+| `gamepad` | OFF | play with an Xbox-style (XInput) controller; the pad drives the game's own key bindings and cursor. ships `gamepad = 0`; set 1 to turn it on. No controller works out of the box | [gamepad.md](research/gamepad.md) |
 | `gamepad_cursor_speed` | `1.0` | cursor speed multiplier for the sticks, 0.1 - 5 | [gamepad.md](research/gamepad.md) |
 
 ### Internet play
@@ -131,8 +131,8 @@ fallback (they agree here — `CoopIniExampleDocSyncTests` checks it).
 
 | Key | Default (shipped) | Meaning | Doc |
 | --- | --- | --- | --- |
-| `log_max_mb` | `8` | plugin/agent log rotation cap, MB | — |
-| `log_keep` | `3` | rotated log generations kept, clamped 1-10 | — |
+| `log_max_mb` | `8` | log rotation cap per file, MB. Covers the plugin logs and the agent log (`kotorcoop-agent.log`, `.1`-`.3`), which rotate during a session as well as at launch | — |
+| `log_keep` | `3` | rotated log generations kept (plugin logs and the agent log), clamped 1-10 | — |
 | `auto_start_agent` | ON | the plugin launches/attaches the agent itself; set 0 only if you run the agent yourself | — |
 | `dinput8_next` | unset | file (relative to the game dir) the plugin forwards DirectInput calls to instead of the system `dinput8.dll` | [Exports.cs](../src/KotorCoop.Plugin/Exports.cs) |
 
@@ -503,3 +503,10 @@ a value someone could type on purpose) — before this was fixed, `--menu` runs 
 `coop.ini`, the same as every other CLI-vs-`coop.ini` precedence in this doc. (The CLI's own
 `--tick` help text used to say "(default 20)", stale against the actual
 `ProtocolConstants.DefaultTickRate = 30` default; that has since been corrected too.)
+
+## Changes to `swkotor.ini`
+
+Besides `coop.ini`, the plugin sets `[Game Options] EnableCheats=1` in the game's own
+`swkotor.ini` so the `~` console works. The first time, it keeps the original file as
+`swkotor.ini.kcoop-orig`; `KotorCoop.Agent.exe uninstall` restores the original `EnableCheats`
+value from that copy.
