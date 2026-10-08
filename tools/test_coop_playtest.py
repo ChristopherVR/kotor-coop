@@ -64,9 +64,25 @@ class Actions(unittest.TestCase):
 
     def test_phantoms_and_party_members_are_never_targets(self):
         me = player(objects=[creature(1, "coop_phantom", 1, 3), creature(2, "end_trask", 1, 3, party=True),
-                             creature(3, "n_sith", 1, 5)])
+                             creature(3, "n_sith", 1, 2)])
         acts = h.actions_for("host", me, player(), {})
         self.assertEqual([k for k in acts if k.startswith("fight_")], ["fight_3"])
+
+    def test_a_far_enemy_is_walked_to_and_an_unreachable_one_is_not_offered(self):
+        # The attack verb's melee snap is a teleport; it once dropped the host into a sealed
+        # cutscene room behind a window. Fights walk the walkmesh instead.
+        class Nav:
+            rooms = {}
+            def path(self, start, goal, blocked=()):
+                return [start, (5.0, 0.0), goal] if goal[0] < 20 else None
+        me = player(objects=[creature(3, "n_sith", 1, 10), creature(4, "end_cut2_sith2", 1, 26)])
+        acts = h.actions_for("host", me, player(), {}, nav=Nav())
+        self.assertNotIn("fight_4", acts)
+        walk = acts["fight_3"]["walk"]
+        self.assertEqual(walk[:2], [(0, 0), (5.0, 0.0)])
+        self.assertAlmostEqual(walk[-1][0], 8.8, places=3)
+        self.assertEqual(acts["fight_3"]["commands"], ["attack 0x3"])
+        self.assertNotIn("fight_3", h.actions_for("host", me, player(), {}))  # no walkmesh, no fight
 
     def test_the_joiner_is_offered_the_partners_conversation_and_never_doors(self):
         door = {"id": 7, "kind": "door", "tag": "door", "position": [10, 0, 0], "distance": 10, "open": 0, "destination": "end_m01ab"}

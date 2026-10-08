@@ -96,6 +96,8 @@ def ok_click(panel, attempt):
 # KOTOR 1 experience for each level: level n needs n(n-1)/2 * 1000.
 LEVEL_XP = [n * (n - 1) // 2 * 1000 for n in range(1, 21)]
 NEVER = 10 ** 12
+# Within this the attack verb's own melee snap is a step, not a teleport (AttackMeleeRange 1.5 m).
+MELEE_REACH = 2.5
 
 
 def next_level_xp(xp):
@@ -297,10 +299,27 @@ def actions_for(role, me, peer, tried, nav=None):
     # which skips the route a player walks and can break the story's order (killing the
     # bridge's Sith from outside sealed the Endar Spire bridge with the player locked out).
     # Walking (explore_/goto_) brings the player to the next fight instead.
+    # The `attack` verb snaps the attacker to melee range first (CheatController.Attack), a
+    # staging teleport: on 2026-10-08 it put the host 25 m away inside the Endar Spire's sealed
+    # cutscene room, behind a window, and the engine's pathing faulted (0x58063B). A player walks
+    # to the enemy, so the harness does too: within reach it just attacks; farther off it walks
+    # the walkmesh route (closed doors blocked) to just short of the enemy, then attacks. No
+    # route, no fight.
+    blocked_doors = [tuple(d["position"][:2]) for d in objs if d["kind"] == "door" and not d["open"]]
     for o in sorted([o for o in living if o["faction"] == 1 and o["distance"] < 30 and fresh(o, 4)],
                     key=lambda o: o["distance"])[:2]:
-        acts[f"fight_{o['id']}"] = {"description": f"Attack the hostile {o['tag']} {o['distance']:.0f} m away",
-                                    "commands": [f"attack 0x{o['id']:X}"], "target": key(o)}
+        attack = {"description": f"Attack the hostile {o['tag']} {o['distance']:.0f} m away",
+                  "commands": [f"attack 0x{o['id']:X}"], "target": key(o)}
+        if o["distance"] > MELEE_REACH:
+            route = nav.path(tuple(me["position"][:2]), tuple(o["position"][:2]), blocked=blocked_doors) if nav else None
+            if not route or len(route) < 2:
+                continue
+            last, foe = route[-2], tuple(o["position"][:2])
+            gap = math.dist(last, foe)
+            stop = last if gap <= 1.2 else (foe[0] + (last[0] - foe[0]) * 1.2 / gap, foe[1] + (last[1] - foe[1]) * 1.2 / gap)
+            attack["walk"] = route[:-1] + [stop]
+            attack["description"] = f"Walk to and attack the hostile {o['tag']} {o['distance']:.0f} m away"
+        acts[f"fight_{o['id']}"] = attack
     who = me.get("controlled_tag") or "pc"
     if tried.get("took_any") and not any(o["faction"] == 1 and o["distance"] < 25 for o in living)             and tried.get(f"equip:{who}", 0) < 1:
         # Retail clicks only: the HUD icon, the right-weapon slot, the first item under None,
