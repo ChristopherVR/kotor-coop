@@ -119,3 +119,43 @@ Three Laya runs on the Endar Spire (10, 10 and 15 minutes):
 Next steps if this is pursued: start from saves past the tutorial (Taris, Dantooine) where
 areas are open, add equip/level-up handling, stage hostiles for the combat checks, and keep the
 referee as the only judge.
+
+## 2026-10-08 (evening): playing the Endar Spire
+
+The harness was extended so the opening can be played without staging verbs. Retail clicks
+measured at 800x600 (constants in `tools/coop_playtest.py`):
+
+- Equip: HUD Equipment icon (565,20), right-weapon slot (370,325), body slot (320,275), second
+  list row (550,263), OK (400,485), then `closegui`.
+- Popups: status/XP notice OK (399,316); message box OK (399,329); container Get Items
+  (399,391) / Close (399,441); Party Selection OK (398,485), first portrait (176,210), Add (270,449).
+- Character swap: the HUD's second portrait (94,577), both directions. `controlled_tag` in the
+  snapshot is the controlled creature's tag ("" for the player).
+- Level up: HUD Character icon (625,20), Auto Level Up (268,297), confirmation is a message box.
+- New verb `unlockdoor <id>`: the door target menu's Security action
+  (`SendPlayerToServerInput_UnlockObject` 0x00677DE0, door id + OBJECT_INVALID, as 0x00683E50
+  sends it). Reach 80 m: the server walks the creature over before it rolls (seen from 11 m).
+- `usedoor` by object id now reaches 100 m (`DoorUse.MaxUseDistanceById`); by tag it stays 40 m.
+- Attack orders run the creature to a target anywhere in the area (seen from 74 m).
+
+What the unattended runs reached, from a clean `es_baseline`, with Laya choosing most actions:
+footlocker and gear, Trask's tutorial and recruitment, Party Selection, the lockdown door (swap
+to Trask), the Security tutorial door, the room fights and body loot, Auto Level Up for both
+players, the level-up gate (`end_door15`, script `k_pend_door15`, needs `END_ROOM7_DEAD`, i.e.
+room 7 cleared), the Jedi cutscene (`end_door16` -> `end_jedicut`), the reinforcements, and the
+bridge-sealed beat (`END_BRIDGE_SEALED = 1`). Endar Spire story door facts from the game data:
+`end_door05`/`end_door06`/`end_door08` are key-required plot doors that never open.
+
+Stopped at `end_door19` (unlocked, OnOpen `k_pend_traskdie1`, conversation `end_door01`), the
+door between the player and the open transition `end_door10` -> `end_m01ab`. A native
+ChangeDoorState and a door conversation start were both accepted and did nothing; `usedoor`'s
+transition path walks with `ActionMoveToLocation`, which never moves the player character in
+this build (failure 8). Next: a real "walk the player" input (drive control) or the door's
+click path, then end_m01ab (Carth, the escape pods).
+
+Referee results: one census finding (two host reinforcements absent on the joiner) was a harness
+false positive: script-spawned enemies reach the joiner as materialised stand-ins built from the
+co-op blueprint, tagged coop_phantom. The census now counts those. No mod bug was confirmed by
+the harness in these runs. Side observation: the host's status line printed the host's public
+IP address on screen ("co-op: hosting on port 27140 - public address 103.95.113..."), which a
+stream or screenshot would expose.

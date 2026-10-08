@@ -169,7 +169,9 @@ def actions_for(role, me, peer, tried):
     key = lambda o: f"{me['module']}:{o['id']}:{who}"
     fresh = lambda o, limit: tried.get(key(o), 0) < limit
     doors = [o for o in objs if o["kind"] == "door" and fresh(o, 2) and not (o["open"] and not o["destination"])]
-    for o in sorted(doors, key=lambda o: o["distance"])[:3]:
+    # Open transitions first (the way on), then nearest; five, so dead-end story doors next to
+    # the player do not crowd out the exit (Endar Spire: end_door10 behind four sealed doors).
+    for o in sorted(doors, key=lambda o: (not (o["destination"] and o["open"]), o["distance"]))[:5]:
         if o["distance"] > 95:
             # usedoor by id reaches 100 m (DoorUse.MaxUseDistanceById) and walkto never moves the
             # player character in this build (TestDriveController.HandleWalk). A far LOCKED door
@@ -225,8 +227,10 @@ def actions_for(role, me, peer, tried):
 def refresh_doors(tried, me):
     """Forget door, swap and level attempts so they are offered again: story beats (a scene, a
     level, a recruit) unlock doors that refused earlier. Talks keep their own budget."""
+    # Door keys are module:id:who[:unlock]; container keys (module:id) stay spent, or a
+    # refresh sends a player round the same emptied boxes forever.
     prefix = f"{me.get('module')}:"
-    for k in [k for k in tried if (k.startswith(prefix) and not k.startswith("talk:")) or k.startswith("level:")]:
+    for k in [k for k in tried if (k.startswith(prefix) and k.count(":") >= 2) or k.startswith("level:")]:
         del tried[k]
     tried.pop("swaps", None)
 
