@@ -104,6 +104,12 @@ internal static class DoorUse
     /// </summary>
     public const float MaxUseDistance = 40f;
 
+    /// <summary>The limit for a door named by object id. The 40 m rule exists so a wrong TAG is
+    /// refused; an id cannot be mistyped into a different door, and the walk is the engine's,
+    /// so an id request may reach across a whole module (the playtest harness needs the
+    /// Endar Spire's far story doors).</summary>
+    public const float MaxUseDistanceById = 100f;
+
     /// <summary>Open state 3 is "destroyed" (see <c>Odyssey.GetDoorOpenState</c>).</summary>
     public const int DoorStateDestroyed = 3;
 
@@ -120,7 +126,8 @@ internal static class DoorUse
         int openState,
         bool transitionPending,
         bool moviePlaying,
-        float distance)
+        float distance,
+        bool byId = false)
     {
         if (!hasPlayer)
         {
@@ -159,7 +166,7 @@ internal static class DoorUse
             return DoorUseVerdict.RefuseMoviePlaying;
         }
 
-        if (distance > MaxUseDistance)
+        if (distance > (byId ? MaxUseDistanceById : MaxUseDistance))
         {
             return DoorUseVerdict.RefuseTooFar;
         }
@@ -168,7 +175,7 @@ internal static class DoorUse
     }
 
     /// <summary>The sentence a refusal answers with — what was SEEN, never just "refused".</summary>
-    public static string Explain(DoorUseVerdict verdict, string what, float distance) => verdict switch
+    public static string Explain(DoorUseVerdict verdict, string what, float distance, bool byId = false) => verdict switch
     {
         DoorUseVerdict.Use => $"using {what}",
         DoorUseVerdict.RefuseNoWorld => "no player loaded (not in a module yet)",
@@ -185,7 +192,7 @@ internal static class DoorUse
         DoorUseVerdict.RefuseMoviePlaying =>
             "a movie is playing - and the frame hook still ran, which is news",
         DoorUseVerdict.RefuseTooFar =>
-            $"{what} is {distance:F1}m away, past the {MaxUseDistance:F0}m limit",
+            $"{what} is {distance:F1}m away, past the {(byId ? MaxUseDistanceById : MaxUseDistance):F0}m limit",
         _ => $"refused ({verdict})",
     };
 

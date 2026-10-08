@@ -345,11 +345,12 @@ internal sealed unsafe partial class CheatController
             openState: door != 0 ? Odyssey.GetDoorOpenState(door) : 0,
             transitionPending: Odyssey.IsAreaTransitionPending(),
             moviePlaying: Odyssey.IsMoviePlaying(),
-            distance: distance);
+            distance: distance,
+            byId: requestedId != 0);
 
         if (verdict != DoorUseVerdict.Use)
         {
-            string detail = DoorUse.Explain(verdict, what, distance);
+            string detail = DoorUse.Explain(verdict, what, distance, byId: requestedId != 0);
 
             // A failed sweep has to say what it swept. "No transition door here" is the wrong
             // module; "no doors at all" is a broken sweep, and a reader with neither number
@@ -569,11 +570,12 @@ internal sealed unsafe partial class CheatController
             openState: Odyssey.GetDoorOpenState(door),
             transitionPending: Odyssey.IsAreaTransitionPending(),
             moviePlaying: Odyssey.IsMoviePlaying(),
-            distance: distance);
+            distance: distance,
+            byId: requestedId != 0);
 
         if (verdict != DoorUseVerdict.Use)
         {
-            Answer(SharedBlock.CheatStatusRefused, DoorUse.Explain(verdict, what, distance));
+            Answer(SharedBlock.CheatStatusRefused, DoorUse.Explain(verdict, what, distance, byId: requestedId != 0));
             return true;
         }
 
