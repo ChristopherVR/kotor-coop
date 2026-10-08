@@ -49,6 +49,41 @@ LOG_IGNORE = re.compile(r"FIRST-CHANCE exception \(0x406D1388\)|unhandled-except
                         r"|crash probe|managed faults now reach")
 
 
+# Retail 800x600 GUI positions, measured on the rig (2026-10-08). The panel names come from
+# laya_playtest's active-panel list, so a click is only sent while its panel is up.
+OK_STATUS_SUMMARY = "input click 399 316"     # "Experience Points Received" and similar
+OK_MESSAGE_BOX = "input click 399 329"        # "This character must be a member of your party..."
+CONTAINER_GET, CONTAINER_CLOSE = "input click 399 391", "input click 399 441"
+PARTY_FIRST, PARTY_ADD, PARTY_OK = "input click 176 210", "input click 270 449", "input click 398 485"
+HUD_EQUIP = "input click 565 20"              # the Equipment icon, top right of the HUD
+EQUIP_RIGHT_WEAPON, EQUIP_BODY = "input click 370 325", "input click 320 275"
+EQUIP_SECOND_ROW, EQUIP_OK = "input click 550 263", "input click 400 485"
+HUD_SECOND_PORTRAIT = "input click 94 577"    # the first companion's portrait; click again to return
+
+
+def menu_actions(panels, tried):
+    """A menu owns the input; nothing else can happen until it closes."""
+    if "status_summary" in panels:
+        return {"ok_summary": {"description": "Dismiss the experience/status notice (OK)", "commands": [OK_STATUS_SUMMARY]}}
+    if "message_box" in panels:
+        return {"ok_message": {"description": "Dismiss the message box (OK)", "commands": [OK_MESSAGE_BOX]}}
+    if "party_selection" in panels:
+        if tried.get("party_ok", 0) < 1:
+            return {"party_ok": {"description": "Accept the party selection (OK)", "commands": [PARTY_OK]}}
+        return {"party_add": {"description": "Add the first party member, then accept (OK)",
+                              "commands": [PARTY_FIRST, PARTY_ADD, PARTY_OK], "gap": 1.2}}
+    if "container" in panels:
+        # Take first, and only then close: a policy that closes a full container skips the
+        # gear the story expects (Endar Spire: Trask waits for the footlocker's weapon).
+        if not tried.get("took"):
+            return {"take_items": {"description": "Take the items from the open container",
+                                   "commands": [CONTAINER_GET], "took": True}}
+        return {"close_menu": {"description": "Close the container", "commands": [CONTAINER_CLOSE]}}
+    # Anything else (equipment, options, an unnamed popup) closes through HideSWInGameGui,
+    # which leaves both games running.
+    return {"close_menu": {"description": f"Close the open menu ({', '.join(panels)})", "commands": ["closegui"]}}
+
+
 def actions_for(role, me, peer, tried):
     """Legal actions for one player, most useful first. role is 'host' or 'joiner'."""
     if me.get("loading") or me.get("hp", 1) <= 0:
@@ -57,26 +92,26 @@ def actions_for(role, me, peer, tried):
     key = lambda o: f"{me['module']}:{o['id']}"
     fresh = lambda o, limit: tried.get(key(o), 0) < limit
 
-    if me.get("menu_open") and not me["conversation"]:
-        # A menu owns the input; nothing else can happen until it closes. The container popup
-        # has Get Items / Close buttons at fixed 800x600 positions; anything else closes
-        # through HideSWInGameGui (`closegui`), which leaves both games running.
-        panels = me.get("panels") or []
-        if "container" in panels:
-            if not tried.get("took"):
-                acts["take_items"] = {"description": "Take the items from the open container",
-                                      "commands": ["input click 399 391"], "took": True}
-            acts["close_menu"] = {"description": "Close the container", "commands": ["input click 399 441"]}
-        else:
-            acts["close_menu"] = {"description": f"Close the open menu ({', '.join(panels)})", "commands": ["closegui"]}
-        return acts
+    panels = me.get("panels") or []
+    if (me.get("menu_open") and not me["conversation"]) or {"status_summary", "message_box"} & set(panels):
+        # Notices sit on top of a conversation too (XP mid-dialogue) and block it until dismissed.
+        return menu_actions(panels, tried)
 
     if me["conversation"]:
         if me["reply_count"]:
             texts = me.get("reply_texts") or []
             for i in range(me["reply_count"]):
                 said = texts[i] if i < len(texts) else "(reply text unavailable)"
-                acts[f"reply_{i + 1}"] = {"description": f'Answer: "{said}"', "commands": [f"input key {i + 2} tap"]}
+                # Loop guard: a reply picked twice in this conversation is not offered again. A
+                # tutorial question loops back to itself, and a spectator's picks are swallowed
+                # by the mod (only the owner answers), so neither ever moves the story.
+                if tried.get(f"said:{me.get('partner_tag')}:{said}", 0) >= 2:
+                    continue
+                acts[f"reply_{i + 1}"] = {"description": f'Answer: "{said}"', "commands": [f"input key {i + 2} tap"],
+                                          "said": f"said:{me.get('partner_tag')}:{said}"}
+            if not acts:
+                acts["wait"] = {"description": "Wait: the conversation is not yours to answer, or every answer was tried",
+                                "commands": []}
         else:
             acts["continue"] = {"description": "Continue the conversation (Space)", "commands": [f"input key {DIK_SPACE} tap"]}
         return acts
@@ -91,12 +126,22 @@ def actions_for(role, me, peer, tried):
     for o in [o for o in living if o["faction"] == 1 and o["distance"] < 25 and fresh(o, 4)][:2]:
         acts[f"fight_{o['id']}"] = {"description": f"Attack the hostile {o['tag']} {o['distance']:.0f} m away",
                                     "commands": [f"attack 0x{o['id']:X}"], "target": key(o)}
+    who = me.get("controlled_tag") or "pc"
+    if not any(o["faction"] == 1 and o["distance"] < 25 for o in living) and tried.get(f"equip:{who}", 0) < 1:
+        # Retail clicks only: the HUD icon, the right-weapon slot, the first item under None,
+        # OK; the same for the body slot; then close. Offered once per character, and again
+        # after new items are taken from a container.
+        acts["equip"] = {"description": "Equip your gear: a weapon and armor (Equipment screen)",
+                         "commands": [HUD_EQUIP, EQUIP_RIGHT_WEAPON, EQUIP_SECOND_ROW, EQUIP_OK,
+                                      EQUIP_BODY, EQUIP_SECOND_ROW, EQUIP_OK, "closegui"],
+                         "gap": 1.2, "equip": who}
+
     for o in [o for o in objs if o["kind"] == "placeable" and o["distance"] < 12 and fresh(o, 1)][:2]:
         acts[f"search_{o['id']}"] = {"description": f"Search the {o['tag'] or 'object'} {o['distance']:.0f} m away",
                                      "commands": [f"useplaceable 0x{o['id']:X}"], "target": key(o)}
-    for o in [o for o in living if o["faction"] != 1 and o["distance"] < 12 and fresh(o, 1)
+    for o in [o for o in living if role == "host" and o["faction"] != 1 and o["distance"] < 12 and tried.get("talk:" + key(o), 0) < 3
               and re.fullmatch(r"[A-Za-z0-9_]{1,31}", o["tag"] or "")][:2]:
-        acts[f"talk_{o['id']}"] = {"description": f"Talk to {o['tag']}", "commands": [f"talktag {o['tag']}"], "target": key(o)}
+        acts[f"talk_{o['id']}"] = {"description": f"Talk to {o['tag']}", "commands": [f"talktag {o['tag']}"], "target": "talk:" + key(o)}
 
     if role == "joiner":
         if peer.get("module") and peer["module"] != me["module"]:
@@ -106,7 +151,11 @@ def actions_for(role, me, peer, tried):
         return acts
 
     # `usedoor <id>` queues the engine's own pathfinding move (around walls, unlike drive keys)
-    # and, for an ordinary door, the native click path, so story locks still apply.
+    # and, for an ordinary door, the native click path, so story locks still apply. Tries are
+    # counted per controlled character: a door the player could not open is fresh again for a
+    # companion (the Endar Spire's lockdown door needs Trask).
+    key = lambda o: f"{me['module']}:{o['id']}:{who}"
+    fresh = lambda o, limit: tried.get(key(o), 0) < limit
     doors = [o for o in objs if o["kind"] == "door" and fresh(o, 2) and not (o["open"] and not o["destination"])]
     for o in sorted(doors, key=lambda o: (not o["destination"], o["distance"]))[:3]:
         if o["distance"] > 38:
@@ -120,12 +169,45 @@ def actions_for(role, me, peer, tried):
                                            + (f" into {o['destination']}" if o["destination"] else "")
                                            + f" ({o['distance']:.0f} m away)",
                                            "commands": [f"walkto {x:.1f} {y:.1f}"], "target": key(o) + ":approach"}
+        elif o.get("locked") and tried.get(key(o) + ":unlock", 0) < 2:
+            # Security, as the target menu sends it. Kept beside open_: opening a locked door
+            # can run its own script (the Endar Spire lockdown door's Trask scene).
+            acts[f"unlock_{o['id']}"] = {"description": f"Use your Security skill on the locked door {o['tag']} "
+                                         f"({o['distance']:.0f} m away)", "commands": [f"unlockdoor 0x{o['id']:X}"],
+                                         "target": key(o) + ":unlock"}
+            acts[f"open_{o['id']}"] = {"description": f"Try to open the locked door {o['tag']} ({o['distance']:.0f} m away)",
+                                       "commands": [f"usedoor 0x{o['id']:X}"], "target": key(o)}
         elif o["destination"]:
             acts[f"exit_{o['id']}"] = {"description": f"Go through the door {o['tag']} into {o['destination']} "
                                        f"({o['distance']:.0f} m away)", "commands": [f"usedoor 0x{o['id']:X}"], "target": key(o)}
         else:
             acts[f"open_{o['id']}"] = {"description": f"Go to and open the door {o['tag']} ({o['distance']:.0f} m away)",
                                        "commands": [f"usedoor 0x{o['id']:X}"], "target": key(o)}
+
+    # Only the host switches the controlled party member (party_switch_host_only). The HUD's
+    # second portrait is the first companion while the PC leads, and the PC while a companion
+    # leads, so one click swaps either way.
+    #
+    # Offered only when it can help: a nearby closed door the player character already failed
+    # on. Once swapped, the way back is offered only after the companion has tried something,
+    # or a policy flips straight back (seen with Laya on the Endar Spire lockdown door).
+    companions = [o for o in objs if o["kind"] == "creature" and o["party"] and o["hp"] > 0
+                  and o["id"] != me.get("player_id") and not COOP_TAG.match(o["tag"])]
+    if who != "pc":
+        if tried.get("acted_as_companion", 0) >= 2 or not acts:
+            acts["control_pc"] = {"description": "Switch control back to your own character",
+                                  "commands": [HUD_SECOND_PORTRAIT], "swap": True}
+    elif companions and tried.get("swaps", 0) < 6:
+        failed_here = [o for o in objs if o["kind"] == "door" and not o["open"] and o["distance"] < 15
+                       and tried.get(f"{me['module']}:{o['id']}:pc", 0) >= 1]
+        if failed_here:
+            c = companions[0]
+            acts = {f"control_{c['tag']}": {"description": f"Switch control to your companion {c['tag']}: the door "
+                                            f"{failed_here[0]['tag']} would not open for you, and some locked doors "
+                                            "need a companion", "commands": [HUD_SECOND_PORTRAIT], "swap": True}} | acts
+    if who != "pc":
+        # A companion is in control for one reason: the doors. Keep its options to those.
+        acts = {k: a for k, a in acts.items() if k.startswith(("open_", "exit_", "approach_", "unlock_", "control_pc"))} or acts
     return acts
 
 
@@ -134,10 +216,15 @@ def summary(role, me, peer):
     if me.get("loading"):
         return f"{role}: loading"
     hostile = sum(1 for o in me["objects"] if o["kind"] == "creature" and o["faction"] == 1 and o["hp"] > 0 and not o["party"])
-    text = (f"You are the {role} in area {me['module']}, health {me['hp']}, {hostile} hostile(s) nearby. "
+    party = [o["tag"] for o in me["objects"] if o["kind"] == "creature" and o["party"] and o["tag"] and not COOP_TAG.match(o["tag"])]
+    who = me.get("controlled_tag") or "your own character"
+    text = (f"You are the {role} in area {me['module']}, controlling {who}, health {me['hp']}, "
+            f"{hostile} hostile(s) nearby, companions: {', '.join(party) or 'none'}. "
             f"Partner is in {peer.get('module', 'unknown')}" + (", in a conversation" if peer.get("conversation") else "") + ".")
     if me["conversation"]:
-        text += f' In a conversation. Last line: "{me.get("dialogue_line", "")[:160]}".'
+        text += " You are in a conversation."
+    if me.get("menu_open"):
+        text += f" A menu is open: {', '.join(me.get('panels') or [])}."
     return text
 
 
@@ -281,9 +368,11 @@ async def run(args, policy):
                     report["modules"].append(me["module"])
                 last_pos = moving.get(role)
                 moving[role] = me.get("position")
-                if (tried[role].get("last", "").startswith(("exit_", "open_", "approach_")) and last_pos and me.get("position")
+                if (tried[role].get("last", "").startswith(("exit_", "open_", "approach_", "unlock_")) and last_pos and me.get("position")
                         and not me.get("loading") and math.dist(last_pos[:2], me["position"][:2]) > .3):
                     continue  # still walking to the door it was sent to; a new order would cancel it
+                if "party_selection" not in (me.get("panels") or []):
+                    tried[role].pop("party_ok", None)  # a new party screen starts with plain OK
                 acts = actions_for(role, me, peer, tried[role])
                 if not acts:
                     continue
@@ -296,11 +385,30 @@ async def run(args, policy):
                 results = []
                 for i, command in enumerate(act["commands"]):
                     results.append(games[index].console(command))
-                    if i == 0 and act.get("hold"):
-                        await asyncio.sleep(act["hold"])
+                    if act.get("gap") and i + 1 < len(act["commands"]):
+                        await asyncio.sleep(act["gap"])  # GUI clicks land one frame-pump apart
                 tried[role]["last"] = choice
                 if act.get("took") or choice.startswith("search_"):
                     tried[role]["took"] = bool(act.get("took"))
+                if act.get("took"):
+                    # New items: offer the equipment screen again for whoever is in control.
+                    for k in [k for k in tried[role] if k.startswith("equip:")]:
+                        del tried[role][k]
+                if act.get("said"):
+                    tried[role][act["said"]] = tried[role].get(act["said"], 0) + 1
+                if act.get("equip"):
+                    tried[role]["equip:" + act["equip"]] = 1
+                if act.get("equip") or act.get("took"):
+                    # New gear changes what people say (Trask's tutorial): talk to them again.
+                    for k in [k for k in tried[role] if k.startswith("talk:")]:
+                        del tried[role][k]
+                if act.get("swap"):
+                    tried[role]["swaps"] = tried[role].get("swaps", 0) + 1
+                    tried[role]["acted_as_companion"] = 0
+                elif me.get("controlled_tag"):
+                    tried[role]["acted_as_companion"] = tried[role].get("acted_as_companion", 0) + 1
+                if choice.startswith("party_"):
+                    tried[role]["party_ok"] = tried[role].get("party_ok", 0) + 1
                 if act.get("target") and not act.get("walk"):
                     tried[role][act["target"]] = tried[role].get(act["target"], 0) + 1
                 if act.get("join"):

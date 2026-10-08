@@ -151,6 +151,27 @@ internal static unsafe partial class Odyssey
         SendChangeDoorStateInputFn =
         (delegate* unmanaged[Thiscall]<nint, uint, uint, void>)0x00677D70;
 
+    /// <summary>CSWCMessage::SendPlayerToServerInput_UnlockObject 0x00677DE0; __thiscall, two
+    /// stack arguments, ret 8. The door's target-menu Security action (0x00683E50) passes the
+    /// door id and 0x7F000000 (no particular tool).</summary>
+    private static readonly delegate* unmanaged[Thiscall]<nint, uint, uint, void>
+        SendUnlockObjectInputFn =
+        (delegate* unmanaged[Thiscall]<nint, uint, uint, void>)0x00677DE0;
+
+    /// <summary>Sends the native Security (unlock) input for an object, as the target menu does.</summary>
+    public static bool UnlockObject(uint objectId)
+    {
+        nint client = GetClient();
+        nint message = client == 0 ? 0 : GetSWCMessageFn(client);
+        if (message == 0)
+        {
+            return false;
+        }
+
+        SendUnlockObjectInputFn(message, objectId, ObjectInvalid);
+        return true;
+    }
+
     /// <summary>Sends native door-state input without unlocking or writing door state.</summary>
     public static bool ChangeDoorState(uint doorId, uint operation = 0x2725)
     {

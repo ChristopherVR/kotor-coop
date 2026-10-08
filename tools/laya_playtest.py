@@ -124,10 +124,10 @@ class Game:
     def console(self, command, timeout=12):
         verb = command.split()[0]
         if verb not in {"input", "opendoor", "usedoor", "walkto", "attack", "screenshot", "talktag",
-                        "useplaceable", "autofollow", "closegui"}:
+                        "useplaceable", "autofollow", "closegui", "unlockdoor"}:
             raise ValueError("Command is outside the playtest allowlist")
-        if verb in {"useplaceable", "autofollow"} and not re.fullmatch(
-                r"(useplaceable 0x[0-9A-F]{1,8}|autofollow( off)?)", command):
+        if verb in {"useplaceable", "autofollow", "unlockdoor"} and not re.fullmatch(
+                r"((useplaceable|unlockdoor) 0x[0-9A-F]{1,8}|autofollow( off)?)", command):
             raise ValueError("Invalid argument for " + verb)
         if verb == "talktag":
             tag = command.split()[1]
@@ -208,7 +208,8 @@ class Game:
                     item.update(hp=self.unpack(body + 0xDC, "<h"), faction=self.u32(stats + 0x78) if stats else None,
                                 combat=bool(self.u32(body + 0x138)), party=bool(self.u32(body + 0xA88)))
                 if kind == "door":
-                    item.update(open=self.unpack(body + 0x2CC, "<B"), destination=self.exo(body + 0x390))
+                    item.update(open=self.unpack(body + 0x2CC, "<B"), destination=self.exo(body + 0x390),
+                                locked=bool(self.unpack(body + 0x2C4, "<B")))
                 objects.append(item)
         client = self.u32(self.u32(manager + 4) + 4)
         gui = self.u32(client + 0x40)
@@ -231,6 +232,9 @@ class Game:
                             break
         return {"pid": self.pid, "loading": False, "module": module, "position": xyz,
                 "player_id": player_id, "hp": self.unpack(player + 0xDC, "<h"), "frame": self.u32(self.block + 0x250),
+                # The creature under control: "" for the player character, a companion's tag
+                # (end_trask) after a portrait swap.
+                "controlled_tag": self.exo(player + 0x18),
                 "orientation": struct.unpack("<fff", self.read(player + 0x9C, 12)),
                 "remote_count": self.u32(self.block + 0x48), "conversation": conversation, "reply_count": replies,
                 "reply_texts": reply_texts, "menu_open": menu_open, "panels": panels,

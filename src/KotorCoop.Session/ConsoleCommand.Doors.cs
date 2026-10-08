@@ -97,6 +97,16 @@ public static partial class ConsoleCommand
             : parsed with { Kind = CoopCommandKind.CloseDoor };
     }
 
+    private static CoopCommand ParseUnlockDoor(string[] rest)
+    {
+        if (rest.Length != 1 || !TryParseObjectId(rest[0], out uint id) || id is 0 or uint.MaxValue)
+        {
+            return new CoopCommand(CoopCommandKind.Invalid, Error: "unlockdoor needs a door's object id, e.g. unlockdoor 0x46");
+        }
+
+        return new CoopCommand(CoopCommandKind.UnlockDoor, Address: rest[0]);
+    }
+
     private static CoopCommand ParseSetLock(string[] rest)
     {
         if (rest.Length != 2 || !TryParseObjectId(rest[0], out uint id) || id is 0 or uint.MaxValue

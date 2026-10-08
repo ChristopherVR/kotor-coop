@@ -70,6 +70,14 @@ public sealed partial class CoopCommandDispatcher
         SendCheat(new CheatRequest(CheatKinds.CloseDoor, Text: token));
     }
 
+    private void UnlockDoor(string token)
+    {
+        if (ConsoleCommand.TryParseObjectId(token, out uint objectId) && objectId != 0)
+        {
+            SendCheat(new CheatRequest(CheatKinds.UnlockDoor, Target: objectId));
+        }
+    }
+
     private void SetLock(string token, bool locked)
     {
         if (ConsoleCommand.TryParseObjectId(token, out uint objectId) && objectId != 0)
