@@ -318,10 +318,13 @@ class SharedState(unittest.TestCase):
             self.assertEqual(check(player(**{key: None}), player(**{key: {} if key != "xp" else 5})), {})
             self.assertEqual(check(player(), player()), {})
 
-    def test_experience_must_match_unless_a_companion_is_controlled(self):
-        self.assertEqual(h.xp_differences(player(xp=300), player(xp=300)), {})
-        self.assertEqual(list(h.xp_differences(player(xp=300), player(xp=150))), ["pc"])
-        self.assertEqual(h.xp_differences(player(xp=300, controlled_tag="end_trask"), player(xp=150)), {})
+    def test_experience_must_stay_level_only_for_players_who_started_level(self):
+        level = {"xp_started_equal": True}
+        self.assertEqual(h.xp_differences(player(xp=300, **level), player(xp=300)), {})
+        self.assertEqual(list(h.xp_differences(player(xp=300, **level), player(xp=150))), ["pc"])
+        self.assertEqual(h.xp_differences(player(xp=300, controlled_tag="end_trask", **level), player(xp=150)), {})
+        # A veteran joining ahead keeps its lead (progression-sync.md, 2026-09-18).
+        self.assertEqual(h.xp_differences(player(xp=0, xp_started_equal=False), player(xp=1825)), {})
 
 
 class RefereeSharedState(unittest.TestCase):

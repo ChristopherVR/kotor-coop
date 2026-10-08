@@ -406,7 +406,14 @@ class Referee:
                 continue
             self.persist(key, True, detail, states, now)
 
+    def stamp_xp_start(self, host, joiner):
+        """Remember whether the run began with both players on the same experience."""
+        if not hasattr(self, "_xp_equal") and host.get("xp") is not None and joiner.get("xp") is not None                 and not host.get("controlled_tag") and not joiner.get("controlled_tag"):
+            self._xp_equal = host["xp"] == joiner["xp"]
+        host["xp_started_equal"] = getattr(self, "_xp_equal", False)
+
     def observe(self, host, joiner):
+        self.stamp_xp_start(host, joiner)
         now = time.monotonic()
         states = [host, joiner]
         for role, game in zip(("host", "joiner"), self.games):
@@ -607,14 +614,16 @@ def globals_differences(host, joiner):
 
 
 def xp_differences(host, joiner):
-    """The player's own experience. Max-merge runs on both ends (progression-sync.md), so after
-    the settle window the two totals are equal. Skipped while either player controls a companion
-    (the snapshot then reads the companion's experience) or a read failed."""
+    """The player's own experience. The promise (limitations.md, progression-sync.md's
+    2026-09-18 baseline rule): players who start level stay level; a character that joins
+    ahead keeps its own lead and does not lift the other. So totals are compared only when the
+    run started with both equal (the referee stamps `xp_started_equal`). Skipped while either
+    player controls a companion (the snapshot then reads the companion's experience)."""
     if host.get("xp") is None or joiner.get("xp") is None or host.get("controlled_tag") or joiner.get("controlled_tag"):
         return {}
-    if host["xp"] == joiner["xp"]:
+    if not host.get("xp_started_equal") or host["xp"] == joiner["xp"]:
         return {}
-    return {"pc": f"player experience differs: host {host['xp']}, joiner {joiner['xp']} (max-merge should equalise them)"}
+    return {"pc": f"player experience drifted apart after starting level: host {host['xp']}, joiner {joiner['xp']}"}
 
 
 SHARED_STATE_CHECKS = (("door", door_differences), ("container", container_differences),
