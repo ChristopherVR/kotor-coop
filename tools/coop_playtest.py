@@ -833,6 +833,19 @@ class Referee:
                 self.persist_each(kind, {}, states, now)
 
 
+def snapshot_retrying(game, attempts=4, pause=0.3):
+    """A snapshot that survives the game freeing an object mid-read. Under the rig's full page
+    heap a freed creature is unreadable at once, and one such read ended a 2026-10-09 run with
+    both games healthy. Only a process that has exited, or a read failing every attempt, raises."""
+    for attempt in range(attempts):
+        try:
+            return game.snapshot()
+        except MemoryError:
+            if game.exited() or attempt == attempts - 1:
+                raise
+            time.sleep(pause)
+
+
 def census_difference(host, joiner):
     """Whether the two games disagree about who is alive in the shared area. An enemy the
     host's scripts created after the joiner loaded (Endar Spire reinforcements) has no body
@@ -1028,7 +1041,7 @@ async def run(args, policy):
     def look(index):
         # A player character can carry a tag (characters made in chargen on some saves do), so
         # "controlling a companion" means a tag other than the one the run started with.
-        state = games[index].snapshot()
+        state = snapshot_retrying(games[index])
         if not state.get("loading") and "controlled_tag" in state:
             own = own_tags.setdefault(index, state["controlled_tag"])
             if state["controlled_tag"] == own:
@@ -1084,7 +1097,7 @@ async def run(args, policy):
                 text = summary(role, me, peer)
                 choice, meta = await policy.choose(role, text, acts, ctx={"me": me, "peer": peer})
                 act = acts[choice]
-                now = games[index].snapshot()
+                now = snapshot_retrying(games[index])
                 if now.get("loading") or now.get("module") != me.get("module"):
                     continue
                 results = []
@@ -1093,7 +1106,7 @@ async def run(args, policy):
                     reached = coop_walk.walk_path(games[index], act["walk"], log=lambda m: report.setdefault("harness_notes", []).append(f"{role}: {m}"))
                     results.append({"reply": f"walked {reached}/{len(act['walk']) - 1} legs"})
                 commands = act["commands"]
-                if choice == "continue" and not games[index].snapshot().get("conversation"):
+                if choice == "continue" and not snapshot_retrying(games[index]).get("conversation"):
                     # Space outside a conversation is the PAUSE key. On run 1 a "continue" landed
                     # 4 ms after the mod swapped the joiner's own conversation for the host's;
                     # the joiner's world sat paused, with no banner, for 32 s, and the join looked
@@ -1106,7 +1119,7 @@ async def run(args, policy):
                     # a window: twice on the Endar Spire the host was snapped 26 m into the
                     # sealed cutscene room and the engine faulted. Attack only from within reach.
                     target_id, limit = act["reach"]
-                    there = next((o for o in games[index].snapshot()["objects"] if o["id"] == target_id), None)
+                    there = next((o for o in snapshot_retrying(games[index])["objects"] if o["id"] == target_id), None)
                     if there is None or there["distance"] > limit:
                         commands = []
                         results.append({"reply": "could not walk within reach of the enemy; no attack"})
