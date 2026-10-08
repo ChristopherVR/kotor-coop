@@ -523,24 +523,43 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
 
         if (driven != _drivenLogged)
         {
+            bool fewer = driven < _drivenLogged;
             _drivenLogged = driven;
-            PluginHost.Log($"party drive: mirroring {driven} of the host's companions");
+            string why = string.Empty;
+            if (fewer)
+            {
+                for (int i = 0; i < count; i++)
+                {
+                    if (_dropReason[i] is { } reason)
+                    {
+                        why += $" (slot {i}: {reason})";
+                    }
+                }
+            }
+
+            PluginHost.Log($"party drive: mirroring {driven} of the host's companions{why}");
         }
     }
+
+    /// <summary>Why <see cref="DriveOne"/> last declined each slot, for the "mirroring N" line.</summary>
+    private readonly string[] _dropReason = new string[SharedBlock.PartyPresenceCapacity];
 
     private bool DriveOne(
         int slot, PartyPresenceView member, double now, nint player,
         bool localFightActive, Vec3[] localEnemyPosition, uint[] localEnemyObjectId, int localEnemyCount)
     {
+        _dropReason[slot] = "released to fight locally"; // the only unlabelled declines left below
         if (member.RosterSlotPlusOne is 0 or > PartyNpcSlots)
         {
             Forget(slot);
+            _dropReason[slot] = "no roster slot";
             return false;
         }
 
         if (!Vec3.IsWorldPlausible(member.Position)
             || (member.Position.X == 0f && member.Position.Y == 0f))
         {
+            _dropReason[slot] = "implausible position";
             return false;
         }
 
@@ -548,17 +567,20 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         if (!block.TryGetPartyOccupantMirrorProof(rosterSlot, member.OccupantGeneration, out uint occupantSession))
         {
             // A busy or unavailable publication stops writes without losing successful equips.
+            _dropReason[slot] = "no occupant proof: " + block.DescribePartyOccupantMirrorProof(rosterSlot, member.OccupantGeneration);
             return false;
         }
         uint retainedBodyId = Odyssey.GetPartyRosterObjectId(rosterSlot);
         if (rosterSlot is 4 or 5 && TryGetCurrentHostileProof(retainedBodyId, out uint currentOwner))
         {
             CompleteRetainedHandoff(slot, retainedBodyId, rosterSlot, currentOwner);
+            _dropReason[slot] = "retained hostile handoff";
             return false;
         }
 
         if (rosterSlot is 4 or 5 && HostRosterConfirmsDismissal(rosterSlot))
         {
+            _dropReason[slot] = "host dismissed";
             return false; // positive host dismissal suppresses stale party snapshots; no native writes
         }
 
@@ -567,6 +589,7 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
             bool activeProof = IsCurrentActiveRosterProof(retainedBodyId, rosterSlot);
             if (!MaterialisedEnemies.ReleaseRetainedQuarantineIfActive(retainedBodyId, rosterSlot, activeProof))
             {
+                _dropReason[slot] = "quarantined retained id";
                 return false; // stale retained ids are never reclaimed by party snapshots
             }
         }
@@ -585,18 +608,21 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         // orientation is handled on the writer side by withholding the snapshot member.
         if (!float.IsFinite(member.Facing))
         {
+            _dropReason[slot] = "non-finite facing";
             return false;
         }
 
         uint objectId = ResolveRosterObjectId((int)member.RosterSlotPlusOne - 1);
         if (objectId is 0 or Odyssey.ObjectInvalid)
         {
+            _dropReason[slot] = "no local roster object";
             return false;
         }
 
         nint creature = Resolve(slot, objectId);
         if (creature == 0 || creature == player)
         {
+            _dropReason[slot] = "unresolved or the player";
             return false;
         }
 

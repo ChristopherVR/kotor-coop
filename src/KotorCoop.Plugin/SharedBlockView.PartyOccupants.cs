@@ -77,6 +77,28 @@ internal sealed unsafe partial class SharedBlockView
         session = acceptedSession;
         return true;
     }
+    /// <summary>Which condition of <see cref="TryGetPartyOccupantMirrorProof"/> fails, for a log
+    /// line. Reads the same fields without the sequence discipline; diagnostic only.</summary>
+    public string DescribePartyOccupantMirrorProof(int slot, uint publishedGeneration)
+    {
+        int bank = SharedBlock.OffsetHostPartyOccupants;
+        uint sequence = *U32(bank);
+        if ((uint)slot >= 9) return "slot out of range";
+        if ((sequence & 1) != 0) return $"host bank mid-write (seq {sequence})";
+        if (sequence == 0) return "host bank never written";
+        if (*U32(bank + 4) != *U32(SharedBlock.OffsetLivenessNativeEpoch)) return $"bank epoch {*U32(bank + 4)} != native {*U32(SharedBlock.OffsetLivenessNativeEpoch)}";
+        if (*U32(bank + 8) != *U32(SharedBlock.OffsetWorldLoadSerial)) return $"bank load serial {*U32(bank + 8)} != {*U32(SharedBlock.OffsetWorldLoadSerial)}";
+        if (*U32(bank + 16) != *U32(SharedBlock.OffsetHostPartyRoster)) return $"bank roster 0x{*U32(bank + 16):X} != host roster 0x{*U32(SharedBlock.OffsetHostPartyRoster):X}";
+        if (*U32(bank + 20) != *U32(bank + 4)) return $"bank+20 {*U32(bank + 20)} != bank epoch {*U32(bank + 4)}";
+        int row = bank + SharedBlock.PartyOccupantRowsOffset + slot * SharedBlock.PartyOccupantStride;
+        uint generation = *U32(row);
+        if (HostPartyOccupantRequiresBinding(slot) && !HostPartyOccupantAdopted(slot)) return "binding required, not adopted";
+        if (generation != publishedGeneration) return $"row generation {generation} != snapshot generation {publishedGeneration}";
+        if (generation == 0) return PartyOccupantHook.Captured.FixedStockIdentity(slot) ? "ok (stock)" : "generation 0 without a stock identity";
+        if (baseAddress[row + 8] == 0) return "no template in the row";
+        return PartyOccupantReconcileState.IsApplied(slot, *U32(bank + 12), generation) ? "ok" : $"reconcile not applied (session {*U32(bank + 12)}, generation {generation})";
+    }
+
     public bool TryCopyCompanionEquipment(int index, in PartyPresenceView expected, Span<byte> destination)
     {
         if ((uint)index >= SharedBlock.PartyPresenceCapacity || destination.Length < 48) return false;
