@@ -28,6 +28,17 @@ class Actions(unittest.TestCase):
         self.assertIn('"Okay."', acts["reply_1"]["description"])
         self.assertEqual(acts["reply_2"]["commands"], ["input key 3 tap"])
 
+    def test_a_menu_over_a_conversation_is_closed_before_space_is_pressed(self):
+        # 2026-10-08: a character sheet over a bark; Space under it toggled pause instead.
+        me = player(conversation=True, menu_open=True, panels=["character", "menu"])
+        self.assertEqual(list(h.actions_for("joiner", me, player(), {})), ["close_menu"])
+
+    def test_a_paused_game_is_unpaused_with_the_pause_key(self):
+        me = player(conversation=True, menu_open=True, panels=["pause", "main_interface"])
+        acts = h.actions_for("joiner", me, player(), {})
+        self.assertEqual(list(acts), ["unpause"])
+        self.assertEqual(acts["unpause"]["commands"], [f"input key {h.DIK_SPACE} tap"])
+
     def test_an_open_menu_is_handled_before_anything_else(self):
         container = player(menu_open=True, panels=["main_interface", "container"], objects=[creature(5, "n_sith", 1, 4)])
         self.assertEqual(list(h.actions_for("joiner", container, player(), {})), ["take_items"])
@@ -135,6 +146,8 @@ class Actions(unittest.TestCase):
     def test_level_up_waits_for_the_next_threshold(self):
         self.assertEqual(h.next_level_xp(1825), 3000)
         self.assertEqual(h.next_level_xp(3000), 6000)
+        # A veteran past level 20 never levels again; the gate must stay shut, not reopen at 190001.
+        self.assertGreater(h.next_level_xp(7320369), 7320369)
         self.assertNotIn("level_up", h.actions_for("host", player(xp=2999), player(), {"level:pc": 3000}))
         self.assertIn("level_up", h.actions_for("host", player(xp=3000), player(), {"level:pc": 3000}))
 
