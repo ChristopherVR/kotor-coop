@@ -7,8 +7,13 @@ the partner). A policy picks one: Laya through its MCP server (--policy laya), o
 no warps, teleports, spawns or save edits (laya_playtest.Game enforces the allowlist).
 
 After every step the referee compares the two games: process alive, same area, still
-connected, a conversation join that took, the same living creatures. A difference that
-outlives its settle window becomes a finding with front-buffer screenshots from both games.
+connected, a conversation join that took, the same living creatures, and the state the mod
+promises to keep in step (each with its own settle window, see SETTLE): door and container
+open/locked state, enemy health (one shared bar) and dead/alive, the host's companions present
+on the joiner, each game's stand-in for the other player showing the peer's health, the party
+journal, the story globals (booleans and numbers) and the player's experience. Inventory and
+credits are personal by default and are never compared. A difference that outlives its
+settle window becomes a finding with front-buffer screenshots from both games.
 New crash/exception lines in either plugin log are findings too. The referee owns PASS/FAIL;
 the policy only decides what to do next.
 
@@ -43,7 +48,10 @@ DIK_W, DIK_A, DIK_D, DIK_SPACE = 17, 30, 32, 57  # W/A/D only released on exit
 COOP_TAG = re.compile(r"^coop", re.IGNORECASE)
 
 # Settle windows: how long a cross-game difference may last before it is a finding.
-SETTLE = {"module": 45.0, "disconnected": 15.0, "census": 25.0, "join": 15.0}
+SETTLE = {"module": 45.0, "disconnected": 15.0, "census": 25.0, "join": 15.0,
+          "door": 20.0, "container": 20.0, "enemyhp": 20.0, "party": 30.0, "peerhp": 15.0,
+          "journal": 30.0, "globals": 30.0, "xp": 30.0}
+MAX_PER_KIND = 5  # findings of one comparison kind per run; the rest repeat the same bug
 LOG_ALARM = re.compile(r"unhandled|exception|crash record|access violation|fail-fast", re.IGNORECASE)
 LOG_IGNORE = re.compile(r"FIRST-CHANCE exception \(0x406D1388\)|unhandled-exception hook installed"
                         r"|crash probe|managed faults now reach")
@@ -332,6 +340,18 @@ class Referee:
         if now - start >= SETTLE[key.split(":")[0]]:
             self.flag(key, detail, states)
 
+    def persist_each(self, kind, diffs, states, now):
+        """persist() per differing item. diffs maps an item id to its detail string; an item
+        that agrees again drops its timer, and a kind stops reporting after MAX_PER_KIND."""
+        live = {f"{kind}:{k}" for k in diffs}
+        for key in [k for k in self.since if k.startswith(kind + ":") and k not in live]:
+            del self.since[key]
+        for item, detail in diffs.items():
+            key = f"{kind}:{item}"
+            if key not in self.reported and sum(1 for r in self.reported if r.startswith(kind + ":")) >= MAX_PER_KIND:
+                continue
+            self.persist(key, True, detail, states, now)
+
     def observe(self, host, joiner):
         now = time.monotonic()
         states = [host, joiner]
@@ -365,6 +385,11 @@ class Referee:
         if host["module"] == joiner["module"]:
             diff, detail = census_difference(host, joiner)
             self.persist("census", diff, detail, states, now)
+            for kind, check in SHARED_STATE_CHECKS:
+                self.persist_each(kind, check(host, joiner), states, now)
+        else:
+            for kind, _ in SHARED_STATE_CHECKS:
+                self.persist_each(kind, {}, states, now)
 
 
 def census_difference(host, joiner):
@@ -385,6 +410,163 @@ def census_difference(host, joiner):
     bad = unexplained > 0 or sum(joiner_only.values()) > stand_ins(host)
     return bad, (f"living creatures differ in {host['module']}: host-only {dict(host_only)}, joiner-only "
                  f"{dict(joiner_only)}, joiner stand-ins {stand_ins(joiner)}, host stand-ins {stand_ins(host)}")
+
+
+def _located(objs, kind, usable):
+    """{(tag, x, y): object} for the unambiguous objects of one kind. Doors and containers do
+    not move, so tag plus position rounded to 0.1 m names the same object in both games; a key
+    two objects share is dropped rather than guessed."""
+    seen, dup = {}, set()
+    for o in objs:
+        if o["kind"] != kind or not o.get("tag") or not usable(o):
+            continue
+        key = (o["tag"].lower(), round(o["position"][0], 1), round(o["position"][1], 1))
+        if key in seen:
+            dup.add(key)
+        seen[key] = o
+    return {k: v for k, v in seen.items() if k not in dup}
+
+
+def _state_pairs(host, joiner, kind, usable):
+    h, j = _located(host["objects"], kind, usable), _located(joiner["objects"], kind, usable)
+    return [(k, h[k], j[k]) for k in h if k in j]
+
+
+def door_differences(host, joiner):
+    """Doors in the shared area whose open or locked state differs (DoorController: ids and
+    state agree across instances, lock and open both ride the flag channel). Open is the engine's
+    open-state byte, 0 closed, non-zero some open pose; a swing in flight settles."""
+    out = {}
+    word = lambda o: f"{'open' if o['open'] else 'closed'}/{'locked' if o['locked'] else 'unlocked'}"
+    for (tag, x, y), h, j in _state_pairs(host, joiner, "door",
+                                         lambda o: o.get("open") is not None and o.get("locked") is not None):
+        if bool(h["open"]) != bool(j["open"]) or bool(h["locked"]) != bool(j["locked"]):
+            out[f"{tag}@{x:g},{y:g}"] = (f"door {tag} at ({x:g}, {y:g}) in {host['module']}: host {word(h)}, joiner {word(j)}")
+    return out
+
+
+def container_differences(host, joiner):
+    """Containers (placeables with an inventory) whose open or locked state differs
+    (docs/research/placeables-containers.md: both are plain fields the mod mirrors)."""
+    out = {}
+    usable = lambda o: o.get("container") and o.get("locked") is not None and o.get("open") is not None
+    word = lambda o: f"{'opened' if o['open'] else 'unopened'}/{'locked' if o['locked'] else 'unlocked'}"
+    for (tag, x, y), h, j in _state_pairs(host, joiner, "placeable", usable):
+        if h["open"] != j["open"] or h["locked"] != j["locked"]:
+            out[f"{tag}@{x:g},{y:g}"] = (f"container {tag} at ({x:g}, {y:g}) in {host['module']}: host {word(h)}, joiner {word(j)}")
+    return out
+
+
+def enemy_hp_differences(host, joiner):
+    """Hostile creatures present in both games (same object id and tag: enemies are keyed by
+    engine object id, SharedBlock.Combat.cs) that disagree about health. Enemies have one shared
+    health bar, so after the settle window the two must agree within the larger of 3 points and
+    15% of max health, and dead on one must be dead on the other. Stand-ins (coop tag), party
+    members and non-hostiles are not compared."""
+    def hostile(s):
+        return {o["id"]: o for o in s["objects"] if o["kind"] == "creature" and o.get("hp") is not None
+                and not o["party"] and not COOP_TAG.match(o["tag"] or "") and o.get("faction") == 1}
+    h, j = hostile(host), hostile(joiner)
+    out = {}
+    for oid in h.keys() & j.keys():
+        a, b = h[oid], j[oid]
+        if (a["tag"] or "").lower() != (b["tag"] or "").lower():
+            continue
+        top = max(a.get("max_hp") or 0, b.get("max_hp") or 0, a["hp"], b["hp"], 1)
+        tolerance = max(3, 0.15 * top)
+        dead = (a["hp"] <= 0) != (b["hp"] <= 0)
+        if dead or (a["hp"] > 0 and abs(a["hp"] - b["hp"]) > tolerance):
+            out[f"{a['tag']}#{oid:X}"] = (f"enemy {a['tag']} (id 0x{oid:X}) in {host['module']}: host hp {a['hp']}/"
+                                          f"{a.get('max_hp')}, joiner hp {b['hp']}/{b.get('max_hp')}"
+                                          + (" (dead on one side)" if dead else ""))
+    return out
+
+
+def party_differences(host, joiner):
+    """The host's companions are mirrored onto the joiner as real party members (PartyPresence
+    keys them by roster slot, so tags agree). Compares the multiset of non-empty, non-coop tags
+    of creatures with the party flag (+0xA88): the player character's tag is empty, so a swap to a
+    companion keeps that companion in both lists."""
+    def party(s):
+        return collections.Counter((o["tag"] or "").lower() for o in s["objects"] if o["kind"] == "creature"
+                                   and o["party"] and o["tag"] and not COOP_TAG.match(o["tag"]))
+    h, j = party(host), party(joiner)
+    out = {}
+    lists = f"(host party {sorted(h.elements())}, joiner {sorted(j.elements())})"
+    for tag in (h - j):
+        out[f"missing_on_joiner:{tag}"] = f"host companion {tag} has no party member on the joiner in {host['module']} {lists}"
+    for tag in (j - h):
+        out[f"extra_on_joiner:{tag}"] = f"joiner has party member {tag} the host does not in {host['module']} {lists}"
+    return out
+
+
+def peer_health_differences(host, joiner):
+    """Each game's picture of the OTHER player's health. Two reads per direction, both skipped
+    when the peer is downed (the stand-in is held at 1 hp then), controls a companion, or the
+    game has other than exactly one remote slot: (1) the remote slot's health against the peer's
+    own hp, tolerance max(2, 10% of max); (2) the peer's stand-in body, the coop-tagged creature
+    nearest the slot (within 3 m), against clamp(slot health, 1, slot max): ApplyVitals mirrors it."""
+    out = {}
+    for role, me, peer in (("host", host, joiner), ("joiner", joiner, host)):
+        slots = me.get("remote_slots")
+        if not slots or len(slots) != 1 or peer.get("hp") is None or peer["hp"] <= 0 or peer.get("controlled_tag"):
+            continue
+        slot = slots[0]
+        top = max(peer.get("max_hp") or 0, slot.get("max_health") or 0, peer["hp"], 1)
+        if abs(slot["health"] - peer["hp"]) > max(2, 0.1 * top):
+            out[f"{role}:slot"] = (f"the {role}'s remote slot says the peer has {slot['health']} hp, the peer's own game "
+                                   f"has {peer['hp']}/{peer.get('max_hp')}")
+        bodies = [o for o in me["objects"] if o["kind"] == "creature" and COOP_TAG.match(o["tag"] or "") and o.get("hp") is not None
+                  and math.dist(o["position"][:2], slot["position"][:2]) <= 3]
+        if bodies and slot["health"] > 0 and slot.get("max_health"):
+            body = min(bodies, key=lambda o: math.dist(o["position"][:2], slot["position"][:2]))
+            want = min(max(slot["health"], 1), slot["max_health"])
+            if abs(body["hp"] - want) > max(2, 0.1 * slot["max_health"]):
+                out[f"{role}:phantom"] = (f"the {role}'s stand-in for the peer shows {body['hp']} hp but the peer slot says "
+                                          f"{slot['health']}/{slot['max_health']} (peer's game: {peer['hp']}/{peer.get('max_hp')})")
+    return out
+
+
+def _dict_differences(a, b, label, module):
+    out = {}
+    for name in sorted(a.keys() | b.keys()):
+        if a.get(name, 0) != b.get(name, 0):
+            out[name] = f"{label} {name} in {module}: host {a.get(name, 'absent')}, joiner {b.get(name, 'absent')}"
+    return out
+
+
+def journal_differences(host, joiner):
+    """Quest entries (tag -> state) that differ. Progress merges upward and the session is the
+    authority, so after the settle window both journals hold the same entries at the same state."""
+    if host.get("journal") is None or joiner.get("journal") is None:
+        return {}
+    return _dict_differences(host["journal"], joiner["journal"], "journal entry", host["module"])
+
+
+def globals_differences(host, joiner):
+    """Synced story globals (non-zero booleans and numbers, by name) that differ. The bridge
+    replicates every boolean and number except K_CURRENT_PLANET, K_LAST_MODULE, K_LAST_LOCATION,
+    K_STUNT_MODULE and k_vis_*; the snapshot already leaves those out. Absent means zero."""
+    if host.get("globals") is None or joiner.get("globals") is None:
+        return {}
+    return _dict_differences(host["globals"], joiner["globals"], "global", host["module"])
+
+
+def xp_differences(host, joiner):
+    """The player's own experience. Max-merge runs on both ends (progression-sync.md), so after
+    the settle window the two totals are equal. Skipped while either player controls a companion
+    (the snapshot then reads the companion's experience) or a read failed."""
+    if host.get("xp") is None or joiner.get("xp") is None or host.get("controlled_tag") or joiner.get("controlled_tag"):
+        return {}
+    if host["xp"] == joiner["xp"]:
+        return {}
+    return {"pc": f"player experience differs: host {host['xp']}, joiner {joiner['xp']} (max-merge should equalise them)"}
+
+
+SHARED_STATE_CHECKS = (("door", door_differences), ("container", container_differences),
+                       ("enemyhp", enemy_hp_differences), ("party", party_differences),
+                       ("peerhp", peer_health_differences), ("journal", journal_differences),
+                       ("globals", globals_differences), ("xp", xp_differences))
 
 
 async def run(args, policy):

@@ -177,5 +177,151 @@ class RefereeWindows(unittest.TestCase):
         self.assertEqual(self.flagged, [])
 
 
+def door(tag, x, opened, locked, oid=1):
+    return {"id": oid, "kind": "door", "tag": tag, "position": [x, 0, 0], "distance": x, "open": opened,
+            "locked": locked, "destination": ""}
+
+
+def box(tag, x, opened, locked, container=True):
+    return {"id": 50, "kind": "placeable", "tag": tag, "position": [x, 0, 0], "distance": x, "open": opened,
+            "locked": locked, "container": container}
+
+
+class SharedState(unittest.TestCase):
+    def test_a_door_that_agrees_is_fine_and_open_poses_are_equivalent(self):
+        host = player(objects=[door("d1", 3.04, 1, False)])
+        joiner = player(objects=[door("d1", 3.04, 2, False)])
+        self.assertEqual(h.door_differences(host, joiner), {})
+
+    def test_a_door_open_on_one_side_or_locked_on_one_side_is_a_difference(self):
+        host = player(objects=[door("d1", 3, 1, False), door("d2", 9, 0, True)])
+        joiner = player(objects=[door("d1", 3, 0, False), door("d2", 9, 0, False)])
+        diffs = h.door_differences(host, joiner)
+        self.assertEqual(sorted(diffs), ["d1@3,0", "d2@9,0"])
+        self.assertIn("host open/unlocked, joiner closed/unlocked", diffs["d1@3,0"])
+
+    def test_ambiguous_or_unmatched_doors_are_not_guessed(self):
+        host = player(objects=[door("d", 3, 1, False), door("d", 3, 1, False, oid=2), door("only_host", 5, 1, False)])
+        joiner = player(objects=[door("d", 3, 0, False), door("d", 3, 0, False, oid=2)])
+        self.assertEqual(h.door_differences(host, joiner), {})
+
+    def test_only_containers_are_compared_and_open_or_lock_counts(self):
+        host = player(objects=[box("chest", 4, True, False), box("lever", 8, True, False, container=False)])
+        joiner = player(objects=[box("chest", 4, False, False), box("lever", 8, False, False, container=False)])
+        self.assertEqual(list(h.container_differences(host, joiner)), ["chest@4,0"])
+
+    def test_enemy_health_within_tolerance_agrees_and_beyond_it_differs(self):
+        a = dict(creature(7, "n_sith", 1, 5, hp=40), max_hp=50)
+        close = dict(a, hp=44)
+        far = dict(a, hp=20)
+        self.assertEqual(h.enemy_hp_differences(player(objects=[a]), player(objects=[close])), {})
+        self.assertEqual(list(h.enemy_hp_differences(player(objects=[a]), player(objects=[far]))), ["n_sith#7"])
+
+    def test_an_enemy_dead_on_one_side_only_differs_even_at_low_health(self):
+        a = dict(creature(7, "n_sith", 1, 5, hp=2), max_hp=50)
+        dead = dict(a, hp=0)
+        diffs = h.enemy_hp_differences(player(objects=[a]), player(objects=[dead]))
+        self.assertIn("dead on one side", diffs["n_sith#7"])
+        both_dead = h.enemy_hp_differences(player(objects=[dead]), player(objects=[dead]))
+        self.assertEqual(both_dead, {})
+
+    def test_stand_ins_party_members_and_unmatched_enemies_are_not_compared(self):
+        host = player(objects=[creature(1, "coop_phantom", 1, 3, hp=10), creature(2, "end_trask", 1, 3, hp=10, party=True),
+                               creature(3, "only_host", 1, 3, hp=10), creature(4, "n_sith", 1, 3, hp=10)])
+        joiner = player(objects=[creature(1, "coop_phantom", 1, 3, hp=1), creature(2, "end_trask", 1, 3, hp=1, party=True),
+                                 creature(4, "other_tag", 1, 3, hp=1)])
+        self.assertEqual(h.enemy_hp_differences(host, joiner), {})
+
+    def test_the_hosts_companions_must_exist_as_party_members_on_the_joiner(self):
+        trask = creature(4, "end_trask", 5, 2, party=True)
+        host = player(objects=[trask, creature(1, "coop_phantom", 2, 1), creature(2, "", 0, 0, party=True)])
+        self.assertEqual(h.party_differences(host, player(objects=[dict(trask, id=9), creature(3, "", 0, 0, party=True)])), {})
+        missing = h.party_differences(host, player(objects=[]))
+        self.assertEqual(list(missing), ["missing_on_joiner:end_trask"])
+        extra = h.party_differences(player(objects=[]), player(objects=[trask]))
+        self.assertEqual(list(extra), ["extra_on_joiner:end_trask"])
+
+    def peers(self, slot_health=20, peer_hp=20, phantom_hp=20, **peer_extra):
+        slot = {"peer": 2, "position": [1.0, 0, 0], "health": slot_health, "max_health": 40}
+        host = player(remote_slots=[slot], objects=[creature(9, "coop_phantom", 2, 1, hp=phantom_hp)])
+        joiner = player(hp=peer_hp, max_hp=40, remote_slots=[dict(slot, health=15)],
+                        objects=[creature(8, "coop_phantom", 2, 1, hp=15)], **peer_extra)
+        host["hp"], host["max_hp"] = 15, 40
+        return host, joiner
+
+    def test_the_peer_mirror_agrees_within_tolerance(self):
+        host, joiner = self.peers(slot_health=20, peer_hp=21, phantom_hp=20)
+        self.assertEqual(h.peer_health_differences(host, joiner), {})
+
+    def test_a_stale_slot_or_a_stand_in_with_the_wrong_health_is_a_difference(self):
+        host, joiner = self.peers(slot_health=30, peer_hp=20, phantom_hp=30)
+        self.assertEqual(list(h.peer_health_differences(host, joiner)), ["host:slot"])
+        host, joiner = self.peers(slot_health=20, peer_hp=20, phantom_hp=35)
+        self.assertEqual(list(h.peer_health_differences(host, joiner)), ["host:phantom"])
+
+    def test_a_downed_or_companion_controlling_peer_is_skipped(self):
+        host, joiner = self.peers(slot_health=1, peer_hp=0, phantom_hp=1)
+        self.assertEqual(h.peer_health_differences(host, joiner), {})
+        host, joiner = self.peers(slot_health=30, peer_hp=20, phantom_hp=30, controlled_tag="end_trask")
+        self.assertEqual(h.peer_health_differences(host, joiner), {})
+        host, joiner = self.peers()
+        host["remote_slots"] = None
+        self.assertEqual(h.peer_health_differences(host, joiner), {})
+
+    def test_journal_entries_must_converge_and_a_missing_entry_is_a_difference(self):
+        host = player(journal={"end_attack": 20, "tar_quest": 10})
+        self.assertEqual(h.journal_differences(host, player(journal={"end_attack": 20, "tar_quest": 10})), {})
+        diffs = h.journal_differences(host, player(journal={"end_attack": 10}))
+        self.assertEqual(sorted(diffs), ["end_attack", "tar_quest"])
+        self.assertIn("joiner absent", diffs["tar_quest"])
+
+    def test_globals_treat_absent_as_zero_and_name_what_differs(self):
+        host = player(globals={"END_ROOM7_DEAD": 1, "K_SWG_FUEL": 0})
+        joiner = player(globals={"END_BRIDGE_SEALED": 1})
+        self.assertEqual(sorted(h.globals_differences(host, joiner)), ["END_BRIDGE_SEALED", "END_ROOM7_DEAD"])
+        self.assertEqual(h.globals_differences(player(globals={"A": 0}), player(globals={})), {})
+
+    def test_an_unreadable_journal_global_or_xp_skips_the_check(self):
+        for key, check in (("journal", h.journal_differences), ("globals", h.globals_differences), ("xp", h.xp_differences)):
+            self.assertEqual(check(player(**{key: None}), player(**{key: {} if key != "xp" else 5})), {})
+            self.assertEqual(check(player(), player()), {})
+
+    def test_experience_must_match_unless_a_companion_is_controlled(self):
+        self.assertEqual(h.xp_differences(player(xp=300), player(xp=300)), {})
+        self.assertEqual(list(h.xp_differences(player(xp=300), player(xp=150))), ["pc"])
+        self.assertEqual(h.xp_differences(player(xp=300, controlled_tag="end_trask"), player(xp=150)), {})
+
+
+class RefereeSharedState(unittest.TestCase):
+    def setUp(self):
+        self.ref = object.__new__(h.Referee)
+        self.ref.since, self.ref.reported, self.ref.findings = {}, set(), []
+        self.flagged = []
+        self.ref.flag = lambda key, detail, states: (self.ref.reported.add(key), self.flagged.append((key, detail)))
+
+    def test_each_item_has_its_own_settle_window_and_a_recovery_resets_it(self):
+        diffs = {"d1": "door d1 differs"}
+        self.ref.persist_each("door", diffs, [], 0.0)
+        self.ref.persist_each("door", diffs, [], h.SETTLE["door"] - 1)
+        self.assertEqual(self.flagged, [])
+        self.ref.persist_each("door", {}, [], h.SETTLE["door"])          # agreed again
+        self.assertEqual(self.ref.since, {})
+        self.ref.persist_each("door", diffs, [], h.SETTLE["door"] + 1)   # window restarts
+        self.ref.persist_each("door", diffs, [], h.SETTLE["door"] + 2)
+        self.assertEqual(self.flagged, [])
+        self.ref.persist_each("door", diffs, [], 2 * h.SETTLE["door"] + 1)
+        self.assertEqual(self.flagged, [("door:d1", "door d1 differs")])
+
+    def test_one_kind_stops_reporting_after_its_cap(self):
+        diffs = {f"g{i}": "x" for i in range(h.MAX_PER_KIND + 3)}
+        self.ref.persist_each("globals", diffs, [], 0.0)
+        self.ref.persist_each("globals", diffs, [], h.SETTLE["globals"])
+        self.assertEqual(len(self.flagged), h.MAX_PER_KIND)
+
+    def test_every_check_has_a_settle_window(self):
+        for kind, _ in h.SHARED_STATE_CHECKS:
+            self.assertIn(kind, h.SETTLE)
+
+
 if __name__ == "__main__":
     unittest.main()
