@@ -246,6 +246,8 @@ class Game:
                 "orientation": struct.unpack("<fff", self.read(player + 0x9C, 12)),
                 "remote_count": self.u32(self.block + 0x48), "conversation": conversation, "reply_count": replies,
                 "reply_texts": reply_texts, "menu_open": menu_open, "panels": panels,
+                # SharedBlock.OffsetLocalDialogueNode: the entry the local conversation is on.
+                "dialogue_node": self.unpack(self.block + 0x1320, "<i"),
                 # SharedBlock.Dialogue: our own partner tag, and the peer's while it talks.
                 "partner_tag": self.read(self.block + 0x1200, 32).split(b"\0")[0].decode("ascii", "replace"),
                 "peer_partner_tag": self.read(self.block + 0x1240, 32).split(b"\0")[0].decode("ascii", "replace")

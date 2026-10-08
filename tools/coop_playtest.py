@@ -160,13 +160,15 @@ def actions_for(role, me, peer, tried, nav=None):
             texts = me.get("reply_texts") or []
             for i in range(me["reply_count"]):
                 said = texts[i] if i < len(texts) else "(reply text unavailable)"
-                # Loop guard: a reply picked twice in this conversation is not offered again. A
-                # tutorial question loops back to itself, and a spectator's picks are swallowed
-                # by the mod (only the owner answers), so neither ever moves the story.
-                if tried.get(f"said:{me.get('partner_tag')}:{said}", 0) >= 2:
+                # Loop guard, per conversation NODE: a reply picked twice on the same node is not
+                # offered there again. A tutorial question loops back to itself, and a
+                # spectator's picks are swallowed by the mod (only the owner answers). Keyed by
+                # node, because the same words ("Okay.") are the right answer on many nodes.
+                said_key = f"said:{me.get('partner_tag')}:{me.get('dialogue_node')}:{said}"
+                if tried.get(said_key, 0) >= 2:
                     continue
                 acts[f"reply_{i + 1}"] = {"description": f'Answer: "{said}"', "commands": [f"input key {i + 2} tap"],
-                                          "said": f"said:{me.get('partner_tag')}:{said}"}
+                                          "said": said_key}
             if not acts:
                 acts["wait"] = {"description": "Wait: the conversation is not yours to answer, or every answer was tried",
                                 "commands": []}
@@ -638,7 +640,7 @@ async def run(args, policy):
     games = [Game(args.host), Game(args.client)]
     referee = Referee(out, games)
     tried = {"host": {}, "joiner": {}}
-    moving, idle = {}, {}
+    moving, idle, waits = {}, {}, {}
     report = {"policy": policy.name, "steps": [], "modules": [], "counts": collections.Counter()}
     started = time.monotonic()
     try:
@@ -673,6 +675,15 @@ async def run(args, policy):
                         idle[role] = 0
                     continue
                 idle[role] = 0
+                if list(acts) == ["wait"]:
+                    waits[role] = waits.get(role, 0) + 1
+                    if waits[role] >= 5:
+                        # Every answer was tried and the conversation is still open: forget them.
+                        for k in [k for k in tried[role] if k.startswith("said:")]:
+                            del tried[role][k]
+                        waits[role] = 0
+                else:
+                    waits[role] = 0
                 text = summary(role, me, peer)
                 choice, meta = await policy.choose(role, text, acts)
                 act = acts[choice]

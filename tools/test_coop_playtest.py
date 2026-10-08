@@ -99,12 +99,14 @@ class Actions(unittest.TestCase):
         self.assertNotIn("talk_4", h.actions_for("joiner", me, player(), {}))
 
     def test_a_reply_picked_twice_is_not_offered_again(self):
-        me = player(conversation=True, reply_count=2, partner_tag="end_trask",
+        me = player(conversation=True, reply_count=2, partner_tag="end_trask", dialogue_node=12,
                     reply_texts=["Okay.", "How do you use security on a door?"])
-        tried = {"said:end_trask:How do you use security on a door?": 2}
+        tried = {"said:end_trask:12:How do you use security on a door?": 2}
         self.assertEqual(list(h.actions_for("host", me, player(), tried)), ["reply_1"])
-        tried["said:end_trask:Okay."] = 2
+        tried["said:end_trask:12:Okay."] = 2
         self.assertEqual(list(h.actions_for("host", me, player(), tried)), ["wait"])
+        # The same words on another node are a fresh answer.
+        self.assertIn("reply_1", h.actions_for("host", dict(me, dialogue_node=13), player(), tried))
 
     def test_a_notice_is_dismissed_even_during_a_conversation(self):
         me = player(conversation=True, reply_count=0, panels=["x", "status_summary"])
