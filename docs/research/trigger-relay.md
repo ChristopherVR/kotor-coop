@@ -742,3 +742,41 @@ before — this pass, like §11's, found no visible script-driven consequence to
 confirm it either way, on `end_trig_carth02`/`end_trig10` specifically. Full battery context
 (the `verify.ps1` hardening this pass also shipped, and the dialogue-side live pass run
 alongside it) is in docs/research/shared-state-audit.md's own "Round 59" section (§2).
+
+
+## Hostile spawn triggers (2026-10-09)
+
+The relay fires a joiner's trigger on the host with the joiner's phantom as the entering object.
+Story scripts that spawn enemies check that the entering object is the player, and the phantom
+passes none of those checks, so the host spawned nothing while the joiner's own engine spawned the
+enemies in its world alone (live, Endar Spire `end_reinforce3`/`4`).
+
+`tools/ncsdis.py` disassembles a script with nwscript routine names. `tools/hostile_spawn_triggers.py`
+uses it on every placed `k_p*_*` trigger script in every module: 57 call `CreateObject`, and 27 of
+those name a Hostile_1/Hostile_2 creature template. Their gates, read after `GetEnteringObject`:
+
+| Gate | Examples |
+| --- | --- |
+| `IsObjectPartyMember(entering)` | Kashyyyk vipers and dire cats, `k_pend_reinfrc06` |
+| `GetIsPC(entering)` | Taris rakghouls (`k_ptar_respawn`), Leviathan Sith (`k_plev_sithspwna/b`) |
+| `entering == GetFirstPC()` or a stored party member | Korriban cave wyrms and tuk'ata |
+
+Their other calls are `GiveXPToCreature` (XP is shared), `DestroyObject(OBJECT_SELF)` (the trigger
+itself), `SetGlobalNumber`, and `AssignCommand`/`ActionMoveToLocation` on the spawned troops. None
+acts on the entering object, so the host can safely run them as its own player.
+
+What ships, for scripts in the generated `HostileSpawnTriggers.cs`:
+
+* **Joiner, own walk-in:** `TriggerFireHook` skips the OnEnter `RunScript` (resuming at 0x0058F51C,
+  which does not read the result) while `TriggerRelayController` says the relay works
+  (`TriggerWatchEnabled`). The skipped trigger stays in the watch's report for 30 s, because a
+  running player can cross a thin band between two watch passes.
+* **Joiner, the host's walk-in replayed:** `FireTrigger` does not run it.
+* **Host, a relayed fire:** `FireTrigger` sets the entering object to the host's own player, so
+  every gate passes exactly as in single player. The enemies exist once and reach the joiner as
+  stand-ins.
+
+A script outside the list, such as a mod's own trigger, keeps the ordinary relay. The joiner-side
+`LocalOnlyHostileTracker` (20 s, never a hostile in combat) catches spawns from other paths.
+Regenerate after a game-data change with `python tools/hostile_spawn_triggers.py`; `--check` fails when the
+file is stale.
