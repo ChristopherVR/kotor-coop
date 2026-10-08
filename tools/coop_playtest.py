@@ -840,6 +840,24 @@ class Referee:
                 self.persist_each(kind, {}, states, now)
 
 
+def checkpoint_new_area(games, checkpointed, report):
+    """The host saves `campaign_<module>` the first time both players stand in a module, so a long
+    campaign run can resume from its furthest area instead of the Endar Spire. Uses the co-op
+    `save <name>` verb through blockpoke (the playtest console allowlist leaves saves out)."""
+    host, joiner = snapshot_retrying(games[0]), snapshot_retrying(games[1])
+    module = (host.get("module") or "").lower()
+    if (not module or module in checkpointed or host.get("loading") or joiner.get("loading")
+            or (joiner.get("module") or "").lower() != module or host.get("conversation") or joiner.get("conversation")
+            or (host.get("panels") and "main_interface" not in host["panels"])):
+        return
+    checkpointed.add(module)
+    blockpoke = os.path.join(os.path.dirname(os.path.abspath(__file__)), "blockpoke.ps1")
+    subprocess.run(["pwsh", "-NoProfile", "-File", blockpoke, "-ProcId", str(games[0].pid), "console", f"save campaign_{module}"],
+                   capture_output=True, check=False)
+    report.setdefault("checkpoints", []).append({"module": module, "at": time.strftime("%X")})
+    print("CHECKPOINT", module, flush=True)
+
+
 def snapshot_retrying(game, attempts=4, pause=0.3):
     """A snapshot that survives the game freeing an object mid-read. Under the rig's full page
     heap a freed creature is unreadable at once, and one such read ended a 2026-10-09 run with
@@ -1055,12 +1073,15 @@ async def run(args, policy):
                 state["controlled_tag"] = ""
         return state
 
+    checkpointed = set()
     started = time.monotonic()
     try:
         for step in range(args.steps):
             if time.monotonic() - started > args.minutes * 60:
                 report["stop_reason"] = "time budget"
                 break
+            if args.checkpoints:
+                checkpoint_new_area(games, checkpointed, report)
             for index, role in enumerate(("host", "joiner")):
                 me, peer = look(index), look(1 - index)
                 if me.get("module") and me["module"] not in report["modules"]:
@@ -1258,6 +1279,8 @@ def main():
     parser.add_argument("--policy", choices=("laya", "rules", "claude"), default="laya")
     parser.add_argument("--minutes", type=float, default=20)
     parser.add_argument("--steps", type=int, default=400)
+    parser.add_argument("--checkpoints", action="store_true",
+                        help="the host saves campaign_<module> the first time both players settle in each module")
     parser.add_argument("--pace", type=float, default=3.0, help="seconds between steps")
     parser.add_argument("--shot-every", type=int, default=10)
     parser.add_argument("--confidence", type=float, default=.4)
