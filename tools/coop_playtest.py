@@ -95,11 +95,13 @@ def ok_click(panel, attempt):
 
 # KOTOR 1 experience for each level: level n needs n(n-1)/2 * 1000.
 LEVEL_XP = [n * (n - 1) // 2 * 1000 for n in range(1, 21)]
+NEVER = 10 ** 12
 
 
 def next_level_xp(xp):
-    """The experience at which the next level becomes available above `xp`."""
-    return next((t for t in LEVEL_XP if t > xp), LEVEL_XP[-1] + 1)
+    """The experience at which the next level becomes available above `xp`. Past level 20
+    there is none: a veteran joiner carrying millions of XP must not be offered it forever."""
+    return next((t for t in LEVEL_XP if t > xp), NEVER)
 CONTAINER_GET, CONTAINER_CLOSE = "input click 399 391", "input click 399 441"
 PARTY_FIRST, PARTY_ADD, PARTY_OK = "input click 176 210", "input click 270 449", "input click 398 485"
 HUD_EQUIP = "input click 565 20"              # the Equipment icon, top right of the HUD
@@ -108,6 +110,12 @@ EQUIP_SECOND_ROW, EQUIP_OK = "input click 550 263", "input click 400 485"
 HUD_SECOND_PORTRAIT = "input click 94 577"    # the first companion's portrait; click again to return
 HUD_CHARACTER = "input click 625 20"          # the Character icon, top right of the HUD
 CHARACTER_AUTO_LEVEL = "input click 268 297"  # Character screen "Auto Level Up"; its confirm is a message box
+
+
+# Full-screen in-game menus (and the pause banner) that take the keyboard away from a
+# conversation underneath them.
+OVER_DIALOGUE = {"menu", "equip", "inventory", "character", "abilities", "messages", "journal", "map",
+                 "options", "pause"}
 
 
 def menu_actions(panels, tried):
@@ -132,6 +140,9 @@ def menu_actions(panels, tried):
             return {"take_items": {"description": "Take the items from the open container",
                                    "commands": [CONTAINER_GET], "took": True}}
         return {"close_menu": {"description": "Close the container", "commands": [CONTAINER_CLOSE]}}
+    if "pause" in panels and not (set(panels) & (OVER_DIALOGUE - {"pause"})):
+        return {"unpause": {"description": "The game is paused: press the pause key (Space)",
+                            "commands": [f"input key {DIK_SPACE} tap"]}}
     # Anything else (equipment, options, an unnamed popup) closes through HideSWInGameGui,
     # which leaves both games running.
     return {"close_menu": {"description": f"Close the open menu ({', '.join(panels)})", "commands": ["closegui"]}}
@@ -232,8 +243,12 @@ def actions_for(role, me, peer, tried, nav=None):
     fresh = lambda o, limit: tried.get(key(o), 0) < limit
 
     panels = me.get("panels") or []
-    if (me.get("menu_open") and not me["conversation"]) or {"status_summary", "message_box"} & set(panels):
+    if ((me.get("menu_open") and not me["conversation"]) or {"status_summary", "message_box"} & set(panels)
+            or OVER_DIALOGUE & set(panels)):
         # Notices sit on top of a conversation too (XP mid-dialogue) and block it until dismissed.
+        # So does a full-screen menu: on 2026-10-08 the joiner's character sheet (a level_up
+        # that had nothing to level) sat over a bark for 13 minutes while "continue" pressed
+        # Space under it, and Space under a menu toggles PAUSE, which froze the bark.
         return menu_actions(panels, tried)
 
     if me["conversation"]:
@@ -447,7 +462,7 @@ CLAUDE_ANSWER = ('Answer with only this JSON: {"choice": "<one option key>", "pl
                  'trying to do next>", "why": "<short reason>"}')
 PROMPT_LIMIT = 6000
 # Options that are housekeeping, not decisions: popups, menus, forced steps, the partner, gear.
-ROUTINE_KEYS = ("ok_", "party_", "take_items", "close_menu", "continue", "wait", "equip", "level_up", "control_",
+ROUTINE_KEYS = ("ok_", "party_", "take_items", "close_menu", "unpause", "continue", "wait", "equip", "level_up", "control_",
                 "join_", "follow")
 
 
@@ -1058,7 +1073,7 @@ async def run(args, policy):
                     # Try again only once experience reaches the next level's threshold: a
                     # character that cannot level just reopened and closed its sheet 60 times.
                     xp = me.get("xp")
-                    tried[role]["level:" + act["level"]] = next_level_xp(xp) if xp is not None else 10 ** 9
+                    tried[role]["level:" + act["level"]] = next_level_xp(xp) if xp is not None else NEVER
                 if act.get("ok"):
                     tried[role]["ok:" + act["ok"]] = tried[role].get("ok:" + act["ok"], 0) + 1
                 for panel in OK_ROWS:
