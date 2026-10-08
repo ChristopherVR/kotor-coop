@@ -66,6 +66,15 @@ public interface IPluginChannelBridge
     /// </summary>
     List<CreatureLivenessEntry> ReadCreatureLiveness() => [];
 
+    /// <summary>
+    /// Mirror side: ids of this engine's own living, non-plot creatures in a standard hostile
+    /// faction (Hostile_1/Hostile_2), with the same exclusions as
+    /// <see cref="ReadCreatureLiveness"/>. A joiner compares them with the host's liveness view
+    /// to find hostiles its own scripts spawned that the host never had (a story trigger's
+    /// <c>CreateObject</c> runs on the joiner for its own real character).
+    /// </summary>
+    List<uint> ReadLocalHostileCreatureIds() => [];
+
     /// <summary>Barks the plugin captured since the last look. See <see cref="BarkRecord"/>.</summary>
     List<BarkRecord> ReadBarks() => [];
 

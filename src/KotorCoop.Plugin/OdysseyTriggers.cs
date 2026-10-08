@@ -374,7 +374,12 @@ internal static unsafe class OdysseyTriggers
         *(uint*)(trigger + TriggerLastEntered) = enteringObjectId;
 
         uint triggerObjectId = *(uint*)(trigger + ObjectIdOffset);
-        RunScriptFn(vm, trigger + TriggerScriptOnEnter, triggerObjectId, 1);
+        // The peer is a party member in co-op; a story trigger gated on
+        // IsObjectPartyMember(GetEnteringObject()) must act for them here too (RelayPartyMemberHook).
+        using (RelayPartyMemberHook.CountAsPartyMember(enteringObjectId))
+        {
+            RunScriptFn(vm, trigger + TriggerScriptOnEnter, triggerObjectId, 1);
+        }
 
         return TriggerFireResult.Fired;
     }

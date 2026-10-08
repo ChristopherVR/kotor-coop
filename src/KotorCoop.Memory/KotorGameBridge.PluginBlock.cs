@@ -450,6 +450,47 @@ public sealed partial class KotorGameBridge
         return entries;
     }
 
+    /// <summary>Standard hostile factions (Hostile_1, Hostile_2) — the ones a story spawn of
+    /// enemies uses. Anything else (friendly, neutral, the planet factions) is left alone.</summary>
+    private static bool IsStandardHostileFaction(ushort faction) => faction is 1 or 3;
+
+    public List<uint> ReadLocalHostileCreatureIds()
+    {
+        lock (Sync)
+        {
+            return ReadLocalHostileCreatureIdsCore();
+        }
+    }
+
+    private List<uint> ReadLocalHostileCreatureIdsCore()
+    {
+        List<uint> ids = [];
+        HashSet<uint>? phantomIds = ReadPhantomObjectIds();
+        HashSet<uint> partyRoster = ReadPartyRosterIds();
+        foreach (CreatureRef creature in EnumerateCreatures())
+        {
+            if (PartyCensusRule.IsOwnParty(creature.ObjectId, creature.IsPlayer, creature.IsPartyMember, partyRoster)
+                || (phantomIds is not null && phantomIds.Contains(creature.ObjectId))
+                || creature.Tag == GameFiles.PhantomBlueprint.Tag)
+            {
+                continue;
+            }
+
+            // Every read must succeed; a failed one skips the creature for this pass rather
+            // than guessing (the next pass is seconds away).
+            if (!_memory.TryRead(creature.Address + OffCurrentHitPoints, out short current) || current <= 0
+                || !_memory.TryReadInt32(creature.Address + OffPlot, out int plot) || plot != 0
+                || !TryReadCreatureFaction(creature.Address, out ushort faction) || !IsStandardHostileFaction(faction))
+            {
+                continue;
+            }
+
+            ids.Add(creature.ObjectId);
+        }
+
+        return ids;
+    }
+
     /// <summary>
     /// Non-owner side: hands the host's latest creature-liveness view to the plugin's
     /// reconciliation controller. <paramref name="entries"/> is already capacity-ordered by
