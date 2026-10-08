@@ -172,4 +172,15 @@ public class SaveLineageTests
         Assert.True(result.ModuleGitMismatch);
         Assert.False(result.SaveIdentityMismatch);
     }
+
+    [Fact]
+    public void ResetForgetsASeededAgreement()
+    {
+        SaveLineage lineage = new();
+        lineage.SeedAgreement(1, 1);
+        Assert.True(lineage.HasAgreed);
+        lineage.Reset();
+        Assert.False(lineage.HasAgreed);
+        Assert.False(lineage.Absorbing);
+    }
 }

@@ -12,6 +12,26 @@ public static class GameLauncher
 {
     private const string BackupSuffix = ".kotorcoop-backup";
 
+    /// <summary>
+    /// Whether a running game is this install's. Only a copy of the SAME executable means there is
+    /// nothing to launch: a second install running alongside (a renamed-mutex instance 2, a tester's
+    /// other copy) left a crashed host unable to restart while its joiner was still up. A process
+    /// whose path cannot be read counts as this install, which keeps the old, cautious answer.
+    /// </summary>
+    private static bool IsThisInstall(Process process, string gamePath)
+    {
+        try
+        {
+            string? running = process.MainModule?.FileName;
+            return running is null
+                || string.Equals(Path.GetFullPath(running), Path.GetFullPath(gamePath), StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or NotSupportedException or ArgumentException)
+        {
+            return true;
+        }
+    }
+
     public static int Launch(AgentOptions options)
     {
         string processName = Path.GetFileNameWithoutExtension(options.GamePath);
@@ -21,7 +41,7 @@ public static class GameLauncher
             return LaunchAdditionalInstance(options);
         }
 
-        if (Process.GetProcessesByName(processName).Length > 0)
+        if (Process.GetProcessesByName(processName).Any(p => options.ViaSteam || IsThisInstall(p, options.GamePath)))
         {
             Console.WriteLine($"{processName} is already running; nothing to launch.");
             return 0;

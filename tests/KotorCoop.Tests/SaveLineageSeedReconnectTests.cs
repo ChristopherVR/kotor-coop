@@ -249,6 +249,54 @@ public class SaveLineageSeedReconnectTests
     /// published digests and <see cref="SaveIdentitySettle"/>'s ordinary debounce is free to
     /// run to completion.
     /// </summary>
+    /// <summary>
+    /// Live 2026-10-09: the host's game crashed and was relaunched on its last save. The joiner's
+    /// client reconnected to the new host process but kept the agreement it had recorded with the
+    /// old one, so the mismatch rule treated the worlds as proven the same and never re-adopted.
+    /// A Welcome from a different host session must drop that agreement.
+    /// </summary>
+    [Fact]
+    public async Task AReconnectToARestartedHostForgetsTheOldAgreement()
+    {
+        using CancellationTokenSource cts = new(TimeSpan.FromSeconds(90));
+        CoopHost first = new(new SessionSettings { PlayerName = "Revan", Port = 0, TickRate = 30 });
+        CancellationTokenSource firstCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
+        Task firstTask = first.RunAsync(firstCts.Token);
+        int port = first.ListenEndPoint.Port;
+
+        using CoopClient client = new(new SessionSettings { PlayerName = "Malak", TickRate = 30 },
+            new IPEndPoint(IPAddress.Loopback, port));
+        Task clientTask = client.RunAsync(cts.Token);
+        Assert.True(await WaitForAsync(() => client.IsConnected, TimeSpan.FromSeconds(15)));
+
+        WorldDigest same = new(GlobalsCatalogue: 1, SaveIdentity: 0x1111, Module: Module, ModuleGit: 7, LoadSerial: 1);
+        first.PublishWorldDigest(same);
+        client.PublishWorldDigest(same);
+        Assert.True(await WaitForAsync(() => client.SaveLineageAgreed, TimeSpan.FromSeconds(15)),
+            "the first host and the client agree on the world");
+        uint firstSession = client.HostSessionId;
+
+        await firstCts.CancelAsync();
+        try { await firstTask; } catch (OperationCanceledException) { }
+        first.Dispose();
+
+        using CoopHost second = new(new SessionSettings { PlayerName = "Revan", Port = port, TickRate = 30 });
+        Task secondTask = second.RunAsync(cts.Token);
+        // The relaunched host loaded its last save, which is not the world the client is in.
+        second.PublishWorldDigest(same with { SaveIdentity = 0x3333, LoadSerial = 0 });
+
+        Assert.True(await WaitForAsync(
+            () => client.IsConnected && client.HostSessionId != 0 && client.HostSessionId != firstSession,
+            TimeSpan.FromSeconds(45)), "the client reconnects to the restarted host");
+        Assert.True(await WaitForAsync(
+            () => client.Compatibility is { } verdict && verdict.Notes.Any(n => n.Code == CompatibilityCode.Save),
+            TimeSpan.FromSeconds(20)), "the different save is reported");
+        Assert.False(client.SaveLineageAgreed, "nothing proves the restarted host's world is the client's");
+
+        await cts.CancelAsync();
+        try { await Task.WhenAll(secondTask, clientTask); } catch (OperationCanceledException) { }
+    }
+
     [Fact]
     public async Task AFreshFirstJoinWithNoRecordBehavesExactlyAsBefore()
     {

@@ -123,6 +123,8 @@ public sealed partial class CoopClient
                     _flagSender.Clear();
                     _livenessById.Clear();
                     _livenessHasGeneration = false;
+                    // A different host process proves nothing about its world (SaveLineage.Reset).
+                    _saveLineage.Reset();
                 }
             }
             _hostSessionId = welcome.SessionId;
