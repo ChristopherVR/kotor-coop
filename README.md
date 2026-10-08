@@ -30,8 +30,8 @@ rejoins on its own.
 
 Things worth knowing before you start:
 
-- **One conversation at a time.** Whoever starts talking chooses the replies and the other player
-  watches. Two people steering one conversation would break the story.
+- **One conversation at a time.** Whoever starts talking chooses the replies. The other player clicks
+  the same person to watch; story scenes the game starts itself include both players. Two people steering one conversation would break the story.
 - **The host leads the party.** Only the host switches the active party member and picks the party
   before a departure. Let the host lead companion recruiting and the big story choices.
 - **Your backpack and credits are your own.** Quest items are the exception, so the story works for both.

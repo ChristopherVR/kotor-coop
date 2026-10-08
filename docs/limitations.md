@@ -89,7 +89,7 @@ below do not close these newer reports. Public distribution is still gated by th
 
 | | Status | What to expect |
 | --- | --- | --- |
-| Conversations | **Works, with a catch** | One conversation at a time. Whoever starts it chooses the replies, and the other watches it play out live and sees the results. This is deliberate: two people steering one conversation would break the story. |
+| Conversations | **Works, with a catch** | One conversation at a time. Whoever starts it chooses the replies. To watch it live, the other player clicks the same person; scenes the game starts by itself (cutscenes, story conversations) pull both players in automatically. This is deliberate: two people steering one conversation would break the story. |
 | Recruiting companions through conversation | **Works** | When the host recruits someone, they join both players' parties. All nine companions have arrived correctly this way. If the joining player leads a recruitment, the host's game replays the conversation's scripts the same way it does for any conversation, and we could not make it fail in testing (no stock recruiter other than Bastila could be set up for a joiner-led test), so we treat it as working. Report it if it ever doesn't. |
 | Cutscenes | **Works** | They play on both screens, and if one moves a player to a new area the other follows. |
 | The Star Forge solo duels (Bastila, Malak) | **Works, with a catch** | The player not in the duel is held in place and watches. The duels themselves have not been played through with two people. |

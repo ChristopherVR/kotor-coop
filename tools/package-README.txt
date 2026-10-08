@@ -163,7 +163,8 @@ stats, this player, other players, the shared world) in place of the transcript.
 demo item, F3 picks one up.
 
 The host's game decides what happens with enemies and the party; each player owns their own character.
-Only one conversation runs at a time -- the other player watches it live. If your partner
+Only one conversation runs at a time. To watch it live, click the same person your partner
+is talking to; scenes the game starts by itself include both players automatically. If your partner
 goes to the main menu their character disappears and a line says so; a one-line status in
 the top-left always shows the connection state.
 
