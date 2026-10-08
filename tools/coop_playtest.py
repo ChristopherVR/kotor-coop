@@ -309,7 +309,7 @@ def actions_for(role, me, peer, tried, nav=None):
     for o in sorted([o for o in living if o["faction"] == 1 and o["distance"] < 30 and fresh(o, 4)],
                     key=lambda o: o["distance"])[:2]:
         attack = {"description": f"Attack the hostile {o['tag']} {o['distance']:.0f} m away",
-                  "commands": [f"attack 0x{o['id']:X}"], "target": key(o)}
+                  "commands": [f"attack 0x{o['id']:X}"], "target": key(o), "reach": (o["id"], MELEE_REACH + 1.5)}
         if o["distance"] > MELEE_REACH:
             route = nav.path(tuple(me["position"][:2]), tuple(o["position"][:2]), blocked=blocked_doors) if nav else None
             if not route or len(route) < 2:
@@ -1092,9 +1092,20 @@ async def run(args, policy):
                     import coop_walk
                     reached = coop_walk.walk_path(games[index], act["walk"], log=lambda m: report.setdefault("harness_notes", []).append(f"{role}: {m}"))
                     results.append({"reply": f"walked {reached}/{len(act['walk']) - 1} legs"})
-                for i, command in enumerate(act["commands"]):
+                commands = act["commands"]
+                if act.get("reach"):
+                    # The attack verb teleports the rest of the way (CheatController.Attack's
+                    # melee snap). A route can look walkable on the room graph and still end at
+                    # a window: twice on the Endar Spire the host was snapped 26 m into the
+                    # sealed cutscene room and the engine faulted. Attack only from within reach.
+                    target_id, limit = act["reach"]
+                    there = next((o for o in games[index].snapshot()["objects"] if o["id"] == target_id), None)
+                    if there is None or there["distance"] > limit:
+                        commands = []
+                        results.append({"reply": "could not walk within reach of the enemy; no attack"})
+                for i, command in enumerate(commands):
                     results.append(games[index].console(command))
-                    if act.get("gap") and i + 1 < len(act["commands"]):
+                    if act.get("gap") and i + 1 < len(commands):
                         await asyncio.sleep(act["gap"])  # GUI clicks land one frame-pump apart
                 tried[role]["last"] = choice
                 if hasattr(policy, "record"):
