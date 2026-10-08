@@ -270,6 +270,9 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
             case SharedBlock.CheatKindSetLock:
                 SetLock();
                 break;
+            case SharedBlock.CheatKindUnlockDoor:
+                UnlockDoor(player);
+                break;
 
             case SharedBlock.CheatKindGiveLoot:
                 GiveLoot();

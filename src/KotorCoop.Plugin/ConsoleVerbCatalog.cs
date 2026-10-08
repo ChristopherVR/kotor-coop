@@ -94,6 +94,7 @@ internal static class ConsoleVerbCatalog
         ("opendoor", "opendoor [tag|id]  (blank = nearest door; unlike usedoor, no transition needed)"),
         ("closedoor", "closedoor [tag|id]  (dev: close a door through the engine; blank = nearest door)"),
         ("setlock", "setlock <id> on|off  (dev: change a real door/container lock)"),
+        ("unlockdoor", "unlockdoor <id>  (use the Security skill on a locked door, as the target menu does)"),
 
         // The container-sync live-test primitive: use a chest/corpse/switch through the
         // engine's own use-object input, exactly like a real click. See

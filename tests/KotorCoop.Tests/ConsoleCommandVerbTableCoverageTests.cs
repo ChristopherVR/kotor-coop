@@ -66,6 +66,7 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.OpenDoor] = "opendoor",
         [CoopCommandKind.CloseDoor] = "closedoor",
         [CoopCommandKind.SetLock] = "setlock 0xC6 on",
+        [CoopCommandKind.UnlockDoor] = "unlockdoor 0x46",
         [CoopCommandKind.UsePlaceable] = "useplaceable",
         [CoopCommandKind.ClosePlaceable] = "closeplaceable",
         [CoopCommandKind.Leader] = "leader pc",

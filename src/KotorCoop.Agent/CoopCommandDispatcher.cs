@@ -332,6 +332,7 @@ public sealed partial class CoopCommandDispatcher(
         [CoopCommandKind.OpenDoor] = c => OpenDoor(c.Address ?? string.Empty),
         [CoopCommandKind.CloseDoor] = c => CloseDoor(c.Address ?? string.Empty),
         [CoopCommandKind.SetLock] = c => SetLock(c.Address ?? string.Empty, c.Amount == 1),
+        [CoopCommandKind.UnlockDoor] = c => UnlockDoor(c.Address ?? string.Empty),
         [CoopCommandKind.UsePlaceable] = c => UsePlaceable(c.Address ?? string.Empty),
         [CoopCommandKind.ClosePlaceable] = c => ClosePlaceable(c.Address ?? string.Empty),
         [CoopCommandKind.Who] = WhoCommand,

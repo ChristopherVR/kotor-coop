@@ -782,6 +782,9 @@ public static class CheatKinds
     public const uint CloseDoor = 109;
     public const uint SetLock = 110;
 
+    /// <summary>Security skill on a locked door: the native UnlockObject player input.</summary>
+    public const uint UnlockDoor = 111;
+
     /// <summary>
     /// <c>screenshot &lt;name&gt; [front]</c> / <c>screenshot status</c> — plugin-side GL
     /// screenshot for the isolated rig (docs/research/isolated-rig.md): PrintWindow is

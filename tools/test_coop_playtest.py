@@ -30,7 +30,7 @@ class Actions(unittest.TestCase):
 
     def test_an_open_menu_is_handled_before_anything_else(self):
         container = player(menu_open=True, panels=["main_interface", "container"], objects=[creature(5, "n_sith", 1, 4)])
-        self.assertEqual(list(h.actions_for("joiner", container, player(), {})), ["take_items", "close_menu"])
+        self.assertEqual(list(h.actions_for("joiner", container, player(), {})), ["take_items"])
         self.assertEqual(list(h.actions_for("joiner", container, player(), {"took": True})), ["close_menu"])
         equip = player(menu_open=True, panels=["equip", "menu"])
         self.assertEqual(h.actions_for("host", equip, player(), {})["close_menu"]["commands"], ["closegui"])
@@ -53,7 +53,68 @@ class Actions(unittest.TestCase):
         door = {"id": 9, "kind": "door", "tag": "far", "position": [60, 0, 0], "distance": 60, "open": 0, "destination": "x"}
         me = player(objects=[door])
         self.assertEqual(h.actions_for("host", me, player(), {})["approach_9"]["commands"], ["walkto 60.0 0.0"])
-        self.assertNotIn("approach_9", h.actions_for("host", me, player(), {"end_m01aa:9:approach": 3}))
+        self.assertNotIn("approach_9", h.actions_for("host", me, player(), {"end_m01aa:9:pc:approach": 3}))
+
+    def test_popups_are_dismissed_with_their_own_buttons(self):
+        self.assertEqual(list(h.actions_for("host", player(menu_open=True, panels=["status_summary"]), player(), {})), ["ok_summary"])
+        self.assertEqual(list(h.actions_for("host", player(menu_open=True, panels=["x", "message_box"]), player(), {})), ["ok_message"])
+        party = player(menu_open=True, panels=["party_selection"])
+        self.assertEqual(list(h.actions_for("host", party, player(), {})), ["party_ok"])
+        self.assertEqual(h.actions_for("host", party, player(), {"party_ok": 1})["party_add"]["commands"],
+                         [h.PARTY_FIRST, h.PARTY_ADD, h.PARTY_OK])
+
+    def test_equip_is_offered_once_per_character_and_never_in_a_fight(self):
+        self.assertIn("equip", h.actions_for("host", player(), player(), {}))
+        self.assertNotIn("equip", h.actions_for("host", player(), player(), {"equip:pc": 1}))
+        self.assertIn("equip", h.actions_for("host", player(controlled_tag="end_trask"), player(), {"equip:pc": 1}))
+        fight = player(objects=[creature(3, "n_sith", 1, 5)])
+        self.assertNotIn("equip", h.actions_for("host", fight, player(), {}))
+
+    def test_only_the_host_swaps_and_a_companion_can_retry_a_door(self):
+        trask = creature(4, "end_trask", 5, 2, party=True)
+        door = {"id": 7, "kind": "door", "tag": "door", "position": [3, 0, 0], "distance": 3, "open": 0, "destination": ""}
+        me = player(player_id=1, objects=[trask, door])
+        tried = {"end_m01aa:7:pc": 2}
+        acts = h.actions_for("host", me, player(), tried)
+        self.assertNotIn("open_7", acts)
+        self.assertEqual(acts["control_end_trask"]["commands"], [h.HUD_SECOND_PORTRAIT])
+        self.assertNotIn("control_end_trask", h.actions_for("joiner", me, player(), tried))
+        as_trask = h.actions_for("host", player(player_id=4, controlled_tag="end_trask", objects=[door]), player(), tried)
+        self.assertEqual(list(as_trask), ["open_7"])
+        later = h.actions_for("host", player(player_id=4, controlled_tag="end_trask", objects=[door]), player(),
+                              tried | {"acted_as_companion": 2})
+        self.assertIn("control_pc", later)
+        self.assertNotIn("control_end_trask", h.actions_for("host", me, player(), {}))
+
+    def test_a_full_container_must_be_emptied_before_it_closes(self):
+        box = player(menu_open=True, panels=["main_interface", "container"])
+        self.assertEqual(list(h.actions_for("host", box, player(), {})), ["take_items"])
+        self.assertEqual(list(h.actions_for("host", box, player(), {"took": True})), ["close_menu"])
+
+    def test_the_joiner_never_starts_a_conversation(self):
+        me = player(objects=[creature(4, "end_trask", 5, 2)])
+        self.assertIn("talk_4", h.actions_for("host", me, player(), {}))
+        self.assertNotIn("talk_4", h.actions_for("joiner", me, player(), {}))
+
+    def test_a_reply_picked_twice_is_not_offered_again(self):
+        me = player(conversation=True, reply_count=2, partner_tag="end_trask",
+                    reply_texts=["Okay.", "How do you use security on a door?"])
+        tried = {"said:end_trask:How do you use security on a door?": 2}
+        self.assertEqual(list(h.actions_for("host", me, player(), tried)), ["reply_1"])
+        tried["said:end_trask:Okay."] = 2
+        self.assertEqual(list(h.actions_for("host", me, player(), tried)), ["wait"])
+
+    def test_a_notice_is_dismissed_even_during_a_conversation(self):
+        me = player(conversation=True, reply_count=0, panels=["x", "status_summary"])
+        self.assertEqual(list(h.actions_for("joiner", me, player(), {})), ["ok_summary"])
+
+    def test_a_locked_door_offers_security_and_a_plain_try(self):
+        door = {"id": 0x46, "kind": "door", "tag": "end_door02", "position": [5, 0, 0], "distance": 5, "open": 0,
+                "destination": "", "locked": True}
+        acts = h.actions_for("host", player(objects=[door]), player(), {})
+        self.assertEqual(acts["unlock_70"]["commands"], ["unlockdoor 0x46"])
+        self.assertIn("open_70", acts)
+        self.assertNotIn("unlock_70", h.actions_for("host", player(objects=[door]), player(), {"end_m01aa:70:pc:unlock": 2}))
 
     def test_loading_and_downed_players_do_nothing(self):
         self.assertEqual(h.actions_for("host", player(loading=True), player(), {}), {})

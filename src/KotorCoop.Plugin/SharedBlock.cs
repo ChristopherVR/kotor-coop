@@ -1557,4 +1557,7 @@ internal partial struct SharedBlock
     public const uint CheatKindCloseDoor = 109;
     /// <summary>Developer staging: set a real door/placeable lock through the engine's lock field.</summary>
     public const uint CheatKindSetLock = 110;
+
+    /// <summary>Security skill on a locked door (native UnlockObject input). See IGameBridge.</summary>
+    public const uint CheatKindUnlockDoor = 111;
 }

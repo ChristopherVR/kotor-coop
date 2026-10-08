@@ -4,6 +4,41 @@ namespace KotorCoop.Plugin;
 
 internal sealed unsafe partial class CheatController
 {
+    /// <summary>
+    /// The Security action on a locked door, exactly as the retail target menu sends it
+    /// (<c>CSWCDoor</c> menu action 0x00683E50 calls <c>SendPlayerToServerInput_UnlockObject</c>
+    /// with the door id and OBJECT_INVALID for "no particular tool"). The server walks the
+    /// controlled creature over and rolls its skill; a lock that needs a better character
+    /// stays shut, which is the point of a playtest.
+    /// </summary>
+    private void UnlockDoor(nint player)
+    {
+        uint id = block.CheatTarget;
+        nint door = id is 0 or Odyssey.ObjectInvalid ? 0 : Odyssey.ResolveDoor(id);
+        if (door == 0)
+        {
+            Answer(SharedBlock.CheatStatusNoTarget, $"unlockdoor: 0x{id:X} is not a door in this world");
+            return;
+        }
+
+        if (!Odyssey.IsDoorLocked(door))
+        {
+            Answer(SharedBlock.CheatStatusRefused, $"unlockdoor: door 0x{id:X} is not locked");
+            return;
+        }
+
+        float distance = player != 0 ? Distance(Odyssey.GetPosition(player), Odyssey.GetPosition(door)) : 0f;
+        if (distance > 40f)
+        {
+            Answer(SharedBlock.CheatStatusRefused, $"unlockdoor: door 0x{id:X} is {distance:F1}m away, past the 40m limit");
+            return;
+        }
+
+        bool sent = Odyssey.UnlockObject(id);
+        Answer(sent ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusEngineRefused,
+            sent ? $"door 0x{id:X}: native UnlockObject (Security) sent" : $"door 0x{id:X}: could not send UnlockObject");
+    }
+
     private void SetLock()
     {
         uint id = block.CheatTarget;

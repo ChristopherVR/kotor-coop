@@ -352,6 +352,10 @@ public enum CoopCommandKind
     /// <summary>Developer staging: set the lock of a real door or placeable by object id.</summary>
     SetLock,
 
+    /// <summary>Use the Security skill on a locked door, through the same player-input message
+    /// the target menu's Security action sends (CSWCMessage::SendPlayerToServerInput_UnlockObject).</summary>
+    UnlockDoor,
+
     /// <summary>
     /// CONTAINER-SYNC STAGING VERB: makes the local player USE a placeable (chest, corpse,
     /// footlocker) through the engine's own use-object input, so the real OnUsed/GUI path runs
@@ -1231,6 +1235,7 @@ public static partial class ConsoleCommand
         new(["opendoor"], ParseOpenDoor),
         new(["closedoor"], ParseCloseDoor),
         new(["setlock"], ParseSetLock),
+        new(["unlockdoor"], ParseUnlockDoor),
         new(["useplaceable"], ParseUsePlaceable),
         new(["closeplaceable"], ParseClosePlaceable),
         new(["items"], ParseItems),
