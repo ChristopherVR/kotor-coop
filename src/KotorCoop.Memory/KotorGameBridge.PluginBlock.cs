@@ -485,6 +485,13 @@ public sealed partial class KotorGameBridge
                 continue;
             }
 
+            // Never pulled out of a fight: a hostile only this world has is removed once it is out
+            // of combat, not while the player is trading blows with it. A failed read waits too.
+            if (!_memory.TryReadInt32(creature.Address + OffInCombat, out int inCombat) || inCombat != 0)
+            {
+                continue;
+            }
+
             ids.Add(creature.ObjectId);
         }
 
