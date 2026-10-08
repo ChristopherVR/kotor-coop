@@ -80,6 +80,19 @@ public sealed partial class KotorGameBridge
 
         if (!TryReadLivenessEpoch(out uint targetEpoch) || !TryReadWorldLoadSerial(out uint targetSerial)
             || !_memory.TryReadUInt32(_pluginBlock + BlockHostPartyOccupants, out uint sequence)) return false;
+
+        // Unchanged content is not rewritten. This runs every pump, and the write is ~50
+        // cross-process writes under an odd sequence: the plugin's party mirror kept reading
+        // the bank mid-write and dropping the companion for a frame, about three times a second
+        // (live 2026-10-09, "no occupant proof: host bank mid-write"). Skipped only while the
+        // bank still carries the sequence this writer last committed.
+        List<string> fingerprint = HostPartyRosterFingerprint(valid, roster, packed, targetEpoch, targetSerial);
+        if (sequence == _hostRosterCommittedSequence && (sequence & 1) == 0
+            && _hostRosterFingerprint is not null && fingerprint.SequenceEqual(_hostRosterFingerprint))
+        {
+            return true;
+        }
+
         uint odd = (sequence + 1) | 1u;
         if (!_memory.TryWrite(_pluginBlock + BlockHostPartyOccupants, odd)) return false;
         bool ok = _memory.TryWrite(_pluginBlock + BlockHostPartyOccupants + 4, targetEpoch);
@@ -104,7 +117,33 @@ public sealed partial class KotorGameBridge
 
         if (!ok || !TryReadLivenessEpoch(out uint afterEpoch) || afterEpoch != targetEpoch
             || !TryReadWorldLoadSerial(out uint afterSerial) || afterSerial != targetSerial) return false;
-        return _memory.TryWrite(_pluginBlock + BlockHostPartyOccupants, (sequence + 2) & ~1u);
+        uint committed = (sequence + 2) & ~1u;
+        if (!_memory.TryWrite(_pluginBlock + BlockHostPartyOccupants, committed))
+        {
+            return false;
+        }
+
+        _hostRosterCommittedSequence = committed;
+        _hostRosterFingerprint = fingerprint;
+        return true;
+    }
+
+    private uint _hostRosterCommittedSequence = 1; // odd: nothing committed yet
+    private List<string>? _hostRosterFingerprint;
+
+    /// <summary>Everything <see cref="WriteHostPartyRoster"/> writes under its sequence, as text.</summary>
+    private List<string> HostPartyRosterFingerprint(bool valid, PartyRoster roster, uint packed, uint epoch, uint serial)
+    {
+        List<string> parts = [$"{valid}|{packed}|{(valid ? roster.HostSessionId : 0)}|{epoch}|{serial}"];
+        for (int slot = 0; slot < ProtocolConstants.PartyRosterSlots; slot++)
+        {
+            PartyOccupantIdentity occupant = valid ? roster.OccupantFor(slot) : new(0, "");
+            bool adopted = valid && (_partyAdoptionProof?.Allows(slot, roster, serial, epoch, ReadPartyOccupantGeneration(slot)) ?? false);
+            parts.Add($"{(valid ? roster.ObjectIdFor(slot) : 0)}|{occupant.Generation}|{occupant.Replaced}|{adopted}|"
+                + $"{_partyAdoptionProof?.LocalGeneration(slot) ?? uint.MaxValue}|{occupant.Template}");
+        }
+
+        return parts;
     }
     // ---- party companions ------------------------------------------------------
     //
