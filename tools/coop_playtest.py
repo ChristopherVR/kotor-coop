@@ -20,6 +20,19 @@ the policy only decides what to do next.
   python tools/coop_playtest.py --host <pid> --client <pid> --policy laya --minutes 20
       --output <new evidence directory>
 
+--policy claude pursues quests: the brain is Claude Code run headless (`claude -p --model sonnet
+--output-format json`, prompt on stdin, no tools; only Read when --claude-screenshots attaches a
+picture). It is asked only for real decisions: two or more options that are not popups, menus,
+forced steps, continue/wait or a plain fight with hostiles near; everything routine stays with the
+rules. Each call gets the goal, the active journal quests with their current entry text (global.jrl
++ dialog.tlk via kotor_lore), the area name, party, nearby named characters, the last 12 decisions
+with outcomes, the PLAN it returned last time, and the options. Identical situations reuse the last
+answer (or the next untried option); --claude-budget N (default 150) caps calls, after which rules
+take over and report.json says so. Every call (prompt size, latency, choice, reason, cost) is in
+report.json under "claude". A reply that is not JSON, or names a key not offered, falls back to rules.
+Quest-useful actions: talk options carry the character's name, and gotalk_<id> walks the walkmesh to
+a named character out of talking range, then talks.
+
 Needs the isolated rig (tools/demo.ps1 -Isolated) so injected input reaches unfocused windows.
 """
 from __future__ import annotations
@@ -27,17 +40,25 @@ from __future__ import annotations
 import argparse
 import asyncio
 import collections
+import itertools
 import json
 import math
 import os
 import random
 import re
 import shutil
+import subprocess
+import tempfile
 import time
 import tomllib
 from pathlib import Path
 
 from laya_playtest import REPO, Game, MemoryError
+
+try:
+    import kotor_lore
+except Exception:  # lore is context for the prompt, never a requirement
+    kotor_lore = None
 
 GOAL = ("Play Star Wars: Knights of the Old Republic co-op and make story progress: finish "
         "conversations choosing replies that move the story forward, defeat hostile enemies, "
@@ -150,6 +171,44 @@ def walk_actions(me, nav, tried, closed_doors):
     return acts
 
 
+def who_is(module, tag):
+    """'Trask (end_trask)': the name a player sees, then the tag the commands use."""
+    name = ""
+    if kotor_lore is not None:
+        try:
+            name = kotor_lore.creature_name(module, tag)
+        except Exception:
+            pass
+    return f"{name} ({tag})" if name and name.lower() != (tag or "").lower() else (tag or "someone")
+
+
+def npc_walk_actions(me, nav, tried, closed_doors, living):
+    """Walk up to a named non-hostile character that is out of talking range, on a walkmesh route
+    that avoids closed doors, then talk to them. Quests are mostly people, and the nearby-only
+    talk option never reaches the one across the room."""
+    acts = {}
+    if nav is None or not me.get("position"):
+        return acts
+    here = tuple(me["position"][:2])
+    blocked = [tuple(d["position"][:2]) for d in closed_doors]
+    far = [o for o in living if o["faction"] != 1 and 12 <= o["distance"] <= 80
+           and re.fullmatch(r"[A-Za-z0-9_]{1,31}", o["tag"] or "")
+           and tried.get(f"gotalk:{me['module']}:{o['id']}", 0) < 2 and tried.get(f"talk:{me['module']}:{o['id']}", 0) < 3]
+    for o in sorted(far, key=lambda o: o["distance"])[:6]:
+        target = tuple(o["position"][:2])
+        route = nav.path(here, target, blocked=blocked)
+        if not route or len(route) < 2:
+            continue
+        last, gap = route[-2], math.dist(route[-2], target)
+        stop = target if gap < 2 else (target[0] + (last[0] - target[0]) * 2 / gap, target[1] + (last[1] - target[1]) * 2 / gap)
+        acts[f"gotalk_{o['id']}"] = {"description": f"Walk to {who_is(me['module'], o['tag'])} ({o['distance']:.0f} m away) and talk",
+                                     "walk": route[:-1] + [stop], "commands": [f"talktag {o['tag']}"],
+                                     "count": f"gotalk:{me['module']}:{o['id']}"}
+        if len(acts) >= 2:
+            break
+    return acts
+
+
 _NAV = {}
 
 
@@ -238,7 +297,8 @@ def actions_for(role, me, peer, tried, nav=None):
                                      "commands": [f"useplaceable 0x{o['id']:X}"], "target": key(o)}
     for o in [o for o in living if role == "host" and o["faction"] != 1 and o["distance"] < 12 and tried.get("talk:" + key(o), 0) < 3
               and re.fullmatch(r"[A-Za-z0-9_]{1,31}", o["tag"] or "")][:2]:
-        acts[f"talk_{o['id']}"] = {"description": f"Talk to {o['tag']}", "commands": [f"talktag {o['tag']}"], "target": "talk:" + key(o)}
+        acts[f"talk_{o['id']}"] = {"description": f"Talk to {who_is(me['module'], o['tag'])}", "commands": [f"talktag {o['tag']}"],
+                                   "target": "talk:" + key(o)}
 
     if role == "joiner":
         if peer.get("module") and peer["module"] != me["module"]:
@@ -285,6 +345,7 @@ def actions_for(role, me, peer, tried, nav=None):
     if who == "pc":
         closed = [o for o in objs if o["kind"] == "door" and not o["open"]]
         acts |= walk_actions(me, nav, tried, closed)
+        acts |= npc_walk_actions(me, nav, tried, closed, living)
 
     # Only the host switches the controlled party member (party_switch_host_only). The HUD's
     # second portrait is the first companion while the PC leads, and the PC while a companion
@@ -347,7 +408,7 @@ class RulesPolicy:
     def __init__(self, seed):
         self.rng = random.Random(seed)
 
-    async def choose(self, role, text, acts):
+    async def choose(self, role, text, acts, ctx=None):
         replies = [k for k, a in acts.items() if k.startswith("reply_") and "repeat" not in a["description"].lower()]
         if replies:
             return self.rng.choice(replies), {"source": "rules"}
@@ -360,7 +421,7 @@ class LayaPolicy:
     def __init__(self, session, confidence, fallback):
         self.session, self.confidence, self.fallback = session, confidence, fallback
 
-    async def choose(self, role, text, acts):
+    async def choose(self, role, text, acts, ctx=None):
         if len(acts) == 1:
             return next(iter(acts)), {"source": "forced"}
         result = await self.session.call_tool("laya_predict", {
@@ -374,6 +435,213 @@ class LayaPolicy:
             return choice, {"source": "laya", "confidence": answer.get("confidence")}
         picked, _ = await self.fallback.choose(role, text, acts)
         return picked, {"source": "fallback", "laya_choice": choice, "abstention": answer.get("abstention")}
+
+
+CLAUDE_GOAL = ("Goal: play KOTOR 1 as a co-op party and advance the main story and the active quests. Prefer the next "
+               "concrete objective in the journal; talk to quest-relevant characters; pick dialogue replies that "
+               "advance quests; use doors and transitions that lead toward objectives; avoid repeating actions that "
+               "already failed or were already tried (see the recent history).")
+CLAUDE_SYSTEM = ("You choose the next action for a KOTOR 1 co-op playtest bot. You never call tools unless a screenshot "
+                 "file is named, and then only to look at it. Answer with one JSON object and nothing else.")
+CLAUDE_ANSWER = ('Answer with only this JSON: {"choice": "<one option key>", "plan": "<one or two sentences: what you are '
+                 'trying to do next>", "why": "<short reason>"}')
+PROMPT_LIMIT = 6000
+# Options that are housekeeping, not decisions: popups, menus, forced steps, the partner, gear.
+ROUTINE_KEYS = ("ok_", "party_", "take_items", "close_menu", "continue", "wait", "equip", "level_up", "control_",
+                "join_", "follow")
+
+
+def real_options(acts):
+    return [k for k in acts if not k.startswith(ROUTINE_KEYS)]
+
+
+def needs_claude(acts):
+    """A real decision: two or more options that are not routine, and no plain fight to take."""
+    return len(real_options(acts)) >= 2 and not any(k.startswith("fight_") for k in acts)
+
+
+def journal_lines(journal, limit=8, width=350):
+    """Active quests with the text of their CURRENT entry, newest first. A quest whose entry
+    ends it is done and left out."""
+    if kotor_lore is None or not journal:
+        return ["(journal empty or unreadable)"]
+    lines = []
+    for tag, state in list(journal.items())[-limit:][::-1]:
+        entry = kotor_lore.journal_entry(tag, state)
+        if entry and entry[1]:
+            continue
+        name = kotor_lore.quest_name(tag) or tag
+        text = (entry[0] if entry else "").replace("\n", " ")
+        text = text[:width] + "..." if len(text) > width else text or "(no text)"
+        lines.append(f"- {name} [{tag} #{state}]: {text}")
+    return lines or ["(no active quests)"]
+
+
+def build_prompt(role, me, peer, acts, plan="", history=(), image=None):
+    """The compact text one Claude call gets: goal, journal, place, history, options (< ~6 KB)."""
+    module = me.get("module") or ""
+    area = (kotor_lore.area_name(module) if kotor_lore else "") or module
+    objs = me.get("objects") or []
+    hostile = sum(1 for o in objs if o["kind"] == "creature" and o.get("faction") == 1 and o["hp"] > 0 and not o["party"])
+    party = [f"{who_is(module, o['tag'])} hp {o['hp']}/{o.get('max_hp')}" for o in objs if o["kind"] == "creature"
+             and o["party"] and o["tag"] and not COOP_TAG.match(o["tag"])]
+    folk = [f"{who_is(module, o['tag'])} {o['distance']:.0f}m" for o in objs if o["kind"] == "creature" and o["hp"] > 0
+            and not o["party"] and o.get("faction") != 1 and o["tag"] and not COOP_TAG.match(o["tag"]) and o["distance"] <= 60][:8]
+    where = (f"Area: {area} (module {module}). You are the {role}, controlling {me.get('controlled_tag') or 'your own character'}, "
+             f"health {me.get('hp')}/{me.get('max_hp')}. Partner is in {peer.get('module', 'unknown')}. "
+             f"Companions: {'; '.join(party) or 'none'}. Hostiles nearby: {hostile}. "
+             f"Named characters nearby: {'; '.join(folk) or 'none'}.")
+    if me.get("conversation"):
+        speaking = who_is(module, me.get("partner_tag") or "")
+        where += f" In a conversation with {speaking}; their last line: {(me.get('dialogue_line') or '').strip()[:200]!r}."
+    for width in (350, 200, 120):
+        parts = [CLAUDE_GOAL, "", "Journal (active quests, current entry):", *journal_lines(me.get("journal"), width=width), "",
+                 where, "", f"Your plan from last time: {plan or '(none yet)'}", "",
+                 "Recent decisions, oldest first:", *(history or ["(none yet)"]), "",
+                 "Options (key: description):", *(f"{k}: {a['description']}" for k, a in acts.items()), ""]
+        if image:
+            parts += [f"A screenshot of your game is at {image}. Read it only if the options are not enough.", ""]
+        parts.append(CLAUDE_ANSWER)
+        prompt = "\n".join(parts)
+        if len(prompt) <= PROMPT_LIMIT:
+            break
+    return prompt
+
+
+def extract_choice(text):
+    """The first JSON object in `text` that has a "choice", or None."""
+    decoder, i = json.JSONDecoder(), 0
+    while True:
+        i = (text or "").find("{", i)
+        if i < 0:
+            return None
+        try:
+            obj, end = decoder.raw_decode(text, i)
+            if isinstance(obj, dict) and "choice" in obj:
+                return obj
+        except ValueError:
+            pass
+        i += 1
+
+
+def find_claude():
+    return shutil.which("claude") or str(Path.home() / ".local" / "bin" / ("claude.exe" if os.name == "nt" else "claude"))
+
+
+class ClaudePolicy:
+    """Claude Code, headless, decides the real choices; the rules policy keeps everything routine.
+    Calls are budgeted and cached; every call is recorded for report.json."""
+    name = "claude"
+
+    def __init__(self, fallback, budget=150, model="sonnet", timeout=180, screenshots=False, claude_cmd=None, workdir=None):
+        self.fallback, self.budget, self.model, self.timeout = fallback, budget, model, timeout
+        self.screenshots, self.claude_cmd = screenshots, claude_cmd or find_claude()
+        self.workdir = workdir or tempfile.gettempdir()
+        self.shot_provider = None  # set by run(): role -> png path or None
+        self.calls, self.plan, self.history, self.cache = [], {}, {}, {}
+        self.cache_hits = self.rules_decisions = 0
+        self.exhausted = False
+
+    # -- memory the prompt carries ---------------------------------------------------------
+    def record(self, role, choice, description, outcome):
+        self.history.setdefault(role, collections.deque(maxlen=12)).append(f"{choice} ({description[:80]}) -> {outcome[:100]}")
+
+    def note(self, role, text):
+        self.history.setdefault(role, collections.deque(maxlen=12)).append(text)
+
+    # -- the call -----------------------------------------------------------------------------
+    def _run_claude(self, prompt, image):
+        cmd = [self.claude_cmd, "-p", "--model", self.model, "--output-format", "json", "--no-session-persistence",
+               "--disable-slash-commands", "--system-prompt", CLAUDE_SYSTEM]
+        if image:
+            cmd += ["--tools", "Read", "--allowedTools", "Read", "--add-dir", str(Path(image).parent)]
+        else:
+            cmd += ["--tools", ""]
+        return subprocess.run(cmd, input=prompt, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              timeout=self.timeout, cwd=self.workdir)
+
+    async def _ask(self, role, prompt, image):
+        record = {"n": len(self.calls) + 1, "role": role, "prompt_chars": len(prompt), "image": bool(image)}
+        self.calls.append(record)
+        started = time.monotonic()
+        parsed = None
+        try:
+            done = await asyncio.to_thread(self._run_claude, prompt, image)
+            record["seconds"] = round(time.monotonic() - started, 1)
+            text = done.stdout
+            try:
+                outer = json.loads(done.stdout)
+                record["cost_usd"] = outer.get("total_cost_usd")
+                if outer.get("is_error"):
+                    record["error"] = str(outer.get("result"))[:200]
+                text = outer.get("result") if isinstance(outer.get("result"), str) else done.stdout
+            except ValueError:
+                pass
+            if done.returncode != 0 and "error" not in record:
+                record["error"] = f"exit {done.returncode}: {done.stderr.strip()[:200]}"
+            parsed = extract_choice(text)
+            if parsed is None and "error" not in record:
+                record["error"] = "no JSON choice in the reply: " + str(text)[:160]
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            record["seconds"] = round(time.monotonic() - started, 1)
+            record["error"] = f"{type(exc).__name__}: {exc}"[:200]
+        return record, parsed
+
+    async def choose(self, role, text, acts, ctx=None):
+        me, peer = (ctx or {}).get("me") or {}, (ctx or {}).get("peer") or {}
+        real = real_options(acts)
+        if not needs_claude(acts):
+            self.rules_decisions += 1
+            key, meta = await self.fallback.choose(role, text, acts)
+            return key, dict(meta, routine=True)
+        sig = (role, me.get("module"), tuple(sorted(real)), tuple(sorted((me.get("journal") or {}).items())),
+               me.get("dialogue_node") if me.get("conversation") else None, bool(me.get("conversation")))
+        cached = self.cache.get(role)
+        if cached and cached["sig"] == sig:
+            self.cache_hits += 1
+            if cached["choice"] in acts and cached["uses"] < 3:
+                cached["uses"] += 1
+                return cached["choice"], {"source": "claude-cache"}
+            untried = [k for k in real if k not in cached["used"]]
+            if untried:
+                cached["used"].add(untried[0])
+                return untried[0], {"source": "claude-cache", "next_untried": True}
+            self.rules_decisions += 1
+            key, meta = await self.fallback.choose(role, text, acts)
+            return key, dict(meta, note="claude choices for this situation are used up")
+        if len(self.calls) >= self.budget:
+            self.exhausted = True
+            self.rules_decisions += 1
+            key, meta = await self.fallback.choose(role, text, acts)
+            return key, dict(meta, note="claude budget spent")
+        image = None
+        if self.screenshots and self.shot_provider:
+            try:
+                image = self.shot_provider(role)
+            except Exception:
+                image = None
+        prompt = build_prompt(role, me, peer, acts, self.plan.get(role, ""), list(self.history.get(role, ())), image)
+        record, parsed = await self._ask(role, prompt, image)
+        choice = (parsed or {}).get("choice")
+        if choice in acts:
+            record.update(choice=choice, why=str(parsed.get("why", ""))[:200], plan=str(parsed.get("plan", ""))[:300])
+            if parsed.get("plan"):
+                self.plan[role] = str(parsed["plan"])[:300]
+            self.cache[role] = {"sig": sig, "choice": choice, "uses": 1, "used": {choice}}
+            return choice, {"source": "claude", "why": record["why"], "call": record["n"]}
+        if parsed is not None:
+            record["error"] = f"choice {choice!r} is not an offered key"
+        self.rules_decisions += 1
+        key, meta = await self.fallback.choose(role, text, acts)
+        return key, dict(meta, source="rules", note="claude failed: " + record.get("error", "?"), call=record["n"])
+
+    def report(self):
+        ok = [c for c in self.calls if c.get("choice")]
+        return {"budget": self.budget, "calls": len(self.calls), "answered": len(ok), "cache_hits": self.cache_hits,
+                "rules_decisions": self.rules_decisions, "budget_spent": self.exhausted, "model": self.model,
+                "prompt_chars_max": max((c["prompt_chars"] for c in self.calls), default=0),
+                "seconds_total": round(sum(c.get("seconds", 0) for c in self.calls), 1),
+                "cost_usd_total": round(sum(c.get("cost_usd") or 0 for c in self.calls), 4), "log": self.calls}
 
 
 class Referee:
@@ -400,6 +668,26 @@ class Referee:
             except (MemoryError, OSError):
                 pass
         return paths
+
+    def shot_one(self, role, name):
+        """A front-buffer shot of one game as a PNG (PIL) or the BMP; None when it cannot be taken."""
+        game = self.games[0 if role == "host" else 1]
+        shotname = f"{name}_{role}"
+        try:
+            if game.console(f"screenshot {shotname} front").get("applied"):
+                src = game.game_dir / "kotorcoop-shots" / f"{shotname}.bmp"
+                if src.exists():
+                    dest = self.out / src.name
+                    shutil.copy2(src, dest)
+                    try:
+                        from PIL import Image
+                        Image.open(dest).save(dest.with_suffix(".png"))
+                        return dest.with_suffix(".png")
+                    except Exception:
+                        return dest
+        except (MemoryError, OSError):
+            pass
+        return None
 
     def flag(self, key, detail, states):
         if key in self.reported:
@@ -680,6 +968,9 @@ async def run(args, policy):
     tried = {"host": {}, "joiner": {}}
     moving, idle, waits = {}, {}, {}
     report = {"policy": policy.name, "steps": [], "modules": [], "counts": collections.Counter()}
+    if hasattr(policy, "shot_provider") and args.claude_screenshots:
+        shots = itertools.count(1)
+        policy.shot_provider = lambda role: referee.shot_one(role, f"claude{next(shots):03d}")
     own_tags = {}
 
     def look(index):
@@ -711,7 +1002,11 @@ async def run(args, policy):
                     tried[role].pop("party_ok", None)  # a new party screen starts with plain OK
                 if tried[role].get("was_talking") and not me.get("conversation"):
                     refresh_doors(tried[role], me)  # story beats unlock doors
+                if tried[role].get("was_talking") and not me.get("conversation") and hasattr(policy, "note"):
+                    policy.note(role, f"conversation with {who_is(me.get('module'), tried[role].get('partner', ''))} ended")
                 tried[role]["was_talking"] = bool(me.get("conversation"))
+                if me.get("conversation"):
+                    tried[role]["partner"] = me.get("partner_tag") or ""
                 nav = nav_for(me.get("module")) if role == "host" and me.get("module") else None
                 if nav and me.get("position"):
                     for name, centre in nav.rooms.items():
@@ -735,7 +1030,7 @@ async def run(args, policy):
                 else:
                     waits[role] = 0
                 text = summary(role, me, peer)
-                choice, meta = await policy.choose(role, text, acts)
+                choice, meta = await policy.choose(role, text, acts, ctx={"me": me, "peer": peer})
                 act = acts[choice]
                 now = games[index].snapshot()
                 if now.get("loading") or now.get("module") != me.get("module"):
@@ -750,6 +1045,8 @@ async def run(args, policy):
                     if act.get("gap") and i + 1 < len(act["commands"]):
                         await asyncio.sleep(act["gap"])  # GUI clicks land one frame-pump apart
                 tried[role]["last"] = choice
+                if hasattr(policy, "record"):
+                    policy.record(role, choice, act["description"], "; ".join(str(r.get("reply", ""))[:50] for r in results[:2]) or "sent")
                 if act.get("took") or choice.startswith("search_"):
                     tried[role]["took"] = bool(act.get("took"))
                 if act.get("took"):
@@ -782,6 +1079,8 @@ async def run(args, policy):
                     tried[role]["acted_as_companion"] = tried[role].get("acted_as_companion", 0) + 1
                 if choice.startswith("party_"):
                     tried[role]["party_ok"] = tried[role].get("party_ok", 0) + 1
+                if act.get("count"):
+                    tried[role][act["count"]] = tried[role].get(act["count"], 0) + 1
                 if act.get("target") and not act.get("walk"):
                     tried[role][act["target"]] = tried[role].get(act["target"], 0) + 1
                 if act.get("join"):
@@ -817,10 +1116,17 @@ async def run(args, policy):
             game.close()
         report["seconds"] = round(time.monotonic() - started, 1)
         report["findings"] = referee.findings
+        if hasattr(policy, "report"):
+            report["claude"] = policy.report()
         (out / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
         lines = [f"# Co-op playtest ({policy.name}), {report['seconds']} s, stop: {report.get('stop_reason')}", "",
                  f"Areas: {', '.join(report['modules'])}", f"Actions: {dict(report['counts'])}", "",
                  f"## Findings ({len(referee.findings)})", ""]
+        if report.get("claude"):
+            c = report["claude"]
+            lines[3:3] = [f"Claude: {c['calls']} calls ({c['answered']} answered), {c['cache_hits']} cache reuses, "
+                          f"{c['rules_decisions']} decisions by rules, max prompt {c['prompt_chars_max']} chars, {c['seconds_total']} s"
+                          + (f". BUDGET SPENT ({c['budget']} calls): the rest of the run fell back to rules." if c["budget_spent"] else ""), ""]
         lines += [f"- **{f['kind']}** {f['at']}: {f['detail']} (shots: {', '.join(f['shots']) or 'none'})" for f in referee.findings]
         (out / "findings.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
         print("FINAL", json.dumps({k: report[k] for k in ("stop_reason", "modules", "counts", "seconds")} | {"findings": len(referee.findings)}), flush=True)
@@ -830,6 +1136,10 @@ async def main_async(args):
     rules = RulesPolicy(args.seed)
     if args.policy == "rules":
         await run(args, rules)
+        return
+    if args.policy == "claude":
+        await run(args, ClaudePolicy(rules, budget=args.claude_budget, model=args.claude_model, timeout=args.claude_timeout,
+                                     screenshots=args.claude_screenshots, claude_cmd=args.claude_cmd))
         return
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
@@ -848,7 +1158,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--host", type=int, required=True)
     parser.add_argument("--client", type=int, required=True)
-    parser.add_argument("--policy", choices=("laya", "rules"), default="laya")
+    parser.add_argument("--policy", choices=("laya", "rules", "claude"), default="laya")
     parser.add_argument("--minutes", type=float, default=20)
     parser.add_argument("--steps", type=int, default=400)
     parser.add_argument("--pace", type=float, default=3.0, help="seconds between steps")
@@ -856,6 +1166,12 @@ def main():
     parser.add_argument("--confidence", type=float, default=.4)
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--server", default="laya-kotor-pilot")
+    parser.add_argument("--claude-budget", type=int, default=150, help="most claude -p calls per run; rules take over after")
+    parser.add_argument("--claude-model", default="sonnet")
+    parser.add_argument("--claude-timeout", type=float, default=180, help="seconds per claude call")
+    parser.add_argument("--claude-cmd", default=None, help="path to the claude CLI (default: PATH, then ~/.local/bin)")
+    parser.add_argument("--claude-screenshots", action="store_true",
+                        help="attach a front-buffer screenshot of the acting game to each call and allow the Read tool")
     parser.add_argument("--output", required=True, help="a NEW directory for the evidence")
     args = parser.parse_args()
     if not 0 < args.minutes <= 240 or not 1 <= args.steps <= 5000:
