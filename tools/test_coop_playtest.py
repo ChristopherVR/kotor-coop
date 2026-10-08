@@ -28,6 +28,22 @@ class Actions(unittest.TestCase):
         self.assertIn('"Okay."', acts["reply_1"]["description"])
         self.assertEqual(acts["reply_2"]["commands"], ["input key 3 tap"])
 
+    def test_a_container_is_offered_by_its_in_game_name(self):
+        # A raw tag ('end_locker01') lost to a dozen door options; the footlocker held the gear.
+        class Lore:
+            @staticmethod
+            def placeable_name(module, tag):
+                return ("Footlocker", True) if tag == "end_locker01" else ("", False)
+        saved, h.kotor_lore = h.kotor_lore, Lore
+        try:
+            locker = {"id": 198, "kind": "placeable", "tag": "end_locker01", "distance": 9.5,
+                      "position": [9.5, 0, 0], "open": False, "locked": False}
+            acts = h.actions_for("host", player(objects=[locker]), player(), {})
+            self.assertIn("Footlocker (end_locker01), holds items", acts["search_198"]["description"])
+            self.assertEqual(h.what_is("end_m01aa", "chair2"), "chair2")
+        finally:
+            h.kotor_lore = saved
+
     def test_a_menu_over_a_conversation_is_closed_before_space_is_pressed(self):
         # 2026-10-08: a character sheet over a bark; Space under it toggled pause instead.
         me = player(conversation=True, menu_open=True, panels=["character", "menu"])

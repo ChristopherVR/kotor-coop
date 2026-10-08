@@ -17,7 +17,7 @@ import kotorfiles
 
 _game = None
 _journal = None
-_areas, _creatures = {}, {}
+_areas, _creatures, _placeables = {}, {}, {}
 JRL_TYPE = 2056  # kotorfiles' table names 2056 "utw"; the key file files global.jrl under it
 
 
@@ -133,6 +133,38 @@ def creature_names(module):
         except Exception:
             pass
     return _creatures[module]
+
+
+def placeable_names(module):
+    """{lowercase tag: (display name, has inventory)} for the placeables in the module's GIT.
+    The tag alone ('end_locker01') does not tell a reader it is the footlocker the story wants
+    searched; the template's LocName ('Footlocker') and HasInventory do."""
+    if not module:
+        return {}
+    module = module.lower()
+    if module not in _placeables:
+        names = _placeables[module] = {}
+        try:
+            resources = _module_resources(module)
+            by_name = {r.name.lower(): r for r in resources}
+            git = next((r for r in resources if r.ext == "git"), None)
+            if git is not None:
+                for p in kotorfiles.GFF(git.read(), git.name).root.get("Placeable List") or []:
+                    template = by_name.get((p.get("TemplateResRef") or "").lower() + ".utp")
+                    if template is None:
+                        continue
+                    root = kotorfiles.GFF(template.read(), template.name).root
+                    tag = (root.get("Tag") or "").lower()
+                    if tag:
+                        names.setdefault(tag, (_text(root.get("LocName")), bool(root.get("HasInventory"))))
+        except Exception:
+            pass
+    return _placeables[module]
+
+
+def placeable_name(module, tag):
+    """(display name or '', holds items) for one placeable tag."""
+    return placeable_names(module).get((tag or "").lower(), ("", False))
 
 
 def creature_name(module, tag):
