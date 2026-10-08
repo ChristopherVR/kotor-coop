@@ -642,6 +642,18 @@ async def run(args, policy):
     tried = {"host": {}, "joiner": {}}
     moving, idle, waits = {}, {}, {}
     report = {"policy": policy.name, "steps": [], "modules": [], "counts": collections.Counter()}
+    own_tags = {}
+
+    def look(index):
+        # A player character can carry a tag (characters made in chargen on some saves do), so
+        # "controlling a companion" means a tag other than the one the run started with.
+        state = games[index].snapshot()
+        if not state.get("loading") and "controlled_tag" in state:
+            own = own_tags.setdefault(index, state["controlled_tag"])
+            if state["controlled_tag"] == own:
+                state["controlled_tag"] = ""
+        return state
+
     started = time.monotonic()
     try:
         for step in range(args.steps):
@@ -649,7 +661,7 @@ async def run(args, policy):
                 report["stop_reason"] = "time budget"
                 break
             for index, role in enumerate(("host", "joiner")):
-                me, peer = games[index].snapshot(), games[1 - index].snapshot()
+                me, peer = look(index), look(1 - index)
                 if me.get("module") and me["module"] not in report["modules"]:
                     report["modules"].append(me["module"])
                 last_pos = moving.get(role)
@@ -741,7 +753,7 @@ async def run(args, policy):
                 report["steps"].append(row)
                 print(json.dumps({k: row[k] for k in ("step", "role", "choice", "source")}), flush=True)
             await asyncio.sleep(args.pace)
-            referee.observe(games[0].snapshot(), games[1].snapshot())
+            referee.observe(look(0), look(1))
             if any(f["kind"] == "crash" for f in referee.findings):
                 report["stop_reason"] = "crash"
                 break
