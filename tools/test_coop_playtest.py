@@ -126,9 +126,17 @@ class Actions(unittest.TestCase):
 
     def test_refresh_forgets_doors_and_levels_but_not_talks(self):
         tried = {"end_m01aa:7:pc": 2, "end_m01aa:7:pc:unlock": 2, "level:pc": 1, "swaps": 3,
-                 "talk:end_m01aa:4": 3, "took_any": True}
+                 "talk:end_m01aa:4": 3, "took_any": True, "end_m01aa:198": 1}
         h.refresh_doors(tried, player())
-        self.assertEqual(tried, {"talk:end_m01aa:4": 3, "took_any": True})
+        self.assertEqual(tried, {"talk:end_m01aa:4": 3, "took_any": True, "end_m01aa:198": 1})
+
+    def test_an_open_transition_is_offered_ahead_of_nearer_dead_ends(self):
+        doors = [{"id": i, "kind": "door", "tag": f"d{i}", "position": [i, 0, 0], "distance": i, "open": 0,
+                  "destination": "", "locked": True} for i in range(1, 6)]
+        doors.append({"id": 74, "kind": "door", "tag": "end_door10", "position": [23, 0, 0], "distance": 23,
+                      "open": 2, "destination": "end_m01ab"})
+        acts = h.actions_for("host", player(objects=doors), player(), {})
+        self.assertEqual([k for k in acts if k.startswith(("open_", "exit_"))][0], "exit_74")
 
     def test_loading_and_downed_players_do_nothing(self):
         self.assertEqual(h.actions_for("host", player(loading=True), player(), {}), {})
