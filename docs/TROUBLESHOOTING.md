@@ -329,6 +329,10 @@ again. Details:
 Automatic port opening (UPnP) was tried once on a real home connection and did not work.
 If a friend cannot connect, use a tunnel such as playit.gg.
 
+Your public address is shown only when you type `public_address` (which also copies it to the
+clipboard); the hosting announcement and `status` say only that one was found, so it does not
+appear on a stream or screenshot by accident.
+
 `status` / `public_address` on a hosting player never says a bare "UPnP mapped", because a
 mapping alone does not prove the port is reachable from outside
 ([network-topology.md §16](research/network-topology.md)). After the router answers, the host

@@ -190,12 +190,14 @@ whoever joined; "Both" behaves the same on either side.
   say <message>              Both    Send a chat line to the other player. Past chat is kept
                                      in the pause menu's Messages screen (Dialog tab).
   status                     Both    Show the connection state. While hosting, also shows your
-                                     public address and UPnP status (see "Play over the
-                                     internet" below).
+                                     UPnP status and whether a public address was found (see
+                                     "Play over the internet" below).
   who                        Both    List connected players and which area each is in.
   where                      Both    Show your own area and position.
-  public_address             Host    Show the address/port to share for an internet game.
-                                     Answers "not hosting" on a client.
+  public_address             Host    Show the address/port to share for an internet game, and
+                                     copy it to the clipboard. This is the only place the
+                                     address is shown, so it stays off stream and screenshots
+                                     until you ask. Answers "not hosting" on a client.
   steamstatus                Both    Report whether Steam invites are working. While hosting,
                                      also prints the exact string a friend's Join Game carries.
   steaminvite <steamid64>    Host    Invite one friend by SteamID64. Refused when not hosting.
@@ -209,8 +211,8 @@ Play over the internet
 
 The server browser only finds games on your own network. To play with someone elsewhere:
 
-1. The host presses Host as usual, then checks status (or types public_address) at
-   the ~ console. It prints something like:
+1. The host presses Host as usual, then types public_address at the ~ console. Your
+   address is not shown on screen until you do. It prints something like:
 
        public address: 203.0.113.5:27140 - UPnP mapped - local self-test passed; internet access unconfirmed
 
