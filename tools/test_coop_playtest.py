@@ -387,5 +387,161 @@ class RefereeSharedState(unittest.TestCase):
             self.assertIn(kind, h.SETTLE)
 
 
+class FakeLore:
+    @staticmethod
+    def journal_entry(tag, state):
+        return {"end_attack": ("Carth ordered all hands to the bridge.", False), "old_done": ("All over.", True)}.get(tag)
+
+    @staticmethod
+    def quest_name(tag):
+        return {"end_attack": "Attack on the Endar Spire"}.get(tag, "")
+
+    @staticmethod
+    def area_name(module):
+        return "Endar Spire"
+
+    @staticmethod
+    def creature_name(module, tag):
+        return {"end_trask": "Trask Ulgo"}.get(tag, "")
+
+
+def a_choice():
+    """A host with two real options: a door out and a person to talk to."""
+    door = {"id": 7, "kind": "door", "tag": "end_door10", "position": [10, 0, 0], "distance": 10, "open": 1,
+            "destination": "end_m01ab", "locked": False}
+    me = player(journal={"end_attack": 20, "old_done": 10}, partner_tag="", dialogue_line="",
+                objects=[door, creature(4, "end_trask", 2, 5)])
+    return me, h.actions_for("host", me, player(), {})
+
+
+class ClaudeBrain(unittest.TestCase):
+    def setUp(self):
+        import json
+        import types
+        import unittest.mock as m
+        self.calls = []
+        self.reply = {"result": 'Sure.\n{"choice": "talk_4", "plan": "Meet Trask", "why": "quest giver"}', "total_cost_usd": 0.01}
+
+        def fake_run(cmd, **kw):
+            self.calls.append((cmd, kw))
+            return types.SimpleNamespace(returncode=0, stdout=json.dumps(self.reply), stderr="")
+        for p in (m.patch.object(h.subprocess, "run", fake_run), m.patch.object(h, "kotor_lore", FakeLore)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def policy(self, **kw):
+        return h.ClaudePolicy(h.RulesPolicy(1), claude_cmd="claude", **kw)
+
+    def choose(self, policy, me, acts, role="host"):
+        import asyncio
+        return asyncio.run(policy.choose(role, "text", acts, ctx={"me": me, "peer": player()}))
+
+    def test_the_prompt_has_journal_place_options_and_no_tools(self):
+        me, acts = a_choice()
+        key, meta = self.choose(self.policy(), me, acts)
+        self.assertEqual((key, meta["source"]), ("talk_4", "claude"))
+        cmd, kw = self.calls[0]
+        prompt = kw["input"]
+        self.assertIn("Attack on the Endar Spire", prompt)
+        self.assertIn("Carth ordered all hands to the bridge.", prompt)
+        self.assertNotIn("All over.", prompt)  # a finished quest is not active
+        self.assertIn("Endar Spire (module end_m01aa)", prompt)
+        self.assertIn("Talk to Trask Ulgo (end_trask)", prompt)
+        self.assertIn("exit_7:", prompt)
+        self.assertLess(len(prompt), 6000)
+        self.assertEqual(cmd[cmd.index("--tools") + 1], "")
+        self.assertNotIn("--dangerously-skip-permissions", cmd)
+        self.assertIn("sonnet", cmd)
+
+    def test_a_screenshot_allows_only_read(self):
+        me, acts = a_choice()
+        policy = self.policy(screenshots=True)
+        policy.shot_provider = lambda role: h.Path("C:/evidence/shot.png")
+        self.choose(policy, me, acts)
+        cmd, kw = self.calls[0]
+        self.assertEqual(cmd[cmd.index("--tools") + 1], "Read")
+        self.assertIn("shot.png", kw["input"])
+
+    def test_routine_and_forced_situations_never_call_claude(self):
+        policy = self.policy()
+        me, acts = a_choice()
+        fight = {"fight_3": {"description": "Attack", "commands": []}} | acts
+        self.choose(policy, me, fight)
+        self.choose(policy, me, {"continue": {"description": "c", "commands": []}, "wait": {"description": "w", "commands": []}})
+        self.choose(policy, me, {k: v for k, v in acts.items() if k.startswith("talk_")})
+        self.assertEqual(self.calls, [])
+
+    def test_the_same_situation_reuses_the_answer_then_moves_to_an_untried_option(self):
+        me, acts = a_choice()
+        policy = self.policy()
+        picks = [self.choose(policy, me, acts)[0] for _ in range(5)]
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(picks[:3], ["talk_4"] * 3)
+        self.assertEqual(picks[3], "exit_7")
+        me["journal"]["end_attack"] = 30  # the story moved: ask again
+        self.choose(policy, me, acts)
+        self.assertEqual(len(self.calls), 2)
+
+    def test_the_budget_is_enforced_and_reported(self):
+        me, acts = a_choice()
+        policy = self.policy(budget=1)
+        self.choose(policy, me, acts)
+        me["journal"]["end_attack"] = 30
+        key, meta = self.choose(policy, me, acts)
+        self.assertEqual(len(self.calls), 1)
+        self.assertIn("budget spent", meta["note"])
+        report = policy.report()
+        self.assertTrue(report["budget_spent"])
+        self.assertEqual((report["calls"], report["answered"]), (1, 1))
+        self.assertEqual(report["log"][0]["choice"], "talk_4")
+        self.assertGreater(report["log"][0]["prompt_chars"], 100)
+
+    def test_bad_replies_fall_back_to_rules(self):
+        me, acts = a_choice()
+        for reply in ({"result": "I think we should talk to Trask."}, {"result": '{"choice": "warp_to_bridge"}'}):
+            self.reply = reply
+            policy = self.policy()
+            key, meta = self.choose(policy, me, acts)
+            self.assertIn(key, acts)
+            self.assertEqual(meta["source"], "rules")
+            self.assertIn("error", policy.report()["log"][0])
+        self.reply = {"result": "Not JSON at all {oops", "is_error": True}
+        self.assertEqual(self.choose(self.policy(), me, acts)[1]["source"], "rules")
+
+    def test_the_plan_and_history_are_carried_into_the_next_prompt(self):
+        me, acts = a_choice()
+        policy = self.policy()
+        self.choose(policy, me, acts)
+        policy.record("host", "talk_4", "Talk to Trask Ulgo", "conversation started")
+        policy.note("host", "conversation with Trask Ulgo (end_trask) ended")
+        me["journal"]["end_attack"] = 30
+        self.choose(policy, me, acts)
+        prompt = self.calls[1][1]["input"]
+        self.assertIn("Meet Trask", prompt)
+        self.assertIn("talk_4 (Talk to Trask Ulgo) -> conversation started", prompt)
+        self.assertIn("ended", prompt)
+
+    def test_the_prompt_stays_small_with_a_long_journal(self):
+        me, acts = a_choice()
+        me["journal"] = {f"quest{i}": 10 for i in range(20)}
+        import unittest.mock as m
+        with m.patch.object(FakeLore, "journal_entry", staticmethod(lambda tag, state: ("word " * 400, False))):
+            self.assertLess(len(h.build_prompt("host", me, player(), acts)), 6000)
+
+    def test_a_far_character_gets_a_walk_and_talk_option(self):
+        class Nav:
+            rooms = {}
+
+            def path(self, a, b, blocked=()):
+                return [a, (b[0] - 5, b[1]), b]
+        me = player(position=[0, 0, 0], objects=[creature(9, "end_trask", 2, 30)])
+        acts = h.actions_for("host", me, player(), {}, Nav())
+        self.assertIn("gotalk_9", acts)
+        self.assertEqual(acts["gotalk_9"]["commands"], ["talktag end_trask"])
+        self.assertTrue(acts["gotalk_9"]["walk"])
+        self.assertNotIn("gotalk_9", h.actions_for("host", me, player(), {"gotalk:end_m01aa:9": 2}, Nav()))
+        self.assertNotIn("gotalk_9", h.actions_for("joiner", me, player(), {}, Nav()))
+
+
 if __name__ == "__main__":
     unittest.main()
