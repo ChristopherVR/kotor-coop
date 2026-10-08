@@ -114,9 +114,21 @@ class Actions(unittest.TestCase):
         door = {"id": 0x46, "kind": "door", "tag": "end_door02", "position": [5, 0, 0], "distance": 5, "open": 0,
                 "destination": "", "locked": True}
         acts = h.actions_for("host", player(objects=[door]), player(), {})
-        self.assertEqual(list(acts)[:2], ["open_70", "unlock_70"])
+        self.assertEqual([k for k in acts if k.endswith("_70")], ["open_70", "unlock_70"])
         self.assertEqual(acts["unlock_70"]["commands"], ["unlockdoor 0x46"])
         self.assertNotIn("unlock_70", h.actions_for("host", player(objects=[door]), player(), {"end_m01aa:70:pc:unlock": 2}))
+
+    def test_level_up_is_offered_once_until_new_experience(self):
+        acts = h.actions_for("host", player(), player(), {})
+        self.assertEqual(acts["level_up"]["commands"], [h.HUD_CHARACTER, h.CHARACTER_AUTO_LEVEL])
+        self.assertNotIn("level_up", h.actions_for("host", player(), player(), {"level:pc": 1}))
+        self.assertNotIn("level_up", h.actions_for("host", player(objects=[creature(3, "n_sith", 1, 5)]), player(), {}))
+
+    def test_refresh_forgets_doors_and_levels_but_not_talks(self):
+        tried = {"end_m01aa:7:pc": 2, "end_m01aa:7:pc:unlock": 2, "level:pc": 1, "swaps": 3,
+                 "talk:end_m01aa:4": 3, "took_any": True}
+        h.refresh_doors(tried, player())
+        self.assertEqual(tried, {"talk:end_m01aa:4": 3, "took_any": True})
 
     def test_loading_and_downed_players_do_nothing(self):
         self.assertEqual(h.actions_for("host", player(loading=True), player(), {}), {})

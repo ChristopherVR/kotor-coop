@@ -59,6 +59,8 @@ HUD_EQUIP = "input click 565 20"              # the Equipment icon, top right of
 EQUIP_RIGHT_WEAPON, EQUIP_BODY = "input click 370 325", "input click 320 275"
 EQUIP_SECOND_ROW, EQUIP_OK = "input click 550 263", "input click 400 485"
 HUD_SECOND_PORTRAIT = "input click 94 577"    # the first companion's portrait; click again to return
+HUD_CHARACTER = "input click 625 20"          # the Character icon, top right of the HUD
+CHARACTER_AUTO_LEVEL = "input click 268 297"  # Character screen "Auto Level Up"; its confirm is a message box
 
 
 def menu_actions(panels, tried):
@@ -136,6 +138,13 @@ def actions_for(role, me, peer, tried):
                                       EQUIP_BODY, EQUIP_SECOND_ROW, EQUIP_OK, "closegui"],
                          "gap": 1.2, "equip": who}
 
+    if tried.get(f"level:{who}", 0) < 1 and not any(o["faction"] == 1 and o["distance"] < 25 for o in living):
+        # Retail Auto Level Up. Offered again after new experience (an XP notice, a fight); when
+        # the character cannot level the button does nothing and the screen is closed again.
+        # The Endar Spire's bridge door refuses a character with a pending level.
+        acts["level_up"] = {"description": "Level up if you can (Character screen, Auto Level Up); "
+                            "some doors refuse a character with a level waiting",
+                            "commands": [HUD_CHARACTER, CHARACTER_AUTO_LEVEL], "gap": 1.5, "level": who}
     for o in [o for o in objs if o["kind"] == "placeable" and o["distance"] < 12 and fresh(o, 1)][:2]:
         acts[f"search_{o['id']}"] = {"description": f"Search the {o['tag'] or 'object'} {o['distance']:.0f} m away",
                                      "commands": [f"useplaceable 0x{o['id']:X}"], "target": key(o)}
@@ -208,6 +217,15 @@ def actions_for(role, me, peer, tried):
         # A companion is in control for one reason: the doors. Keep its options to those.
         acts = {k: a for k, a in acts.items() if k.startswith(("open_", "exit_", "approach_", "unlock_", "control_pc"))} or acts
     return acts
+
+
+def refresh_doors(tried, me):
+    """Forget door, swap and level attempts so they are offered again: story beats (a scene, a
+    level, a recruit) unlock doors that refused earlier. Talks keep their own budget."""
+    prefix = f"{me.get('module')}:"
+    for k in [k for k in tried if (k.startswith(prefix) and not k.startswith("talk:")) or k.startswith("level:")]:
+        del tried[k]
+    tried.pop("swaps", None)
 
 
 def summary(role, me, peer):
@@ -353,7 +371,7 @@ async def run(args, policy):
     games = [Game(args.host), Game(args.client)]
     referee = Referee(out, games)
     tried = {"host": {}, "joiner": {}}
-    moving = {}
+    moving, idle = {}, {}
     report = {"policy": policy.name, "steps": [], "modules": [], "counts": collections.Counter()}
     started = time.monotonic()
     try:
@@ -372,9 +390,17 @@ async def run(args, policy):
                     continue  # still walking to the door it was sent to; a new order would cancel it
                 if "party_selection" not in (me.get("panels") or []):
                     tried[role].pop("party_ok", None)  # a new party screen starts with plain OK
+                if tried[role].get("was_talking") and not me.get("conversation"):
+                    refresh_doors(tried[role], me)  # story beats unlock doors
+                tried[role]["was_talking"] = bool(me.get("conversation"))
                 acts = actions_for(role, me, peer, tried[role])
                 if not acts:
+                    idle[role] = idle.get(role, 0) + 1
+                    if idle[role] >= 3:
+                        refresh_doors(tried[role], me)
+                        idle[role] = 0
                     continue
+                idle[role] = 0
                 text = summary(role, me, peer)
                 choice, meta = await policy.choose(role, text, acts)
                 act = acts[choice]
@@ -393,6 +419,12 @@ async def run(args, policy):
                     tried[role]["took_any"] = True
                     # New items: offer the equipment screen again for whoever is in control.
                     for k in [k for k in tried[role] if k.startswith("equip:")]:
+                        del tried[role][k]
+                if act.get("level"):
+                    tried[role]["level:" + act["level"]] = 1
+                if choice == "ok_summary" or choice.startswith("fight_"):
+                    # New experience: a level may be waiting for anyone in the party.
+                    for k in [k for k in tried[role] if k.startswith("level:")]:
                         del tried[role][k]
                 if act.get("said"):
                     tried[role][act["said"]] = tried[role].get(act["said"], 0) + 1
