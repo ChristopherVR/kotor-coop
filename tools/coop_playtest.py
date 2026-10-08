@@ -193,6 +193,20 @@ def who_is(module, tag):
     return f"{name} ({tag})" if name and name.lower() != (tag or "").lower() else (tag or "someone")
 
 
+def what_is(module, tag):
+    """'Footlocker (end_locker01), holds items': the name a player sees, whether it is a
+    container, then the tag. A raw tag lost to a dozen door options on the Endar Spire; Trask
+    only says out loud that the gear is in the footlocker."""
+    name, holds = "", False
+    if kotor_lore is not None:
+        try:
+            name, holds = kotor_lore.placeable_name(module, tag)
+        except Exception:
+            pass
+    label = f"{name} ({tag})" if name and name.lower() != (tag or "").lower() else (tag or "object")
+    return label + (", holds items" if holds else "")
+
+
 def npc_walk_actions(me, nav, tried, closed_doors, living):
     """Walk up to a named non-hostile character that is out of talking range, on a walkmesh route
     that avoids closed doors, then talk to them. Quests are mostly people, and the nearby-only
@@ -308,7 +322,7 @@ def actions_for(role, me, peer, tried, nav=None):
                             "some doors refuse a character with a level waiting",
                             "commands": [HUD_CHARACTER, CHARACTER_AUTO_LEVEL], "gap": 1.5, "level": who}
     for o in [o for o in objs if o["kind"] == "placeable" and o["distance"] < 12 and fresh(o, 1)][:2]:
-        acts[f"search_{o['id']}"] = {"description": f"Search the {o['tag'] or 'object'} {o['distance']:.0f} m away",
+        acts[f"search_{o['id']}"] = {"description": f"Search the {what_is(me['module'], o['tag'])} {o['distance']:.0f} m away",
                                      "commands": [f"useplaceable 0x{o['id']:X}"], "target": key(o)}
     for o in [o for o in living if role == "host" and o["faction"] != 1 and o["distance"] < 12 and tried.get("talk:" + key(o), 0) < 3
               and re.fullmatch(r"[A-Za-z0-9_]{1,31}", o["tag"] or "")][:2]:
@@ -455,7 +469,10 @@ class LayaPolicy:
 CLAUDE_GOAL = ("Goal: play KOTOR 1 as a co-op party and advance the main story and the active quests. Prefer the next "
                "concrete objective in the journal; talk to quest-relevant characters; pick dialogue replies that "
                "advance quests; use doors and transitions that lead toward objectives; avoid repeating actions that "
-               "already failed or were already tried (see the recent history).")
+               "already failed or were already tried (see the recent history). A locked door that did not open is "
+               "usually waiting on the story: search nearby containers that hold items (the game often expects you "
+               "to pick up and equip gear first) and talk to the character who gave the last instruction before "
+               "trying the door again.")
 CLAUDE_SYSTEM = ("You choose the next action for a KOTOR 1 co-op playtest bot. You never call tools unless a screenshot "
                  "file is named, and then only to look at it. Answer with one JSON object and nothing else.")
 CLAUDE_ANSWER = ('Answer with only this JSON: {"choice": "<one option key>", "plan": "<one or two sentences: what you are '
@@ -637,6 +654,7 @@ class ClaudePolicy:
                 image = None
         prompt = build_prompt(role, me, peer, acts, self.plan.get(role, ""), list(self.history.get(role, ())), image)
         record, parsed = await self._ask(role, prompt, image)
+        record["offered"] = sorted(real)  # so a report can tell "not offered" from "passed over"
         choice = (parsed or {}).get("choice")
         if choice in acts:
             record.update(choice=choice, why=str(parsed.get("why", ""))[:200], plan=str(parsed.get("plan", ""))[:300])
