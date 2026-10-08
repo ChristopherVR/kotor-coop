@@ -51,6 +51,16 @@ public sealed class PlaytestInteractionRegressionTests
     public void ReconcilerLeavesIntentionalUiTimersAlone(bool gui, bool conversation, bool modal, bool expected)
         => Assert.Equal(expected, PausePresentationRule.CanReconcile(gui, conversation, modal));
 
+    // A conversation never chooses "timer stopped, no reason bit, no banner" (SetPauseState sets a
+    // reason first), so that one repair runs during a conversation; menus and modals stay hands-off.
+    // Live 2026-10-08: the joiner's world sat frozen with no banner for 32 s inside a conversation swap.
+    [Theory]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    public void AStrayStoppedTimerIsRepairedEvenDuringAConversation(bool gui, bool modal, bool expected)
+        => Assert.Equal(expected, PausePresentationRule.CanRepairStrayTimer(gui, modal));
+
     [Theory]
     [InlineData(true, 0, true, false, false, false, true)] // reported save/menu return
     [InlineData(false, 0, true, false, false, false, false)]

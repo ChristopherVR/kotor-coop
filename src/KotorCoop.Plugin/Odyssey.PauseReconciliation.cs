@@ -37,12 +37,46 @@ internal static unsafe partial class Odyssey
     ///
     /// MAIN THREAD ONLY.
     /// </summary>
+    /// <summary>Resumes whichever world timer is stopped. The caller has established there is no
+    /// pause reason and no banner. MAIN THREAD ONLY.</summary>
+    private static bool ResumeStrayTimers(nint client, nint server, out string detail)
+    {
+        string which = "";
+        nint clientTimer = ClientGetWorldTimerFn(client);
+        if (clientTimer != 0 && *(int*)(clientTimer + WorldTimerPausedFlag) != 0)
+        {
+            UnpauseWorldTimerFn(clientTimer);
+            which += "client timer, ";
+        }
+
+        nint serverTimer = ServerGetWorldTimerFn(server);
+        if (serverTimer != 0 && *(int*)(serverTimer + WorldTimerPausedFlag) != 0)
+        {
+            UnpauseWorldTimerFn(serverTimer);
+            which += "server timer, ";
+        }
+
+        detail = which.Length == 0 ? "" : $"resumed a stray stopped timer ({which.TrimEnd(',', ' ')}), no banner and no mask held"
+            + (IsConversationActive ? " (during a conversation)" : "");
+        return which.Length > 0;
+    }
+
     public static bool ReconcilePause(bool coopKeepAlive, out string detail)
     {
         detail = "";
 
-        if (!PausePresentationRule.CanReconcile(IsFullScreenGuiUp, IsConversationActive,
-            PasswordEntryModal.IsAnyOpen)) return false;
+        bool fullScreen = IsFullScreenGuiUp, conversation = IsConversationActive, textModal = PasswordEntryModal.IsAnyOpen;
+        bool strayOnly = false;
+        if (!PausePresentationRule.CanReconcile(fullScreen, conversation, textModal))
+        {
+            // A conversation blocks every repair below except one: a world timer stopped with no
+            // pause reason and no banner. SetPauseState (0x005F7FA0) sets a reason bit before it
+            // stops the timer, so that state is never one a conversation chose; it is a lost
+            // unpause, and the joiner's world sat frozen in it, invisibly, for 32 s while the
+            // mod swapped its conversation for the host's (2026-10-08 run 1).
+            if (!PausePresentationRule.CanRepairStrayTimer(fullScreen, textModal)) return false;
+            strayOnly = true;
+        }
 
         nint client = GetClient();
         nint server = GetServer();
@@ -65,6 +99,11 @@ internal static unsafe partial class Odyssey
         int union = GetPauseMask() | GetClientPauseMask();
         bool guiBelieves = *(int*)(gui + GuiBelievesPaused) != 0;
         bool repaired = false;
+
+        if (strayOnly)
+        {
+            return union == 0 && !guiBelieves && ResumeStrayTimers(client, server, out detail);
+        }
 
         if (union == 0 && !guiBelieves && *(int*)(gui + 0xB38) != 0)
         {
@@ -119,27 +158,7 @@ internal static unsafe partial class Odyssey
         {
             // No banner and no mask, but a timer is still stopped: a genuine stray, from the
             // login chain or a swallowed edge. Resume it.
-            nint clientTimer = ClientGetWorldTimerFn(client);
-            if (clientTimer != 0 && *(int*)(clientTimer + WorldTimerPausedFlag) != 0)
-            {
-                UnpauseWorldTimerFn(clientTimer);
-                detail += "client timer, ";
-                repaired = true;
-            }
-
-            nint serverTimer = ServerGetWorldTimerFn(server);
-            if (serverTimer != 0 && *(int*)(serverTimer + WorldTimerPausedFlag) != 0)
-            {
-                UnpauseWorldTimerFn(serverTimer);
-                detail += "server timer, ";
-                repaired = true;
-            }
-
-            if (repaired)
-            {
-                detail = $"resumed a stray stopped timer ({detail.TrimEnd(',', ' ')}), "
-                    + "no banner and no mask held";
-            }
+            repaired = ResumeStrayTimers(client, server, out detail);
         }
         else if ((union & PauseReasonPlayer) != 0 && !guiBelieves)
         {
