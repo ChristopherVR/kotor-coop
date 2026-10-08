@@ -40,8 +40,8 @@ def parse_bwm(data: bytes):
 
 
 def parse_lyt(text: str):
-    """Room names from a layout file's `roomcount` block."""
-    rooms, count = [], None
+    """{room: (x, y)} from a layout file's `roomcount` block, in file order."""
+    rooms, count = {}, None
     for line in text.splitlines():
         parts = line.split()
         if not parts:
@@ -50,13 +50,15 @@ def parse_lyt(text: str):
             count = int(parts[1])
             continue
         if count is not None and len(rooms) < count and len(parts) == 4:
-            rooms.append(parts[0].lower())
+            rooms[parts[0].lower()] = (float(parts[1]), float(parts[2]))
     return rooms
 
 
 class Area:
-    def __init__(self, triangles):
-        """triangles: list of ((x,y),(x,y),(x,y)) walkable faces, world coordinates."""
+    def __init__(self, triangles, rooms=None):
+        """triangles: list of ((x,y),(x,y),(x,y)) walkable faces, world coordinates; rooms:
+        {name: (x, y)} layout origins, used as exploration targets."""
+        self.rooms = dict(rooms or {})
         self.tris = triangles
         self.centroids = [((a[0] + b[0] + c[0]) / 3, (a[1] + b[1] + c[1]) / 3) for a, b, c in triangles]
         self.boxes = [(min(a[0], b[0], c[0]), min(a[1], b[1], c[1]), max(a[0], b[0], c[0]), max(a[1], b[1], c[1]))
@@ -91,7 +93,7 @@ class Area:
             for (i, j, k), m in zip(faces, mats):
                 if m in walkable:
                     tris.append(tuple((verts[n][0], verts[n][1]) for n in (i, j, k)))
-        return cls(tris)
+        return cls(tris, rooms)
 
     def locate(self, point):
         x, y = point

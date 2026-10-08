@@ -94,7 +94,55 @@ def menu_actions(panels, tried):
     return {"close_menu": {"description": f"Close the open menu ({', '.join(panels)})", "commands": ["closegui"]}}
 
 
-def actions_for(role, me, peer, tried):
+def walk_actions(me, nav, tried, closed_doors):
+    """Walking a player would do, on walkmesh routes that avoid closed doors: up to a closed
+    door that is out of reach, and into rooms not visited yet."""
+    acts = {}
+    if nav is None:
+        return acts
+    here = tuple(me["position"][:2])
+    for o in sorted(closed_doors, key=lambda o: o["distance"])[:4]:
+        k = f"{me['module']}:{o['id']}:goto"
+        if o["distance"] <= 4 or tried.get(k, 0) >= 2:
+            continue
+        others = [tuple(d["position"][:2]) for d in closed_doors if d["id"] != o["id"]]
+        route = nav.path(here, tuple(o["position"][:2]), blocked=others)
+        if route and len(route) >= 2:
+            last = route[-2]
+            door = tuple(o["position"][:2])
+            gap = math.dist(last, door)
+            stop = door if gap < 2 else (door[0] + (last[0] - door[0]) * 2 / gap, door[1] + (last[1] - door[1]) * 2 / gap)
+            acts[f"goto_{o['id']}"] = {"description": f"Walk to the door {o['tag']} ({o['distance']:.0f} m away)",
+                                       "walk": route[:-1] + [stop], "commands": [], "target": k}
+    blocked = [tuple(d["position"][:2]) for d in closed_doors]
+    visited = tried.setdefault("visited", set())
+    for name, centre in sorted(nav.rooms.items(), key=lambda kv: math.dist(kv[1], here)):
+        if name in visited or tried.get(f"explore:{name}", 0) >= 2:
+            continue
+        route = nav.path(here, centre, blocked=blocked)
+        if route:
+            acts[f"explore_{name}"] = {"description": f"Explore the area {name} ({math.dist(here, centre):.0f} m away)",
+                                       "walk": route, "commands": [], "target": f"explore:{name}"}
+            if len([a for a in acts if a.startswith("explore_")]) >= 2:
+                break
+    return acts
+
+
+_NAV = {}
+
+
+def nav_for(module):
+    """The walkmesh of a module, loaded once; None when its files cannot be read."""
+    if module not in _NAV:
+        try:
+            import kotor_nav
+            _NAV[module] = kotor_nav.Area.load(module)
+        except Exception:
+            _NAV[module] = None
+    return _NAV[module]
+
+
+def actions_for(role, me, peer, tried, nav=None):
     """Legal actions for one player, most useful first. role is 'host' or 'joiner'."""
     if me.get("loading") or me.get("hp", 1) <= 0:
         return {}
@@ -133,9 +181,11 @@ def actions_for(role, me, peer, tried):
 
     objs = me["objects"]
     living = [o for o in objs if o["kind"] == "creature" and o["hp"] > 0 and not o["party"] and not COOP_TAG.match(o["tag"])]
-    # Any distance in the area: an attack order makes the server run the creature over (seen
-    # live from 74 m), and story gates wait for a room to be cleared (END_ROOM7_DEAD).
-    for o in sorted([o for o in living if o["faction"] == 1 and o["distance"] < 90 and fresh(o, 4)],
+    # Nearby only: an attack order runs the creature anywhere in the area (seen from 74 m),
+    # which skips the route a player walks and can break the story's order (killing the
+    # bridge's Sith from outside sealed the Endar Spire bridge with the player locked out).
+    # Walking (explore_/goto_) brings the player to the next fight instead.
+    for o in sorted([o for o in living if o["faction"] == 1 and o["distance"] < 30 and fresh(o, 4)],
                     key=lambda o: o["distance"])[:2]:
         acts[f"fight_{o['id']}"] = {"description": f"Attack the hostile {o['tag']} {o['distance']:.0f} m away",
                                     "commands": [f"attack 0x{o['id']:X}"], "target": key(o)}
@@ -204,6 +254,10 @@ def actions_for(role, me, peer, tried):
         else:
             acts[f"open_{o['id']}"] = {"description": f"Go to and open the door {o['tag']} ({o['distance']:.0f} m away)",
                                        "commands": [f"usedoor 0x{o['id']:X}"], "target": key(o)}
+
+    if who == "pc":
+        closed = [o for o in objs if o["kind"] == "door" and not o["open"]]
+        acts |= walk_actions(me, nav, tried, closed)
 
     # Only the host switches the controlled party member (party_switch_host_only). The HUD's
     # second portrait is the first companion while the PC leads, and the PC while a companion
@@ -597,7 +651,12 @@ async def run(args, policy):
                 if tried[role].get("was_talking") and not me.get("conversation"):
                     refresh_doors(tried[role], me)  # story beats unlock doors
                 tried[role]["was_talking"] = bool(me.get("conversation"))
-                acts = actions_for(role, me, peer, tried[role])
+                nav = nav_for(me.get("module")) if role == "host" and me.get("module") else None
+                if nav and me.get("position"):
+                    for name, centre in nav.rooms.items():
+                        if math.dist(centre, me["position"][:2]) < 7:
+                            tried[role].setdefault("visited", set()).add(name)
+                acts = actions_for(role, me, peer, tried[role], nav)
                 if not acts:
                     idle[role] = idle.get(role, 0) + 1
                     if idle[role] >= 3:
@@ -612,6 +671,10 @@ async def run(args, policy):
                 if now.get("loading") or now.get("module") != me.get("module"):
                     continue
                 results = []
+                if act.get("walk"):
+                    import coop_walk
+                    reached = coop_walk.walk_path(games[index], act["walk"], log=lambda m: report.setdefault("harness_notes", []).append(f"{role}: {m}"))
+                    results.append({"reply": f"walked {reached}/{len(act['walk']) - 1} legs"})
                 for i, command in enumerate(act["commands"]):
                     results.append(games[index].console(command))
                     if act.get("gap") and i + 1 < len(act["commands"]):

@@ -143,6 +143,38 @@ class Actions(unittest.TestCase):
         self.assertEqual(h.actions_for("host", player(hp=0), player(), {}), {})
 
 
+class StubNav:
+    rooms = {"r1": (0.0, 0.0), "r2": (20.0, 0.0)}
+
+    def __init__(self):
+        self.calls = []
+
+    def path(self, start, goal, blocked=()):
+        self.calls.append((goal, tuple(blocked)))
+        return [tuple(start), ((start[0] + goal[0]) / 2, start[1]), tuple(goal)]
+
+
+class Walking(unittest.TestCase):
+    def test_a_far_closed_door_gets_a_walk_that_stops_short_of_it(self):
+        door = {"id": 5, "kind": "door", "tag": "d", "position": [10, 0, 0], "distance": 10, "open": 0, "destination": ""}
+        acts = h.walk_actions(player(position=[0, 0, 0]), StubNav(), {}, [door])
+        walk = acts["goto_5"]["walk"]
+        self.assertAlmostEqual(walk[-1][0], 8.0)
+        self.assertEqual(acts["goto_5"]["commands"], [])
+
+    def test_routes_avoid_other_closed_doors_and_skip_visited_rooms(self):
+        nav = StubNav()
+        a = {"id": 5, "kind": "door", "tag": "a", "position": [10, 0, 0], "distance": 10, "open": 0, "destination": ""}
+        b = {"id": 6, "kind": "door", "tag": "b", "position": [0, 9, 0], "distance": 9, "open": 0, "destination": ""}
+        acts = h.walk_actions(player(position=[0, 0, 0]), nav, {"visited": {"r1"}}, [a, b])
+        self.assertIn(((10, 0), ((0, 9),)), nav.calls)
+        self.assertIn("explore_r2", acts)
+        self.assertNotIn("explore_r1", acts)
+
+    def test_no_walkmesh_means_no_walking(self):
+        self.assertEqual(h.walk_actions(player(), None, {}, []), {})
+
+
 class Census(unittest.TestCase):
     def test_a_host_spawn_matched_by_a_joiner_stand_in_is_not_a_difference(self):
         host = player(objects=[creature(1, "end_reinforce3", 1, 5), creature(9, "coop_phantom", 2, 1)])
