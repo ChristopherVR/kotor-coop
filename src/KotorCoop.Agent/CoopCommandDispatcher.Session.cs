@@ -28,9 +28,10 @@ public sealed partial class CoopCommandDispatcher
             : string.Empty;
 
         // Roadmap item 24: a hosting player's own status line names how reachable they are
-        // from outside the LAN, not just whether the local socket bound.
+        // from outside the LAN, not just whether the local socket bound. The address itself
+        // only comes from public_address: this line is shown on the game screen.
         string publicSuffix = manager.Current is CoopHost host
-            ? $" - {(host.PublicEndPoint is { } ep ? $"public {ep}" : "public address unknown")}"
+            ? $" - {(host.PublicEndPoint is not null ? "public address found (public_address shows it)" : "public address unknown")}"
               + $" ({PublicAddressAnnouncer.UpnpNote(host.UpnpStatus, host.ListenEndPoint.Port, host.Reachability)})"
             : string.Empty;
 

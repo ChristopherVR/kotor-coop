@@ -29,6 +29,22 @@ public class PublicAddressAnnouncerTests
     }
 
     [Fact]
+    public void TheUnrequestedLineNeverShowsTheAddress()
+    {
+        // The announcement lands on the game screen; a stream or screenshot must not carry the
+        // host's IP. Only public_address prints it.
+        foreach (UpnpMappingStatus upnp in Enum.GetValues<UpnpMappingStatus>())
+        {
+            foreach (ReachabilityVerdict reachability in Enum.GetValues<ReachabilityVerdict>())
+            {
+                string line = PublicAddressAnnouncer.Line(27015, Endpoint, upnp, reachability);
+                Assert.DoesNotContain("203.0.113.5", line);
+                Assert.Contains("public_address", line);
+            }
+        }
+    }
+
+    [Fact]
     public void UnknownAddressAndDisabledUpnpProducesTheForwardHint()
     {
         string line = PublicAddressAnnouncer.Line(27015, null, UpnpMappingStatus.Disabled, ReachabilityVerdict.Unconfirmed);
@@ -44,7 +60,7 @@ public class PublicAddressAnnouncerTests
         string line = PublicAddressAnnouncer.Line(27015, Endpoint, UpnpMappingStatus.Mapped, ReachabilityVerdict.HairpinConfirmed);
 
         Assert.Equal(
-            "co-op: hosting on port 27015 - public address 203.0.113.5:27015 (UPnP mapped - local self-test passed; internet access unconfirmed)",
+            "co-op: hosting on port 27015 - public address found, type public_address to show it (UPnP mapped - local self-test passed; internet access unconfirmed)",
             line);
     }
 
@@ -81,7 +97,7 @@ public class PublicAddressAnnouncerTests
         string line = PublicAddressAnnouncer.Line(27015, Endpoint, UpnpMappingStatus.Unavailable, ReachabilityVerdict.Unconfirmed);
 
         Assert.Equal(
-            "co-op: hosting on port 27015 - public address 203.0.113.5:27015 (UPnP unavailable - forward UDP+TCP 27015 manually)",
+            "co-op: hosting on port 27015 - public address found, type public_address to show it (UPnP unavailable - forward UDP+TCP 27015 manually)",
             line);
     }
 

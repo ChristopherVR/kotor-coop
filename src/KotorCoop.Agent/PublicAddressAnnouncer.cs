@@ -19,13 +19,17 @@ public sealed class PublicAddressAnnouncer
     /// The pure part: what to say for a given (public endpoint, UPnP status, reachability)
     /// triple. Kept separate from <see cref="Observe"/> so the decision is testable with no
     /// tick loop and no live session.
+    ///
+    /// The address itself is never part of this unrequested line: it lands on the game screen,
+    /// where a stream or a screenshot would expose the host's IP. The player asks for it with
+    /// <c>public_address</c>, which prints it and copies it to the clipboard.
     /// </summary>
     public static string Line(int port, IPEndPoint? publicEndPoint, UpnpMappingStatus upnp, ReachabilityVerdict reachability)
     {
         string upnpNote = UpnpNote(upnp, port, reachability);
 
-        return publicEndPoint is { } endpoint
-            ? $"co-op: hosting on port {port} - public address {endpoint} ({upnpNote})"
+        return publicEndPoint is not null
+            ? $"co-op: hosting on port {port} - public address found, type public_address to show it ({upnpNote})"
             : $"co-op: hosting on port {port} - public address unknown ({upnpNote})";
     }
 
