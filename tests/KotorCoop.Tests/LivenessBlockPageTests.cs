@@ -99,19 +99,34 @@ public class LivenessBlockPageTests
     }
 
     [Fact]
-    public void ActionableOverflowTruncatesRatherThanCrashing()
+    public void ActionableOverflowRotatesSoEveryVerdictArrives()
     {
+        // 2026-10-08: the owner now keeps "gone" verdicts for the whole module, appended after
+        // the scan's corpses. Truncating the overflow would starve exactly those.
         List<CreatureLivenessEntry> entries = [];
         for (int i = 0; i < 8; i++)
         {
-            entries.Add(new CreatureLivenessEntry((uint)i, CreatureLivenessState.Dead));
+            entries.Add(new CreatureLivenessEntry((uint)i, i < 6 ? CreatureLivenessState.Dead : CreatureLivenessState.Gone));
         }
 
-        (List<CreatureLivenessEntry> page, int cursor) = LivenessBlockPage.Select(entries, capacity: 5, cursor: 0);
+        HashSet<uint> seen = [];
+        int cursor = 0;
+        for (int call = 0; call < 2; call++)
+        {
+            (List<CreatureLivenessEntry> page, int next) = LivenessBlockPage.Select(entries, capacity: 5, cursor: cursor);
+            Assert.Equal(5, page.Count);
+            Assert.All(page, e => Assert.NotEqual(CreatureLivenessState.Alive, e.State));
+            foreach (CreatureLivenessEntry e in page)
+            {
+                seen.Add(e.ObjectId);
+            }
 
-        Assert.Equal(5, page.Count);
-        Assert.All(page, e => Assert.Equal(CreatureLivenessState.Dead, e.State));
-        Assert.Equal(0, cursor);
+            cursor = next;
+        }
+
+        Assert.Equal(8, seen.Count);
+        Assert.Contains(6u, seen);
+        Assert.Contains(7u, seen);
     }
 
     [Fact]

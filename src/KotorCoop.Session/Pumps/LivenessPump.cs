@@ -22,7 +22,7 @@ internal sealed class LivenessPump(IGameBridge bridge, ICoopSession session, Act
 
     /// <summary>Owner-authority side only: ids reported Gone, and when this pass first
     /// noticed. Retained past detection so a lost broadcast cycle does not cost a peer the
-    /// verdict forever; see <see cref="LivenessGoneRetentionMs"/>.</summary>
+    /// verdict forever; see <see cref="MaxRetainedGone"/>.</summary>
     private readonly Dictionary<uint, long> _livenessGoneSince = [];
 
     private long _lastLivenessScanMs;
@@ -33,10 +33,15 @@ internal sealed class LivenessPump(IGameBridge bridge, ICoopSession session, Act
     /// shared-block read.</summary>
     private const int LivenessScanIntervalMs = 2000;
 
-    /// <summary>How long a "gone" verdict is still worth reporting after the cycle that first
-    /// detected it. Generous headroom past a few missed 2-second broadcast cycles without
-    /// holding every destroyed id in the module for the rest of the session.</summary>
-    private const long LivenessGoneRetentionMs = 15_000;
+    /// <summary>How many "gone" verdicts the owner keeps re-reporting for the current module.
+    /// They used to expire after 15 s, but a mirror does not reconcile while it is in a
+    /// conversation, and cutscenes are conversations whose scripts destroy their actors at the
+    /// end: on 2026-10-08 the joiner sat in one past the window and kept nine
+    /// <c>end_cut2_*</c> actors the host had destroyed, for good. Verdicts now last until the
+    /// module changes (ids are reassigned then, and the tables are cleared), and only the
+    /// oldest beyond this many are dropped, which bounds memory in a module with a lot of
+    /// destruction.</summary>
+    private const int MaxRetainedGone = 64;
 
     /// <summary>Mirrors <c>SharedBlock.LivenessCapacity</c> in the plugin — kept as a plain
     /// literal here rather than a cross-project reference, the same "shared by value, not by
@@ -248,27 +253,16 @@ internal sealed class LivenessPump(IGameBridge bridge, ICoopSession session, Act
                 + string.Join(", ", newlyGone.Select(id => $"0x{id:X}")));
         }
 
-        // A "gone" verdict past its retention window has almost certainly been delivered by
-        // now; holding it forever would grow these tables without bound over a long session
-        // in a module that sees a lot of destruction.
-        if (_livenessGoneSince.Count > 0)
+        // Keep every "gone" verdict for the rest of the module (see MaxRetainedGone): a mirror
+        // that was in a long conversation when the destroy happened still needs it afterwards.
+        // Past the cap, the oldest go first.
+        if (_livenessGoneSince.Count > MaxRetainedGone)
         {
-            List<uint>? expired = null;
-            foreach ((uint id, long since) in _livenessGoneSince)
+            foreach ((uint id, _) in _livenessGoneSince.OrderBy(pair => pair.Value)
+                         .Take(_livenessGoneSince.Count - MaxRetainedGone).ToList())
             {
-                if (nowMs - since > LivenessGoneRetentionMs)
-                {
-                    (expired ??= []).Add(id);
-                }
-            }
-
-            if (expired is not null)
-            {
-                foreach (uint id in expired)
-                {
-                    _livenessGoneSince.Remove(id);
-                    _livenessKnown.Remove(id);
-                }
+                _livenessGoneSince.Remove(id);
+                _livenessKnown.Remove(id);
             }
         }
 
