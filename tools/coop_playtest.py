@@ -143,8 +143,9 @@ def menu_actions(panels, tried):
                                    "commands": [CONTAINER_GET], "took": True}}
         return {"close_menu": {"description": "Close the container", "commands": [CONTAINER_CLOSE]}}
     if "pause" in panels and not (set(panels) & (OVER_DIALOGUE - {"pause"})):
+        # A held press: while paused, a one-frame injected tap is not read (seen live 2026-10-09).
         return {"unpause": {"description": "The game is paused: press the pause key (Space)",
-                            "commands": [f"input key {DIK_SPACE} tap"]}}
+                            "commands": [f"input key {DIK_SPACE} down", f"input key {DIK_SPACE} up"], "gap": 0.25}}
     # Anything else (equipment, options, an unnamed popup) closes through HideSWInGameGui,
     # which leaves both games running.
     return {"close_menu": {"description": f"Close the open menu ({', '.join(panels)})", "commands": ["closegui"]}}
