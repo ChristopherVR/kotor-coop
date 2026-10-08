@@ -198,19 +198,27 @@ Mod bugs the runs found and fixed the same night:
 * **The Leviathan host crash** turned out to be a retail over-read under the rig's full page heap
   (`WaypointGuardHook`, status-engineering.md).
 
-Open findings (evidence in the run logs under `artifacts/coop-playtest/es-claude-20261008-run*`):
+Findings from those runs, resolved 2026-10-09:
 
-* **Joiner-only reinforcements.** Run 5, 23:32: the joiner had `end_reinforce3`/`4` (0x16A, 0x16E, hostile,
-  full health) that never existed on the host. The joiner had just stood in trigger 0x53 and relayed it;
-  the host fired 0x57 for the joiner's body. Likely the joiner's own engine ran a spawn the host did not.
-* **Companion mirror flapping while the host controls a companion.** Run 3: after the host took control
-  of Trask, the joiner's log alternated `party drive: mirroring 0/1 of the host's companions` about
-  3 times a second for minutes. A static read did not pin it; log which `DriveOne` return fires and
-  compare the party snapshot's `OccupantGeneration` with the roster row's.
-* **Conversation join dropped.** Run 1: the joiner joined the host's Trask conversation, then left it
-  within 2 s while the host stayed in it. That was while the host controlled Trask and the lockdown door's
-  script had started the conversation. The plain case (host talks to Trask, joiner clicks him) joins
-  within 1 s and follows node changes within 1 s.
+* **Joiner-only reinforcements: fixed.** `end_reinfrc.utt` runs `k_pend_reinfrc06`, which spawns
+  `end_reinforce3`/`4` behind `IsObjectPartyMember(GetEnteringObject())` (read with the new
+  `tools/ncsdis.py`). The host re-fires a joiner's trigger with the joiner's phantom as the
+  entering object, which failed that check, so only the joiner's own engine spawned them.
+  `RelayPartyMemberHook` makes the check pass for the phantom during the relay's one call, and the
+  joiner removes hostiles its own scripts spawned that the host never had
+  (`LocalOnlyHostileTracker`, 20 s grace). Live: host spawned both and the joiner got stand-ins;
+  the joiner's own copies (from `firetrigger 0x57`) were removed 20 s later.
+* **Companion mirror flapping: fixed.** Not about control at all: with any companion in the host's
+  party, the joiner's agent rewrote the host roster bank every pump and the plugin read it
+  mid-write ("no occupant proof: host bank mid-write", 67 times in 30 s). Unchanged content is no
+  longer rewritten; 0 drops in 60 s idle and 60 s with the host controlling Trask.
+* **Conversation join dropped: harness, not mod.** The harness's "continue" (Space) landed 4 ms
+  after the mod swapped the joiner's own conversation for the host's; Space outside a conversation
+  pauses, and the joiner's world sat paused with no banner for 32 s until the pause reconciler
+  could run, so the auto-follow join could not complete. The harness now re-checks the
+  conversation right before Space. The same scene re-run live (host controlling Trask, the
+  lockdown door's conversation, a second click, 40 Space taps across the join) joined within a
+  second and followed every node.
 
 A staging-verb caveat for players: the dev console's `attack` (and any snap/teleport verb) can put a
 character somewhere the engine cannot path from, and the retail engine may crash there. That is not
