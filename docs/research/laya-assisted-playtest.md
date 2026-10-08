@@ -159,3 +159,20 @@ co-op blueprint, tagged coop_phantom. The census now counts those. No mod bug wa
 the harness in these runs. Side observation: the host's status line printed the host's public
 IP address on screen ("co-op: hosting on port 27140 - public address 103.95.113..."), which a
 stream or screenshot would expose.
+
+## 2026-10-08 (night): the referee compares synced state
+
+The referee now also compares what the mod promises to keep in step, each with its own settle
+window (`SETTLE` in `tools/coop_playtest.py`), each a pure function of the two snapshots with
+offline tests. Inventory and credits are personal by default and are not compared.
+
+| Check | Read (out of process) | Rule |
+| --- | --- | --- |
+| door | door `+0x2CC` open byte, `+0x2C4` locked | matched by tag + position (0.1 m); open vs closed, locked vs unlocked agree |
+| container | placeable `+0x260` locked, `+0x334` has_inventory, `+0x338` open | containers only |
+| enemyhp | creature `+0xDC` hp, `+0xE0` max | same object id and tag, hostile, not party/coop; within max(3, 15% of max); dead on one = dead on both |
+| party | party flag `+0xA88` | non-empty non-coop party tags equal on both (the PC's tag is empty) |
+| peerhp | `RemoteSlot[8]` at block `+0x50` (0x40 each: health `+0x18`, max hp `flags >> 16`) | slot health vs the peer's own hp; the coop-tagged body nearest the slot vs clamp(slot health, 1, max) |
+| journal | party table `+0x11C` -> journal `{data, size, cap}`, 0x3C entries, tag `+0x18`, state `+0x20` | same tags, same states |
+| globals | server internal `+0x100FC` catalogue; booleans `+0xA668` (113 bytes, MSB first), numbers `+0xA6D9` (500 signed bytes) | same non-zero values by name; the bridge's four per-player names and `k_vis_*` left out |
+| xp | player `+0xA74` -> stats `+0x68` | equal (max-merge on both ends); skipped while a companion is controlled |
