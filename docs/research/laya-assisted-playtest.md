@@ -223,3 +223,12 @@ Findings from those runs, resolved 2026-10-09:
 A staging-verb caveat for players: the dev console's `attack` (and any snap/teleport verb) can put a
 character somewhere the engine cannot path from, and the retail engine may crash there. That is not
 reachable without the console.
+
+End-to-end check after the fixes (2026-10-09, `artifacts/coop-playtest/es-claude-20261009-final2`):
+26 minutes of the Claude policy from `000002 - es_host`, step budget reached, no crash, no
+divergence. Its one finding, both games parked on `end_room5` node 3, was a second run of the
+cut2 cutscene the harness itself started with a late click-to-join on the invisible scene object
+(the first run, host-owned with the joiner following, played 0 -> 5 and ended cleanly). The
+harness now only joins through a visible character, and only while the partner is still in that
+conversation. An earlier attempt stopped after 11 minutes on a harness read of a freed object
+(page heap); snapshots now retry.
