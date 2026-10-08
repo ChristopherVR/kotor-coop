@@ -420,6 +420,15 @@ internal static unsafe partial class PluginHost
             Log($"waypoint guard NOT installed: {waypointDiagnostic}");
         }
 
+        if (RelayPartyMemberHook.Install(out string partyMemberDiagnostic))
+        {
+            Log($"triggers: {partyMemberDiagnostic}");
+        }
+        else
+        {
+            Log($"relayed-trigger party membership NOT installed: {partyMemberDiagnostic}");
+        }
+
         if (ShotCameraGuardHook.Install(out string shotDiagnostic))
         {
             Log($"dialogue: {shotDiagnostic}");

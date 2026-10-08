@@ -55,6 +55,13 @@ internal sealed class LivenessPump(IGameBridge bridge, ICoopSession session, Act
     /// <summary>Rotates the "alive" tail <see cref="LivenessBlockPage"/> hands the plugin
     /// across pumps when the accumulated set does not fit the block's capacity in one pass.</summary>
     private int _livenessBlockCursor;
+
+    /// <summary>Mirror side: hostiles this world has and the host never did; see
+    /// <see cref="LocalOnlyHostileTracker"/>. Scanned at the owner's own cadence.</summary>
+    private readonly LocalOnlyHostileTracker _localOnly = new();
+    private List<uint> _localOnlyIds = [];
+    private long _lastLocalHostileScanMs;
+    private readonly HashSet<uint> _localOnlyLogged = [];
     private bool _hasWorldLoadSerial;
     private uint _worldLoadSerial;
     private uint _nativeLivenessEpoch;
@@ -99,6 +106,7 @@ internal sealed class LivenessPump(IGameBridge bridge, ICoopSession session, Act
             _livenessGoneSince.Clear();
             _lastLivenessScanMs = 0;
             _livenessBlockCursor = 0;
+            ClearLocalOnly();
             bridge.TryWriteCreatureLiveness([]);
             if (session.IsEnemyAuthority) session.PublishCreatureLiveness(local.Module, [], worldSerial, nativeEpoch);
             else
@@ -163,6 +171,7 @@ internal sealed class LivenessPump(IGameBridge bridge, ICoopSession session, Act
         }
         if (received.Count > 0)
         {
+            received = WithLocalOnlyHostiles(received);
             (List<CreatureLivenessEntry> page, int nextCursor) =
                 LivenessBlockPage.Select(received, SharedBlockLivenessCapacity, _livenessBlockCursor);
             _livenessBlockCursor = nextCursor;
@@ -180,13 +189,62 @@ internal sealed class LivenessPump(IGameBridge bridge, ICoopSession session, Act
                         && string.Equals(afterWriteModule, censusModule, StringComparison.OrdinalIgnoreCase)));
             }
         }
-        else bridge.TryWriteCreatureLiveness([]);
+        else
+        {
+            bridge.TryWriteCreatureLiveness([]);
+            _localOnly.Clear();
+            _localOnlyIds = [];
+        }
 
         session.ReportLivenessAnomalyCount(bridge.ReadLivenessAnomalyCount());
     }
 
+    private void ClearLocalOnly()
+    {
+        _localOnly.Clear();
+        _localOnlyIds = [];
+        _lastLocalHostileScanMs = 0;
+        _localOnlyLogged.Clear();
+    }
+
+    /// <summary>The host's view plus a Gone verdict for every hostile only this world has, so the
+    /// plugin's ordinary destroy path removes it (its guards already skip stand-ins, the partner's
+    /// body and the player).</summary>
+    private IReadOnlyList<CreatureLivenessEntry> WithLocalOnlyHostiles(IReadOnlyList<CreatureLivenessEntry> received)
+    {
+        long nowMs = Environment.TickCount64;
+        if (nowMs - _lastLocalHostileScanMs >= LivenessScanIntervalMs)
+        {
+            _lastLocalHostileScanMs = nowMs;
+            HashSet<uint> hostIds = new(received.Count);
+            foreach (CreatureLivenessEntry entry in received)
+            {
+                hostIds.Add(entry.ObjectId);
+            }
+
+            _localOnlyIds = _localOnly.Update(bridge.ReadLocalHostileCreatureIds(), hostIds, nowMs);
+            List<uint> fresh = _localOnlyIds.Where(_localOnlyLogged.Add).ToList();
+            if (fresh.Count > 0)
+            {
+                log($"liveness: {fresh.Count} hostile(s) exist only here, the host never had them "
+                    + $"(a local script spawned them): {string.Join(", ", fresh.Select(id => $"0x{id:X}"))} - removing");
+            }
+        }
+
+        if (_localOnlyIds.Count == 0)
+        {
+            return received;
+        }
+
+        List<CreatureLivenessEntry> merged = new(received.Count + _localOnlyIds.Count);
+        merged.AddRange(_localOnlyIds.Select(id => new CreatureLivenessEntry(id, CreatureLivenessState.Gone)));
+        merged.AddRange(received);
+        return merged;
+    }
+
     private void InvalidateMirror(bool localLoad)
     {
+        ClearLocalOnly();
         if (localLoad)
         {
             _mirrorLocalLoadQuarantined = true;
