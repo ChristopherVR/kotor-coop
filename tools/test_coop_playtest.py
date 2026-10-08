@@ -120,17 +120,29 @@ class Actions(unittest.TestCase):
         self.assertEqual(acts["unlock_70"]["commands"], ["unlockdoor 0x46"])
         self.assertNotIn("unlock_70", h.actions_for("host", player(objects=[door]), player(), {"end_m01aa:70:pc:unlock": 2}))
 
-    def test_level_up_is_offered_once_until_new_experience(self):
-        acts = h.actions_for("host", player(), player(), {})
+    def test_level_up_is_offered_until_tried_and_never_in_a_fight(self):
+        acts = h.actions_for("host", player(xp=100), player(), {})
         self.assertEqual(acts["level_up"]["commands"], [h.HUD_CHARACTER, h.CHARACTER_AUTO_LEVEL])
-        self.assertNotIn("level_up", h.actions_for("host", player(), player(), {"level:pc": 1}))
+        self.assertNotIn("level_up", h.actions_for("host", player(xp=100), player(), {"level:pc": 1000}))
         self.assertNotIn("level_up", h.actions_for("host", player(objects=[creature(3, "n_sith", 1, 5)]), player(), {}))
 
-    def test_refresh_forgets_doors_and_levels_but_not_talks(self):
-        tried = {"end_m01aa:7:pc": 2, "end_m01aa:7:pc:unlock": 2, "level:pc": 1, "swaps": 3,
+    def test_refresh_forgets_doors_but_not_talks_containers_or_level_gates(self):
+        tried = {"end_m01aa:7:pc": 2, "end_m01aa:7:pc:unlock": 2, "level:pc": 3000, "swaps": 3,
                  "talk:end_m01aa:4": 3, "took_any": True, "end_m01aa:198": 1}
         h.refresh_doors(tried, player())
-        self.assertEqual(tried, {"talk:end_m01aa:4": 3, "took_any": True, "end_m01aa:198": 1})
+        self.assertEqual(tried, {"talk:end_m01aa:4": 3, "took_any": True, "end_m01aa:198": 1, "level:pc": 3000})
+
+    def test_level_up_waits_for_the_next_threshold(self):
+        self.assertEqual(h.next_level_xp(1825), 3000)
+        self.assertEqual(h.next_level_xp(3000), 6000)
+        self.assertNotIn("level_up", h.actions_for("host", player(xp=2999), player(), {"level:pc": 3000}))
+        self.assertIn("level_up", h.actions_for("host", player(xp=3000), player(), {"level:pc": 3000}))
+
+    def test_a_popup_ok_that_misses_moves_down_the_rows(self):
+        first = h.actions_for("host", player(menu_open=True, panels=["status_summary"]), player(), {})
+        again = h.actions_for("host", player(menu_open=True, panels=["status_summary"]), player(), {"ok:status_summary": 1})
+        self.assertEqual(first["ok_summary"]["commands"], ["input click 399 316"])
+        self.assertEqual(again["ok_summary"]["commands"], ["input click 399 333"])
 
     def test_an_open_transition_is_offered_ahead_of_nearer_dead_ends(self):
         doors = [{"id": i, "kind": "door", "tag": f"d{i}", "position": [i, 0, 0], "distance": i, "open": 0,
@@ -187,6 +199,21 @@ class Census(unittest.TestCase):
         host = player(objects=[creature(1, "end_reinforce3", 1, 5), creature(9, "coop_phantom", 2, 1)])
         joiner = player(objects=[creature(8, "coop_phantom", 2, 1)])
         self.assertTrue(h.census_difference(host, joiner)[0])
+
+
+class StuckScene(unittest.TestCase):
+    def test_a_conversation_frozen_on_one_node_in_both_games_is_a_finding(self):
+        ref = object.__new__(h.Referee)
+        ref.since, ref.reported, ref.findings, ref.join_wanted = {}, set(), [], {}
+        ref.games, ref.log_offsets = [], {}
+        flagged = []
+        ref.flag = lambda key, detail, states: flagged.append(key)
+        talking = dict(conversation=True, dialogue_node=7, partner_tag="saul")
+        import unittest.mock as m
+        with m.patch.object(h.time, "monotonic", side_effect=[0.0, h.SETTLE["stuckdialogue"] + 1]):
+            ref.observe(player(**talking), player(**talking))
+            ref.observe(player(**talking), player(**talking))
+        self.assertTrue(any(k.startswith("stuckdialogue:") for k in flagged))
 
 
 class RefereeWindows(unittest.TestCase):

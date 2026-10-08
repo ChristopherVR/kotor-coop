@@ -48,7 +48,7 @@ DIK_W, DIK_A, DIK_D, DIK_SPACE = 17, 30, 32, 57  # W/A/D only released on exit
 COOP_TAG = re.compile(r"^coop", re.IGNORECASE)
 
 # Settle windows: how long a cross-game difference may last before it is a finding.
-SETTLE = {"module": 45.0, "disconnected": 15.0, "census": 25.0, "join": 15.0,
+SETTLE = {"module": 45.0, "disconnected": 15.0, "census": 25.0, "join": 15.0, "stuckdialogue": 120.0,
           "door": 20.0, "container": 20.0, "enemyhp": 20.0, "party": 30.0, "peerhp": 15.0,
           "journal": 30.0, "globals": 30.0, "xp": 30.0}
 MAX_PER_KIND = 5  # findings of one comparison kind per run; the rest repeat the same bug
@@ -61,6 +61,24 @@ LOG_IGNORE = re.compile(r"FIRST-CHANCE exception \(0x406D1388\)|unhandled-except
 # laya_playtest's active-panel list, so a click is only sent while its panel is up.
 OK_STATUS_SUMMARY = "input click 399 316"     # "Experience Points Received" and similar
 OK_MESSAGE_BOX = "input click 399 329"        # "This character must be a member of your party..."
+# Both popups grow with their text, so the OK button moves down: a one-line notice has it at
+# y=316, a two-line one ("Journal Entry Added" + "Dark Side Points Gained") at about 333.
+# Repeated attempts on a popup that is still up walk through these rows.
+OK_ROWS = {"status_summary": (316, 333, 350, 300, 366), "message_box": (329, 345, 312, 362, 296)}
+
+
+def ok_click(panel, attempt):
+    rows = OK_ROWS[panel]
+    return f"input click 399 {rows[attempt % len(rows)]}"
+
+
+# KOTOR 1 experience for each level: level n needs n(n-1)/2 * 1000.
+LEVEL_XP = [n * (n - 1) // 2 * 1000 for n in range(1, 21)]
+
+
+def next_level_xp(xp):
+    """The experience at which the next level becomes available above `xp`."""
+    return next((t for t in LEVEL_XP if t > xp), LEVEL_XP[-1] + 1)
 CONTAINER_GET, CONTAINER_CLOSE = "input click 399 391", "input click 399 441"
 PARTY_FIRST, PARTY_ADD, PARTY_OK = "input click 176 210", "input click 270 449", "input click 398 485"
 HUD_EQUIP = "input click 565 20"              # the Equipment icon, top right of the HUD
@@ -74,9 +92,13 @@ CHARACTER_AUTO_LEVEL = "input click 268 297"  # Character screen "Auto Level Up"
 def menu_actions(panels, tried):
     """A menu owns the input; nothing else can happen until it closes."""
     if "status_summary" in panels:
-        return {"ok_summary": {"description": "Dismiss the experience/status notice (OK)", "commands": [OK_STATUS_SUMMARY]}}
+        return {"ok_summary": {"description": "Dismiss the experience/status notice (OK)",
+                               "commands": [ok_click("status_summary", tried.get("ok:status_summary", 0))],
+                               "ok": "status_summary"}}
     if "message_box" in panels:
-        return {"ok_message": {"description": "Dismiss the message box (OK)", "commands": [OK_MESSAGE_BOX]}}
+        return {"ok_message": {"description": "Dismiss the message box (OK)",
+                               "commands": [ok_click("message_box", tried.get("ok:message_box", 0))],
+                               "ok": "message_box"}}
     if "party_selection" in panels:
         if tried.get("party_ok", 0) < 1:
             return {"party_ok": {"description": "Accept the party selection (OK)", "commands": [PARTY_OK]}}
@@ -201,7 +223,10 @@ def actions_for(role, me, peer, tried, nav=None):
                                       EQUIP_BODY, EQUIP_SECOND_ROW, EQUIP_OK, "closegui"],
                          "gap": 1.2, "equip": who}
 
-    if tried.get(f"level:{who}", 0) < 1 and not any(o["faction"] == 1 and o["distance"] < 25 for o in living):
+    level_gate = tried.get(f"level:{who}")
+    xp = me.get("xp")
+    level_ready = level_gate is None or (xp is not None and xp >= level_gate)
+    if level_ready and not any(o["faction"] == 1 and o["distance"] < 25 for o in living):
         # Retail Auto Level Up. Offered again after new experience (an XP notice, a fight); when
         # the character cannot level the button does nothing and the screen is closed again.
         # The Endar Spire's bridge door refuses a character with a pending level.
@@ -294,7 +319,7 @@ def refresh_doors(tried, me):
     # Door keys are module:id:who[:unlock]; container keys (module:id) stay spent, or a
     # refresh sends a player round the same emptied boxes forever.
     prefix = f"{me.get('module')}:"
-    for k in [k for k in tried if (k.startswith(prefix) and k.count(":") >= 2) or k.startswith("level:")]:
+    for k in [k for k in tried if k.startswith(prefix) and k.count(":") >= 2]:
         del tried[k]
     tried.pop("swaps", None)
 
@@ -433,6 +458,19 @@ class Referee:
                         self.flag(f"log:{line[15:90]}", f"pid {game.pid}: {line.strip()[:300]}", states)
         if host.get("loading") or joiner.get("loading"):
             return
+        # A conversation that stays on one node in BOTH games is a frozen scene: the harness
+        # keeps pressing continue/answers, a voiced line would have ended long ago, and a
+        # player would be stuck too. The key carries the node, so any progress restarts it.
+        if host.get("conversation") and joiner.get("conversation"):
+            nodes = (host.get("dialogue_node"), joiner.get("dialogue_node"))
+            self.persist(f"stuckdialogue:{nodes}", True,
+                         f"both games have sat on dialogue node {nodes} (partner {host.get('partner_tag') or joiner.get('partner_tag')}) "
+                         f"for {SETTLE['stuckdialogue']:.0f} s while answers/continue were sent", states, now)
+            for key in [k for k in self.since if k.startswith("stuckdialogue:") and k != f"stuckdialogue:{nodes}"]:
+                self.since.pop(key, None)
+        else:
+            for key in [k for k in self.since if k.startswith("stuckdialogue:")]:
+                self.since.pop(key, None)
         self.persist("module", host["module"] != joiner["module"],
                      f"host in {host['module']}, joiner in {joiner['module']}", states, now)
         self.persist("disconnected", not host["remote_count"] or not joiner["remote_count"],
@@ -720,11 +758,15 @@ async def run(args, policy):
                     for k in [k for k in tried[role] if k.startswith("equip:")]:
                         del tried[role][k]
                 if act.get("level"):
-                    tried[role]["level:" + act["level"]] = 1
-                if choice == "ok_summary" or choice.startswith("fight_"):
-                    # New experience: a level may be waiting for anyone in the party.
-                    for k in [k for k in tried[role] if k.startswith("level:")]:
-                        del tried[role][k]
+                    # Try again only once experience reaches the next level's threshold: a
+                    # character that cannot level just reopened and closed its sheet 60 times.
+                    xp = me.get("xp")
+                    tried[role]["level:" + act["level"]] = next_level_xp(xp) if xp is not None else 10 ** 9
+                if act.get("ok"):
+                    tried[role]["ok:" + act["ok"]] = tried[role].get("ok:" + act["ok"], 0) + 1
+                for panel in OK_ROWS:
+                    if panel not in (me.get("panels") or []):
+                        tried[role].pop("ok:" + panel, None)
                 if act.get("said"):
                     tried[role][act["said"]] = tried[role].get(act["said"], 0) + 1
                 if act.get("equip"):
