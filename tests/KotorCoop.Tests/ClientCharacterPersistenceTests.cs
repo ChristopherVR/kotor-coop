@@ -651,6 +651,28 @@ public sealed class ClientCharacterPersistenceTests : IDisposable
     }
 
     [Fact]
+    public void ReanchoringFollowsTheCoopSlotAnAdoptionRewrote()
+    {
+        // A join rewrites the Co-op slot (the capture source) with the staged world; without
+        // re-anchoring, a crash before the next clean disconnect left the record stale and the
+        // joiner locked out of the Leviathan prison block's private locker.
+        string saves = TempDirectory();
+        string source = BuildSaveIn(saves, "000005 - Co-op", "end_m01aa", 0x99, "Own Player");
+        Assert.True(ClientCharacterPersistence.TryHashSave(source, out string hash, out long length));
+        Assert.True(ClientCharacterPersistence.TryCaptureVerifiedLoadSource(saves, source, hash, length, 42, false, out _));
+        Assert.True(ClientCharacterPersistence.TryReadSidecar(saves, out _, out SidecarMetadata before, out _));
+
+        File.AppendAllText(Path.Combine(source, "SAVEGAME.sav"), "adopted world");
+        Assert.Null(ClientCharacterPersistence.FindVerifiedCaptureSource(saves));
+
+        Assert.True(ClientCharacterPersistence.TryReanchorCaptureSource(saves, source, out _));
+        Assert.Equal(source, ClientCharacterPersistence.FindVerifiedCaptureSource(saves));
+        Assert.True(ClientCharacterPersistence.TryReadSidecar(saves, out _, out SidecarMetadata after, out _));
+        Assert.Equal(before.HostSaveIdentity, after.HostSaveIdentity);
+        Assert.Equal(before.CapturedAtUtc, after.CapturedAtUtc);
+    }
+
+    [Fact]
     public void UnboundSidecarCannotProvePrivateInventorySource()
     {
         string saves = TempDirectory();

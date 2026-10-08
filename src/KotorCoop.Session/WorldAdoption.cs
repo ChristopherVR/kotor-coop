@@ -401,6 +401,7 @@ public static class WorldAdoption
 
         // 3. Stage it, and carry the character in. Both writes, then the verification.
         string slot = Path.Combine(gameDirectory, "saves", PluginMenuLoader.AutosaveSlot);
+        string? verifiedCapture = null;
 
         try
         {
@@ -420,9 +421,9 @@ public static class WorldAdoption
             // PREVIOUS capture (gold/backpack) has to be read out of that slot before this
             // adoption's own mirror clobbers it. A no-op in both directions when both modes
             // are `shared` — see PersonalInventoryGraft's own doc comment.
+            verifiedCapture = ClientCharacterPersistence.FindVerifiedCaptureSource(Path.Combine(gameDirectory, "saves"));
             PersonalInventoryGraft.Apply(gameDirectory, slot, inventoryPersonal, creditsPersonal, log,
-                ClientCharacterPersistence.IsVerifiedCaptureSource,
-                ClientCharacterPersistence.FindVerifiedCaptureSource(Path.Combine(gameDirectory, "saves")));
+                ClientCharacterPersistence.IsVerifiedCaptureSource, verifiedCapture);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
         {
@@ -447,9 +448,18 @@ public static class WorldAdoption
         // and what later capture-source lookups prefer once it exists. Best-effort: a failed
         // mirror never blocks an adoption that already succeeded.
         if (!CoopSaveRedirect.MirrorIntoCoopSlot(
-                Path.GetDirectoryName(slot)!, slot, out _, out string mirrorDiagnostic))
+                Path.GetDirectoryName(slot)!, slot, out string coopSlot, out string mirrorDiagnostic))
         {
             log?.Invoke($"world adoption: {mirrorDiagnostic}");
+        }
+        else if (verifiedCapture is not null
+            && string.Equals(Path.GetFullPath(verifiedCapture), Path.GetFullPath(coopSlot), StringComparison.OrdinalIgnoreCase))
+        {
+            // The slot just rewritten WAS the verified capture source, and what replaced it was
+            // grafted from it: keep the record pointing at it, or a crash before the next clean
+            // disconnect locks the joiner out (ClientCharacterPersistence.TryReanchorCaptureSource).
+            ClientCharacterPersistence.TryReanchorCaptureSource(Path.GetDirectoryName(slot)!, coopSlot, out string anchorDiagnostic);
+            log?.Invoke($"world adoption: {anchorDiagnostic}");
         }
 
         if (!PlayerIfo.TryWritePifo(gameDirectory, player, out string pifoDiagnostic))
