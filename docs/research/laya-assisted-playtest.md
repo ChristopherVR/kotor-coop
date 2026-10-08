@@ -176,3 +176,42 @@ offline tests. Inventory and credits are personal by default and are not compare
 | journal | party table `+0x11C` -> journal `{data, size, cap}`, 0x3C entries, tag `+0x18`, state `+0x20` | same tags, same states |
 | globals | server internal `+0x100FC` catalogue; booleans `+0xA668` (113 bytes, MSB first), numbers `+0xA6D9` (500 signed bytes) | same non-zero values by name; the bridge's four per-player names and `k_vis_*` left out |
 | xp | player `+0xA74` -> stats `+0x68` | equal (max-merge on both ends); skipped while a companion is controlled |
+
+## 2026-10-08 (late): Claude plays the Endar Spire for the story
+
+`--policy claude` (Sonnet, headless, budgeted) on `000002 - es_host`, five runs, each from a fresh
+load. It is asked only for real choices, and the rules handle popups, menus and plain fights.
+
+| Run | Reached | Ended by | What it taught the harness |
+|---|---|---|---|
+| 1 | Trask's door open, journal `end_attack` 1 -> 20, Trask in the party | stopped at 25 min to investigate | A `level_up` with nothing to level left the character sheet over a bark; "continue" pressed Space under it, which toggles pause, and the joiner sat frozen for 13 min. Menus over a conversation are closed first now, a paused game is unpaused, and the level gate stays shut past level 20 (a 7.3M-XP veteran joiner). |
+| 2 | nothing: 200 steps on the start room's locked doors | stopped | Trask only opens the door once you equip the footlocker's gear, and the journal never says so. The footlocker was offered as "Search the end_locker01". `kotor_lore.placeable_names` now labels it "Footlocker (end_locker01), holds items", and the goal says a stuck story door usually wants gear first. |
+| 3 | footlocker, equip, Trask, door, journal 20, the cut2 corridor | **host crash** 0x58063B | The `attack` verb snaps the attacker to melee range: it put the host 25 m away inside the sealed cutscene room behind a window, and the engine's pathing faulted. Fights now walk the walkmesh route first. |
+| 4 | the same | **host crash** 0x58063B again | The room graph had a "route" ending at the window; the walk stopped short and the snap still fired. The harness now re-reads the distance after walking and attacks only from within reach. |
+| 5 | past the cut2 corridor, about (44, 70), journal 20 | 50 min, no crash | (see open findings) |
+
+Mod bugs the runs found and fixed the same night:
+
+* **Liveness "gone" verdicts expired after 15 s.** The joiner pauses reconciliation in a conversation
+  (cutscenes are conversations), so nine `end_cut2_*` actors the host destroyed stayed on the joiner for
+  good. Fixed in `LivenessPump`/`LivenessBlockPage`; live-verified (status-engineering.md).
+* **The Leviathan host crash** turned out to be a retail over-read under the rig's full page heap
+  (`WaypointGuardHook`, status-engineering.md).
+
+Open findings (evidence in the run logs under `artifacts/coop-playtest/es-claude-20261008-run*`):
+
+* **Joiner-only reinforcements.** Run 5, 23:32: the joiner had `end_reinforce3`/`4` (0x16A, 0x16E, hostile,
+  full health) that never existed on the host. The joiner had just stood in trigger 0x53 and relayed it;
+  the host fired 0x57 for the joiner's body. Likely the joiner's own engine ran a spawn the host did not.
+* **Companion mirror flapping while the host controls a companion.** Run 3: after the host took control
+  of Trask, the joiner's log alternated `party drive: mirroring 0/1 of the host's companions` about
+  3 times a second for minutes. A static read did not pin it; log which `DriveOne` return fires and
+  compare the party snapshot's `OccupantGeneration` with the roster row's.
+* **Conversation join dropped.** Run 1: the joiner joined the host's Trask conversation, then left it
+  within 2 s while the host stayed in it. That was while the host controlled Trask and the lockdown door's
+  script had started the conversation. The plain case (host talks to Trask, joiner clicks him) joins
+  within 1 s and follows node changes within 1 s.
+
+A staging-verb caveat for players: the dev console's `attack` (and any snap/teleport verb) can put a
+character somewhere the engine cannot path from, and the retail engine may crash there. That is not
+reachable without the console.
