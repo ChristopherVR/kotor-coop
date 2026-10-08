@@ -236,6 +236,48 @@ public static class ClientCharacterPersistence
             && hash == metadata.SourceSaveSha256 && length == metadata.SourceSaveLength;
     }
 
+    /// <summary>
+    /// Points the confirmed capture at <paramref name="newSourceDirectory"/>'s current bytes.
+    /// For one caller: world adoption rewrites the dedicated Co-op slot (the usual capture
+    /// source) with the staged world, whose inventory and private locker it grafted from the
+    /// verified capture a moment earlier. Without this the record went stale on every join and
+    /// was only renewed by the capture on a CLEAN disconnect, so a crash mid-session left the
+    /// joiner locked out of any world with a private locker (the Leviathan prison block: "own
+    /// save no longer matches a verified character capture"). The caller must only re-anchor
+    /// what it verified before writing. The character (pifo) itself is unchanged.
+    /// </summary>
+    public static bool TryReanchorCaptureSource(string savesDirectory, string newSourceDirectory, out string diagnostic)
+    {
+        try
+        {
+            if (!TryReadSidecar(savesDirectory, out _, out SidecarMetadata metadata, out diagnostic))
+            {
+                return false;
+            }
+
+            if (!TryHashSave(newSourceDirectory, out string hash, out long length))
+            {
+                diagnostic = "could not fingerprint the co-op slot to re-anchor the character capture";
+                return false;
+            }
+
+            string json = JsonSerializer.Serialize(metadata with
+            {
+                SourceSaveDirectory = Path.GetFullPath(newSourceDirectory),
+                SourceSaveSha256 = hash,
+                SourceSaveLength = length,
+            }, JsonOptions);
+            WriteAtomic(Path.Combine(savesDirectory, MetaFileName), Encoding.UTF8.GetBytes(json));
+            diagnostic = "re-anchored the verified character capture to the co-op slot";
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            diagnostic = $"could not re-anchor the character capture: {ex.Message}";
+            return false;
+        }
+    }
+
     public static string? FindVerifiedCaptureSource(string savesDirectory)
     {
         if (!TryReadSidecar(savesDirectory, out _, out SidecarMetadata metadata, out _)
