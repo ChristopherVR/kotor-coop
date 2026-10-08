@@ -49,11 +49,11 @@ class Actions(unittest.TestCase):
         self.assertNotIn("walk_7", acts)
         self.assertNotIn("join_end_trask", h.actions_for("joiner", me, player(conversation=True), {"join:end_trask": 2}))
 
-    def test_a_far_door_is_left_until_it_is_near_unless_security_can_reach_it(self):
-        door = {"id": 9, "kind": "door", "tag": "far", "position": [60, 0, 0], "distance": 60, "open": 0, "destination": "x"}
-        self.assertFalse([k for k in h.actions_for("host", player(objects=[door]), player(), {}) if k.endswith("_9")])
-        locked = dict(door, locked=True, destination="")
-        self.assertEqual([k for k in h.actions_for("host", player(objects=[locked]), player(), {}) if k.endswith("_9")], ["unlock_9"])
+    def test_door_reach_follows_the_plugin_limits(self):
+        far = {"id": 9, "kind": "door", "tag": "far", "position": [120, 0, 0], "distance": 120, "open": 0, "destination": "x"}
+        self.assertFalse([k for k in h.actions_for("host", player(objects=[far]), player(), {}) if k.endswith("_9")])
+        mid = dict(far, distance=60)
+        self.assertEqual([k for k in h.actions_for("host", player(objects=[mid]), player(), {}) if k.endswith("_9")], ["exit_9"])
 
     def test_popups_are_dismissed_with_their_own_buttons(self):
         self.assertEqual(list(h.actions_for("host", player(menu_open=True, panels=["status_summary"]), player(), {})), ["ok_summary"])
@@ -133,6 +133,18 @@ class Actions(unittest.TestCase):
     def test_loading_and_downed_players_do_nothing(self):
         self.assertEqual(h.actions_for("host", player(loading=True), player(), {}), {})
         self.assertEqual(h.actions_for("host", player(hp=0), player(), {}), {})
+
+
+class Census(unittest.TestCase):
+    def test_a_host_spawn_matched_by_a_joiner_stand_in_is_not_a_difference(self):
+        host = player(objects=[creature(1, "end_reinforce3", 1, 5), creature(9, "coop_phantom", 2, 1)])
+        joiner = player(objects=[creature(7, "coop_phantom", 2, 5), creature(8, "coop_phantom", 2, 1)])
+        self.assertFalse(h.census_difference(host, joiner)[0])
+
+    def test_a_host_enemy_with_nothing_on_the_joiner_is_a_difference(self):
+        host = player(objects=[creature(1, "end_reinforce3", 1, 5), creature(9, "coop_phantom", 2, 1)])
+        joiner = player(objects=[creature(8, "coop_phantom", 2, 1)])
+        self.assertTrue(h.census_difference(host, joiner)[0])
 
 
 class RefereeWindows(unittest.TestCase):

@@ -125,7 +125,10 @@ def actions_for(role, me, peer, tried):
 
     objs = me["objects"]
     living = [o for o in objs if o["kind"] == "creature" and o["hp"] > 0 and not o["party"] and not COOP_TAG.match(o["tag"])]
-    for o in [o for o in living if o["faction"] == 1 and o["distance"] < 25 and fresh(o, 4)][:2]:
+    # Any distance in the area: an attack order makes the server run the creature over (seen
+    # live from 74 m), and story gates wait for a room to be cleared (END_ROOM7_DEAD).
+    for o in sorted([o for o in living if o["faction"] == 1 and o["distance"] < 90 and fresh(o, 4)],
+                    key=lambda o: o["distance"])[:2]:
         acts[f"fight_{o['id']}"] = {"description": f"Attack the hostile {o['tag']} {o['distance']:.0f} m away",
                                     "commands": [f"attack 0x{o['id']:X}"], "target": key(o)}
     who = me.get("controlled_tag") or "pc"
@@ -167,10 +170,10 @@ def actions_for(role, me, peer, tried):
     fresh = lambda o, limit: tried.get(key(o), 0) < limit
     doors = [o for o in objs if o["kind"] == "door" and fresh(o, 2) and not (o["open"] and not o["destination"])]
     for o in sorted(doors, key=lambda o: o["distance"])[:3]:
-        if o["distance"] > 38:
-            # usedoor refuses past 40 m, and walkto never moves the player character in this
-            # build (TestDriveController.HandleWalk). A far LOCKED door can still take Security:
-            # the server walks the creature over itself (unlockdoor reaches 80 m).
+        if o["distance"] > 95:
+            # usedoor by id reaches 100 m (DoorUse.MaxUseDistanceById) and walkto never moves the
+            # player character in this build (TestDriveController.HandleWalk). A far LOCKED door
+            # can still take Security: the server walks the creature over itself (80 m).
             if o.get("locked") and o["distance"] <= 78 and tried.get(key(o) + ":unlock", 0) < 2:
                 acts[f"unlock_{o['id']}"] = {"description": f"Use your Security skill on the locked door {o['tag']} "
                                              f"({o['distance']:.0f} m away)", "commands": [f"unlockdoor 0x{o['id']:X}"],
@@ -356,13 +359,28 @@ class Referee:
                     self.join_wanted.pop(role, None)
                     self.since.pop(f"join:{role}", None)
         if host["module"] == joiner["module"]:
-            census = []
-            for s in states:
-                census.append(collections.Counter(o["tag"] for o in s["objects"] if o["kind"] == "creature"
-                                                  and o["hp"] > 0 and not o["party"] and not COOP_TAG.match(o["tag"])))
-            diff = (census[0] - census[1]) + (census[1] - census[0])
-            self.persist("census", bool(diff), f"living creatures differ in {host['module']}: "
-                         f"host-only {dict(census[0] - census[1])}, joiner-only {dict(census[1] - census[0])}", states, now)
+            diff, detail = census_difference(host, joiner)
+            self.persist("census", diff, detail, states, now)
+
+
+def census_difference(host, joiner):
+    """Whether the two games disagree about who is alive in the shared area. An enemy the
+    host's scripts created after the joiner loaded (Endar Spire reinforcements) has no body
+    of its own on the joiner: the mod materialises a stand-in from the co-op blueprint, tagged
+    coop_phantom (MaterialisedEnemies). So host-only creatures are matched by the joiner's
+    extra coop_phantom bodies, beyond one per remote player."""
+    def alive(s):
+        return collections.Counter(o["tag"] for o in s["objects"] if o["kind"] == "creature"
+                                   and o["hp"] > 0 and not o["party"] and not COOP_TAG.match(o["tag"]))
+    def stand_ins(s):
+        bodies = sum(1 for o in s["objects"] if o["kind"] == "creature" and o["hp"] > 0 and COOP_TAG.match(o["tag"]))
+        return max(0, bodies - s.get("remote_count", 0))
+    h, j = alive(host), alive(joiner)
+    host_only, joiner_only = h - j, j - h
+    unexplained = sum(host_only.values()) - stand_ins(joiner)
+    bad = unexplained > 0 or sum(joiner_only.values()) > stand_ins(host)
+    return bad, (f"living creatures differ in {host['module']}: host-only {dict(host_only)}, joiner-only "
+                 f"{dict(joiner_only)}, joiner stand-ins {stand_ins(joiner)}, host stand-ins {stand_ins(host)}")
 
 
 async def run(args, policy):
