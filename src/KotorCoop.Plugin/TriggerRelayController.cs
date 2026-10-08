@@ -101,8 +101,38 @@ internal sealed unsafe class TriggerRelayController(SharedBlockView block)
     }
 
     /// <summary>Module change: every trigger pointer and id belongs to the old area.</summary>
+    private const double DeferredReportSeconds = 30;
+    private readonly uint[] _deferredIds = new uint[TriggerFireHook.Capacity];
+    private readonly double[] _deferredAt = new double[TriggerFireHook.Capacity];
+    private int _deferredCount;
+    private uint _deferredSeen;
+    private readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
+
+    /// <summary>Picks up OnEnter runs <see cref="TriggerFireHook"/> skipped here, so the watch
+    /// reports them to the host.</summary>
+    private void NoteDeferredFires()
+    {
+        uint latest = TriggerFireHook.DeferredSequence;
+        if (latest - _deferredSeen > (uint)TriggerFireHook.Capacity)
+        {
+            _deferredSeen = latest - (uint)TriggerFireHook.Capacity;
+        }
+
+        for (; _deferredSeen != latest; _deferredSeen++)
+        {
+            uint id = TriggerFireHook.ReadDeferred((int)_deferredSeen);
+            int slot = _deferredCount < _deferredIds.Length ? _deferredCount++ : (int)(_deferredSeen % (uint)_deferredIds.Length);
+            _deferredIds[slot] = id;
+            _deferredAt[slot] = _clock.Elapsed.TotalSeconds;
+            _countdown = 0; // report on this frame's watch pass
+            PluginHost.Log($"triggers: 0x{id:X} spawns hostiles - not run here; the host runs it as its own player");
+        }
+    }
+
     public void Invalidate()
     {
+        _deferredCount = 0;
+        _deferredSeen = TriggerFireHook.DeferredSequence;
         _insideCount = 0;
         _requestSerial = block.TriggerRequestSerial;
         block.SetTriggersInside([], ++_insideSerial);
@@ -116,6 +146,10 @@ internal sealed unsafe class TriggerRelayController(SharedBlockView block)
 
     public void OnFrame()
     {
+        // Off unless every condition below holds this frame: deferring a hostile-spawn trigger
+        // to a host that will never hear about it would mean the enemies spawn nowhere.
+        TriggerFireHook.DeferHostileSpawnsToHost = false;
+
         if (block.Command != SharedBlock.CommandSpawnAndDrive)
         {
             return;
@@ -139,7 +173,9 @@ internal sealed unsafe class TriggerRelayController(SharedBlockView block)
 
         // Fire first, same reasoning EncounterController gives: a request that arrived this
         // tick should not wait behind a throttled watch pass.
+        TriggerFireHook.DeferHostileSpawnsToHost = block.TriggerWatchEnabled;
         HandleRequests();
+        NoteDeferredFires();
         HandleWatch();
 
         // Separate from the verify-bytes gate above: a failure to install the NEW native-fire
@@ -242,6 +278,18 @@ internal sealed unsafe class TriggerRelayController(SharedBlockView block)
             }
 
             inside[count++] = area[i];
+        }
+
+        // A hostile-spawn trigger this joiner skipped is reported whether or not the player is
+        // still standing in it: the Endar Spire's reinforcement trigger is a thin band a running
+        // player crosses between two watch passes, and then nobody would spawn the enemies.
+        double now = _clock.Elapsed.TotalSeconds;
+        for (int d = 0; d < _deferredCount && count < inside.Length; d++)
+        {
+            if (now - _deferredAt[d] <= DeferredReportSeconds && inside[..count].IndexOf(_deferredIds[d]) < 0)
+            {
+                inside[count++] = _deferredIds[d];
+            }
         }
 
         if (Unchanged(inside, count))

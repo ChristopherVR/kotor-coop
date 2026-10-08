@@ -80,6 +80,30 @@ internal static unsafe class TriggerFireHook
     /// instructions, at the original <c>push eax</c>.</summary>
     private const nint ResumeAt = 0x0058F509;
 
+    /// <summary>The instruction after the OnEnter <c>RunScript</c> call, where a skipped fire
+    /// resumes.</summary>
+    private const nint AfterRunScript = 0x0058F51C;
+
+    /// <summary>CSWSTrigger + this = the OnEnter script name, a CExoString (char* data, int length).</summary>
+    private const int TriggerScriptOnEnter = 0x24C;
+
+    /// <summary>
+    /// Set every frame by <see cref="TriggerRelayController"/> while this instance is a joiner whose
+    /// trigger relay to the host is working. Then a story trigger whose OnEnter spawns hostiles
+    /// (<see cref="HostileSpawnTriggers"/>) is NOT run here: the host runs it as its own player and
+    /// the enemies reach this world as stand-ins, instead of existing twice.
+    /// </summary>
+    public static volatile bool DeferHostileSpawnsToHost;
+
+    private static readonly uint[] _deferred = new uint[Capacity];
+    private static int _deferredWrite;
+    private static uint _deferredSequence;
+
+    /// <summary>Count of OnEnter runs skipped here so far; <see cref="ReadDeferred"/> reads them.</summary>
+    public static uint DeferredSequence => _deferredSequence;
+
+    public static uint ReadDeferred(int index) => _deferred[((index % Capacity) + Capacity) % Capacity];
+
     private const uint PageExecuteReadWrite = 0x40;
     private const uint MemCommitReserve = 0x3000;
 
@@ -126,6 +150,7 @@ internal static unsafe class TriggerFireHook
     /// a different trigger (or nothing at all).</summary>
     public static void Invalidate()
     {
+        Array.Clear(_deferred);
         Array.Clear(_triggerId);
         Array.Clear(_enteringObjectId);
         _write = 0;
@@ -169,7 +194,9 @@ internal static unsafe class TriggerFireHook
         // caller-saved registers our own `call` clobbers; esi survives untouched either way.
         s[n++] = 0x60; // pushad
 
-        // push dword [esi+0x29c]  (entering object -- 2nd/rightmost cdecl arg)
+        s[n++] = 0x56; // push esi  (the trigger itself -- 3rd cdecl arg)
+
+        // push dword [esi+0x29c]  (entering object -- 2nd cdecl arg)
         s[n++] = 0xFF; s[n++] = 0xB6;
         *(int*)(s + n) = TriggerLastEntered;
         n += 4;
@@ -177,13 +204,15 @@ internal static unsafe class TriggerFireHook
         // push dword [esi+4]  (trigger's own id -- 1st/leftmost cdecl arg)
         s[n++] = 0xFF; s[n++] = 0x76; s[n++] = TriggerObjId;
 
-        nint callback = (nint)(delegate* unmanaged[Cdecl]<uint, uint, void>)&OnFire;
+        nint callback = (nint)(delegate* unmanaged[Cdecl]<uint, uint, nint, int>)&OnFire;
         s[n++] = 0xE8; // call OnFire
         *(int*)(s + n) = (int)(callback - (stub + n + 4));
         n += 4;
 
-        s[n++] = 0x83; s[n++] = 0xC4; s[n++] = 0x08; // add esp, 8 (cdecl cleanup)
-        s[n++] = 0x61; // popad
+        s[n++] = 0x83; s[n++] = 0xC4; s[n++] = 0x0C; // add esp, 12 (cdecl cleanup)
+        s[n++] = 0x85; s[n++] = 0xC0;                // test eax, eax  (before popad overwrites it)
+        s[n++] = 0x61; // popad (flags survive)
+        s[n++] = 0x75; int toSkip = n++;             // jnz skip
 
         for (int i = 0; i < RelocatedBytes; i++)
         {
@@ -192,6 +221,13 @@ internal static unsafe class TriggerFireHook
 
         s[n++] = 0xE9; // jmp GenericFireSite+5
         *(int*)(s + n) = (int)(ResumeAt - (stub + n + 4));
+        n += 4;
+
+        // skip: nothing was pushed, so jump straight past the RunScript call to the engine's own
+        // post-script step (0x0058F51C: push 1; mov ecx, esi; call ...), which does not read eax.
+        s[toSkip] = (byte)(n - (toSkip + 1));
+        s[n++] = 0xE9;
+        *(int*)(s + n) = (int)(AfterRunScript - (stub + n + 4));
 
         if (!NativeMethods.VirtualProtect(GenericFireSite, (nuint)RelocatedBytes, PageExecuteReadWrite, out uint old))
         {
@@ -210,18 +246,18 @@ internal static unsafe class TriggerFireHook
 
     /// <summary>
     /// Runs inside the engine's own generic-trigger dispatch, for every REAL entry any real
-    /// character makes into an eligible trigger. Records only — filtering (which id, whose
-    /// entry, allowlist, eligibility) belongs on the main thread, where the engine calls it
-    /// needs are safe to make.
+    /// character makes into an eligible trigger. Records, and on a joiner defers a hostile-spawn
+    /// trigger to the host (returns non-zero to skip the OnEnter run, see
+    /// <see cref="DeferHostileSpawnsToHost"/>); everything else is filtered on the main thread.
     /// </summary>
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static void OnFire(uint triggerId, uint enteringObjectId)
+    private static int OnFire(uint triggerId, uint enteringObjectId, nint trigger)
     {
         try
         {
             if (triggerId == 0 || enteringObjectId == 0)
             {
-                return;
+                return 0;
             }
 
             int i = _write;
@@ -230,10 +266,22 @@ internal static unsafe class TriggerFireHook
             _triggerId[i] = triggerId;
             _enteringObjectId[i] = enteringObjectId;
             _sequence++;
+
+            if (DeferHostileSpawnsToHost && trigger != 0
+                && HostileSpawnTriggers.ContainsExoString(trigger + TriggerScriptOnEnter))
+            {
+                _deferred[_deferredWrite] = triggerId;
+                _deferredWrite = (_deferredWrite + 1) % Capacity;
+                _deferredSequence++;
+                return 1;
+            }
+
+            return 0;
         }
         catch
         {
-            // Never let a managed fault unwind into the engine's trigger dispatch.
+            // Never let a managed fault unwind into the engine's trigger dispatch; fail open.
+            return 0;
         }
     }
 }

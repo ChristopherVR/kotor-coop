@@ -371,15 +371,35 @@ internal static unsafe class OdysseyTriggers
             return TriggerFireResult.NoVm;
         }
 
+        // A trigger that spawns hostiles runs as if THIS player walked in. Its script checks the
+        // entering object is the player (GetIsPC, == GetFirstPC, IsObjectPartyMember, a party
+        // member by index) and the peer's phantom passes none of those, so the host spawned
+        // nothing while the joiner's own engine spawned the enemies in its world alone. The
+        // joiner no longer runs these itself (TriggerFireHook.DeferHostileSpawnsToHost), so
+        // they exist once, here, and reach it as stand-ins. tools/hostile_spawn_triggers.py
+        // audited all 27: none moves, talks to or teleports the entering object.
+        if (HostileSpawnTriggers.ContainsExoString(trigger + TriggerScriptOnEnter))
+        {
+            // On a joiner (the host's own walk-in replayed here for its body) a hostile spawn
+            // never runs: the host already spawned the enemies and they arrive as stand-ins.
+            if (TriggerFireHook.DeferHostileSpawnsToHost)
+            {
+                PluginHost.Log($"triggers: 0x{*(uint*)(trigger + ObjectIdOffset):X} spawns hostiles - the host's copy "
+                    + "already did; not replayed here");
+                return TriggerFireResult.Fired;
+            }
+
+            uint hostPlayer = Odyssey.GetPlayerObjectId();
+            if (hostPlayer != 0 && hostPlayer != Odyssey.ObjectInvalid)
+            {
+                enteringObjectId = hostPlayer;
+            }
+        }
+
         *(uint*)(trigger + TriggerLastEntered) = enteringObjectId;
 
         uint triggerObjectId = *(uint*)(trigger + ObjectIdOffset);
-        // The peer is a party member in co-op; a story trigger gated on
-        // IsObjectPartyMember(GetEnteringObject()) must act for them here too (RelayPartyMemberHook).
-        using (RelayPartyMemberHook.CountAsPartyMember(enteringObjectId))
-        {
-            RunScriptFn(vm, trigger + TriggerScriptOnEnter, triggerObjectId, 1);
-        }
+        RunScriptFn(vm, trigger + TriggerScriptOnEnter, triggerObjectId, 1);
 
         return TriggerFireResult.Fired;
     }
