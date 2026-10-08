@@ -28,9 +28,12 @@ internal sealed unsafe partial class CheatController
         }
 
         float distance = player != 0 ? Distance(Odyssey.GetPosition(player), Odyssey.GetPosition(door)) : 0f;
-        if (distance > 40f)
+        // The server walks the creature over with its own pathfinding before it rolls (seen live
+        // from 11 m), so the reach is wider than usedoor's 40 m; the Endar Spire's Security
+        // tutorial door sits 42 m from the room the story leaves the player in.
+        if (distance > 80f)
         {
-            Answer(SharedBlock.CheatStatusRefused, $"unlockdoor: door 0x{id:X} is {distance:F1}m away, past the 40m limit");
+            Answer(SharedBlock.CheatStatusRefused, $"unlockdoor: door 0x{id:X} is {distance:F1}m away, past the 80m limit");
             return;
         }
 

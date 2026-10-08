@@ -127,7 +127,7 @@ def actions_for(role, me, peer, tried):
         acts[f"fight_{o['id']}"] = {"description": f"Attack the hostile {o['tag']} {o['distance']:.0f} m away",
                                     "commands": [f"attack 0x{o['id']:X}"], "target": key(o)}
     who = me.get("controlled_tag") or "pc"
-    if not any(o["faction"] == 1 and o["distance"] < 25 for o in living) and tried.get(f"equip:{who}", 0) < 1:
+    if tried.get("took_any") and not any(o["faction"] == 1 and o["distance"] < 25 for o in living)             and tried.get(f"equip:{who}", 0) < 1:
         # Retail clicks only: the HUD icon, the right-weapon slot, the first item under None,
         # OK; the same for the body slot; then close. Offered once per character, and again
         # after new items are taken from a container.
@@ -157,26 +157,25 @@ def actions_for(role, me, peer, tried):
     key = lambda o: f"{me['module']}:{o['id']}:{who}"
     fresh = lambda o, limit: tried.get(key(o), 0) < limit
     doors = [o for o in objs if o["kind"] == "door" and fresh(o, 2) and not (o["open"] and not o["destination"])]
-    for o in sorted(doors, key=lambda o: (not o["destination"], o["distance"]))[:3]:
+    for o in sorted(doors, key=lambda o: o["distance"])[:3]:
         if o["distance"] > 38:
-            # usedoor refuses past 40 m; walk most of the way first (engine pathfinding, with
-            # the plugin's walkmesh guard on the destination). A story-locked route never
-            # arrives, so each far door gets three tries.
-            if tried.get(key(o) + ":approach", 0) >= 3:
-                continue
-            x, y = o["position"][0], o["position"][1]
-            acts[f"approach_{o['id']}"] = {"description": f"Walk toward the far door {o['tag']}"
-                                           + (f" into {o['destination']}" if o["destination"] else "")
-                                           + f" ({o['distance']:.0f} m away)",
-                                           "commands": [f"walkto {x:.1f} {y:.1f}"], "target": key(o) + ":approach"}
-        elif o.get("locked") and tried.get(key(o) + ":unlock", 0) < 2:
-            # Security, as the target menu sends it. Kept beside open_: opening a locked door
-            # can run its own script (the Endar Spire lockdown door's Trask scene).
-            acts[f"unlock_{o['id']}"] = {"description": f"Use your Security skill on the locked door {o['tag']} "
-                                         f"({o['distance']:.0f} m away)", "commands": [f"unlockdoor 0x{o['id']:X}"],
-                                         "target": key(o) + ":unlock"}
+            # usedoor refuses past 40 m, and walkto never moves the player character in this
+            # build (TestDriveController.HandleWalk). A far LOCKED door can still take Security:
+            # the server walks the creature over itself (unlockdoor reaches 80 m).
+            if o.get("locked") and o["distance"] <= 78 and tried.get(key(o) + ":unlock", 0) < 2:
+                acts[f"unlock_{o['id']}"] = {"description": f"Use your Security skill on the locked door {o['tag']} "
+                                             f"({o['distance']:.0f} m away)", "commands": [f"unlockdoor 0x{o['id']:X}"],
+                                             "target": key(o) + ":unlock"}
+            continue
+        if o.get("locked"):
+            # Plain opening first: on a locked door it runs the door's own script (the Endar
+            # Spire lockdown door hands over to Trask). Then Security, as the target menu sends it.
             acts[f"open_{o['id']}"] = {"description": f"Try to open the locked door {o['tag']} ({o['distance']:.0f} m away)",
                                        "commands": [f"usedoor 0x{o['id']:X}"], "target": key(o)}
+            if tried.get(key(o) + ":unlock", 0) < 2:
+                acts[f"unlock_{o['id']}"] = {"description": f"Use your Security skill on the locked door {o['tag']} "
+                                             f"({o['distance']:.0f} m away)", "commands": [f"unlockdoor 0x{o['id']:X}"],
+                                             "target": key(o) + ":unlock"}
         elif o["destination"]:
             acts[f"exit_{o['id']}"] = {"description": f"Go through the door {o['tag']} into {o['destination']} "
                                        f"({o['distance']:.0f} m away)", "commands": [f"usedoor 0x{o['id']:X}"], "target": key(o)}
@@ -391,6 +390,7 @@ async def run(args, policy):
                 if act.get("took") or choice.startswith("search_"):
                     tried[role]["took"] = bool(act.get("took"))
                 if act.get("took"):
+                    tried[role]["took_any"] = True
                     # New items: offer the equipment screen again for whoever is in control.
                     for k in [k for k in tried[role] if k.startswith("equip:")]:
                         del tried[role][k]
