@@ -53,7 +53,7 @@ class Actions(unittest.TestCase):
         me = player(conversation=True, menu_open=True, panels=["pause", "main_interface"])
         acts = h.actions_for("joiner", me, player(), {})
         self.assertEqual(list(acts), ["unpause"])
-        self.assertEqual(acts["unpause"]["commands"], [f"input key {h.DIK_SPACE} tap"])
+        self.assertEqual(acts["unpause"]["commands"], [f"input key {h.DIK_SPACE} down", f"input key {h.DIK_SPACE} up"])
 
     def test_an_open_menu_is_handled_before_anything_else(self):
         container = player(menu_open=True, panels=["main_interface", "container"], objects=[creature(5, "n_sith", 1, 4)])
