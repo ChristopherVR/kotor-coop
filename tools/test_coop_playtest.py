@@ -590,3 +590,27 @@ class ClaudeBrain(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SnapshotRetry(unittest.TestCase):
+    class Flaky:
+        def __init__(self, failures, exited=False):
+            self.failures, self._exited, self.calls = failures, exited, 0
+
+        def snapshot(self):
+            self.calls += 1
+            if self.calls <= self.failures:
+                raise h.MemoryError("Unreadable game address 0x44460ff0")
+            return {"module": "end_m01aa"}
+
+        def exited(self):
+            return self._exited
+
+    def test_a_freed_object_mid_read_is_retried(self):
+        # Under full page heap a creature freed during the read is unreadable at once.
+        game = self.Flaky(failures=2)
+        self.assertEqual(h.snapshot_retrying(game, pause=0)["module"], "end_m01aa")
+
+    def test_an_exited_game_is_not_retried(self):
+        with self.assertRaises(h.MemoryError):
+            h.snapshot_retrying(self.Flaky(failures=1, exited=True), pause=0)
