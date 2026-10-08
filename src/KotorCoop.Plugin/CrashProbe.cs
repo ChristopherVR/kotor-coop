@@ -484,6 +484,12 @@ internal static unsafe partial class CrashProbe
             $"FIRST-CHANCE {name} (0x{code:X8}) at 0x{address:X}, eip 0x{eip:X}{ours}, esp 0x{esp:X}"
             + (missed > 0 ? $" ({missed} earlier not shown)" : string.Empty)
             + $"; image-range stack values:{trace}");
+
+        // A fault in the path-update trim: name the creature and count the guard saw last.
+        if (eip is >= WaypointGuardHook.FunctionLow and < WaypointGuardHook.FunctionHigh)
+        {
+            PluginHost.Log($"  in EvaluateNewWayPoints: {WaypointGuardHook.LastCallSummary()}");
+        }
     }
 
     /// <summary>

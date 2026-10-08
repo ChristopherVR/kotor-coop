@@ -409,6 +409,17 @@ internal static unsafe partial class PluginHost
         // A conversation ended from our frame hook can be followed by one last reply list
         // the server had already queued, and the dialogue camera resolves its participants
         // with no null check. Odyssey.CloseDialogue removes the source; this is the net.
+        // A path update crashed the host on the Leviathan copying one point past its list;
+        // refuse inputs that would fault there, and record each call for the crash line.
+        if (WaypointGuardHook.Install(out string waypointDiagnostic))
+        {
+            Log($"pathing: {waypointDiagnostic}");
+        }
+        else
+        {
+            Log($"waypoint guard NOT installed: {waypointDiagnostic}");
+        }
+
         if (ShotCameraGuardHook.Install(out string shotDiagnostic))
         {
             Log($"dialogue: {shotDiagnostic}");
