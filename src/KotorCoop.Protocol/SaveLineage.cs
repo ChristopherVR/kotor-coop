@@ -73,6 +73,21 @@ public sealed class SaveLineage
     /// seed that turns out to be stale (either side loaded since the checkpoint) is simply
     /// never honoured the first time a real mismatch is judged against it.
     /// </summary>
+    /// <summary>
+    /// Forgets the agreement: the host on the other end is a different process (it crashed or
+    /// restarted and may have loaded an older save), so nothing proves the two worlds are the same
+    /// any more. Live 2026-10-09: a joiner that had agreed with the host before the host crashed
+    /// kept that agreement through the reconnect, so the mismatch rule waited for a load edge a
+    /// fresh connection never sees and the joiner stayed on W_SAVE with the id-keyed channels off.
+    /// </summary>
+    public void Reset()
+    {
+        _agreed = false;
+        Absorbing = false;
+        _localLoadAtAgreement = 0;
+        _remoteLoadAtAgreement = 0;
+    }
+
     public void SeedAgreement(uint localLoad, uint remoteLoad)
     {
         _agreed = true;

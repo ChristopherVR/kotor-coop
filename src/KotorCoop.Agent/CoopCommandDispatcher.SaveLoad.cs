@@ -256,6 +256,7 @@ public sealed partial class CoopCommandDispatcher
 
     /// <summary>Edge detector for a joiner's save-mismatch note on the host's verdict.</summary>
     private bool _hostSawPeerSaveMismatch;
+    private HostRestartWatch.State _hostRestartWatch;
     private long _hostPeerMismatchSaveAtMs;
 
     /// <summary>What the next <see cref="BeginHostReturnFreshSave"/> log line says it is for.</summary>
@@ -688,8 +689,15 @@ public sealed partial class CoopCommandDispatcher
             // The serial-only fallback for the host's load, same lifecycle as the wipe watch:
             // arms on the raw edge, fires once the host stands in a named module. Runs every
             // tick too, so an edge that lands mid-teardown is not lost behind another branch.
+            // The host process restarted under this same connection (its game crashed and was
+            // relaunched on a save): its live world was freshly loaded, whatever the save
+            // identities say. Live 2026-10-09: the relaunched host loaded the very save the joiner
+            // had adopted from, the identities matched again, and the joiner kept a world the host
+            // no longer had (a creature destroyed after that save stayed gone for good).
+            bool hostRestarted = HostRestartWatch.Observe(ref _hostRestartWatch, client, client.HostSessionId);
+            if (hostRestarted) Log?.Invoke("the host's game restarted under this connection - its world was reloaded; re-adopting it once the host is back in a module");
             (bool hostWorldReplaced, HostWorldReplacedState nextReplacedState) =
-                HostWorldReplacedRule.Observe(_hostWorldReplacedState, hostLoadEdge, hostState, hostDigest.Module);
+                HostWorldReplacedRule.Observe(_hostWorldReplacedState, hostLoadEdge || hostRestarted, hostState, hostDigest.Module);
             _hostWorldReplacedState = nextReplacedState;
 
             // Preserve the raw edge even when a higher-priority rule owns this tick's rejoin.
