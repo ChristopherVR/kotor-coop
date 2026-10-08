@@ -1093,6 +1093,13 @@ async def run(args, policy):
                     reached = coop_walk.walk_path(games[index], act["walk"], log=lambda m: report.setdefault("harness_notes", []).append(f"{role}: {m}"))
                     results.append({"reply": f"walked {reached}/{len(act['walk']) - 1} legs"})
                 commands = act["commands"]
+                if choice == "continue" and not games[index].snapshot().get("conversation"):
+                    # Space outside a conversation is the PAUSE key. On run 1 a "continue" landed
+                    # 4 ms after the mod swapped the joiner's own conversation for the host's;
+                    # the joiner's world sat paused, with no banner, for 32 s, and the join looked
+                    # dropped. Re-check right before sending.
+                    commands = []
+                    results.append({"reply": "the conversation had closed; no Space"})
                 if act.get("reach"):
                     # The attack verb teleports the rest of the way (CheatController.Attack's
                     # melee snap). A route can look walkable on the room graph and still end at
