@@ -82,3 +82,40 @@ checks own PASS/FAIL.
 
 What still needs a person: whether things look and feel right in motion (animation, camera,
 subtitle timing with real sound), a second real PC and network, and the full campaign.
+
+## 2026-10-08 (later): the harness, `tools/coop_playtest.py`
+
+Built on `laya_playtest.Game` after the owner asked for a harness that plays the game. Both
+players act each step; Laya (or fixed rules) picks among legal actions; a referee compares the
+two games after every step and turns a lasting difference into a finding with both screenshots.
+
+New observation surface (all read out of process, no plugin change):
+
+- **Reply text.** `CSWGuiDialog` reply items are inline: item i's text is a CExoString at
+  panel + 0x158 + i * 0x140. The engine numbers them ("1. Okay."), and the reader rejects a slot
+  whose number does not match. Found by walking pointers from the panel on Trask's tutorial
+  replies.
+- **Open menus.** `CGuiInGame+0x30` misses popups (a container window left it 0). The active
+  panel list does not: `CSWGuiManager` (`CGuiInGame+0x38`) keeps a `CExoArrayList` of active
+  panels at +0x88. With nothing open it holds `main_interface` plus one unnamed panel; the
+  Equipment screen replaces the HUD with `equip` + `menu`. Panel pointers in `CGuiInGame` stay
+  allocated when hidden, so a non-null field means nothing on its own.
+- **Closing a menu.** `closegui` (HideSWInGameGui) closed Equipment and left both games running
+  (pause mask 0). An injected DirectInput Escape did not close it. The container popup has
+  Get Items (399,391) and Close (399,441).
+
+Three Laya runs on the Endar Spire (10, 10 and 15 minutes):
+
+- Laya's share of real decisions rose from 8 of 118 to 49 of 100 once replies carried text and
+  the confidence bar was 0.4. Its picks were sensible (answer, close the menu, head for a door).
+- The referee's two findings were both the harness's own fault: an open container blocks a
+  conversation join, and the menu check missed the popup. With the menu fixed, a queued join
+  completed as soon as the container closed. No mod bug was confirmed by the harness yet.
+- Navigation is the limit. Drive keys hit walls; `usedoor <id>` pathfinds and opened nearby
+  doors but refuses past 40 m; `walkto` toward a far door was accepted ("walking to x,y") and
+  never moved the player, consistent with the tutorial's story-locked route. The Endar Spire
+  tutorial needs the player to equip gear before Trask opens the way, which no action offers.
+
+Next steps if this is pursued: start from saves past the tutorial (Taris, Dantooine) where
+areas are open, add equip/level-up handling, stage hostiles for the combat checks, and keep the
+referee as the only judge.
