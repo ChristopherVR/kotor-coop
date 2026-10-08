@@ -695,7 +695,7 @@ public sealed partial class CoopCommandDispatcher
             // had adopted from, the identities matched again, and the joiner kept a world the host
             // no longer had (a creature destroyed after that save stayed gone for good).
             bool hostRestarted = HostRestartWatch.Observe(ref _hostRestartWatch, client, client.HostSessionId);
-            if (hostRestarted) Log?.Invoke("the host's game restarted under this connection - its world was reloaded; re-adopting it once the host is back in a module");
+            if (hostRestarted) Log?.Invoke("the host restarted (its game or its co-op helper) under this connection - re-adopting its world once the host is back in a module");
             (bool hostWorldReplaced, HostWorldReplacedState nextReplacedState) =
                 HostWorldReplacedRule.Observe(_hostWorldReplacedState, hostLoadEdge || hostRestarted, hostState, hostDigest.Module);
             _hostWorldReplacedState = nextReplacedState;
