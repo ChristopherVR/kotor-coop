@@ -86,11 +86,19 @@ class Actions(unittest.TestCase):
 
     def test_the_joiner_is_offered_the_partners_conversation_and_never_doors(self):
         door = {"id": 7, "kind": "door", "tag": "door", "position": [10, 0, 0], "distance": 10, "open": 0, "destination": "end_m01ab"}
-        me = player(peer_partner_tag="end_trask", objects=[door])
+        me = player(peer_partner_tag="end_trask", objects=[door, creature(4, "end_trask", 2, 3)])
         acts = h.actions_for("joiner", me, player(conversation=True), {})
         self.assertIn("join_end_trask", acts)
         self.assertNotIn("walk_7", acts)
         self.assertNotIn("join_end_trask", h.actions_for("joiner", me, player(conversation=True), {"join:end_trask": 2}))
+
+    def test_a_cutscene_on_an_invisible_scene_object_is_not_joined_by_clicking(self):
+        # end_room5 runs on end01_sceneobj02, an invisible placeable: nobody to click, and a late
+        # click restarted the cutscene as a second run that stalled (2026-10-09).
+        scene = {"id": 9, "kind": "placeable", "tag": "end01_sceneobj02", "distance": 3,
+                 "position": [3, 0, 0], "open": False, "locked": False}
+        me = player(peer_partner_tag="end01_sceneobj02", objects=[scene])
+        self.assertNotIn("join_end01_sceneobj02", h.actions_for("joiner", me, player(conversation=True), {}))
 
     def test_door_reach_follows_the_plugin_limits(self):
         far = {"id": 9, "kind": "door", "tag": "far", "position": [120, 0, 0], "distance": 120, "open": 0, "destination": "x"}

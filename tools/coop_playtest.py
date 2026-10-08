@@ -288,7 +288,13 @@ def actions_for(role, me, peer, tried, nav=None):
             acts["continue"] = {"description": "Continue the conversation (Space)", "commands": [f"input key {DIK_SPACE} tap"]}
         return acts
 
-    if peer.get("conversation") and me.get("peer_partner_tag") and tried.get("join:" + me["peer_partner_tag"], 0) < 2:
+    # A player joins by clicking the same character. A cutscene owned by an invisible scene
+    # object (end01_sceneobj02) has nobody to click, and auto-follow brings the player in anyway;
+    # a late "join" there restarted the whole cutscene as a second, stalled run (2026-10-09).
+    partner = (me.get("peer_partner_tag") or "").lower()
+    clickable = any(o["kind"] == "creature" and (o.get("tag") or "").lower() == partner and o.get("hp", 0) > 0
+                    for o in me["objects"])
+    if peer.get("conversation") and partner and clickable and tried.get("join:" + me["peer_partner_tag"], 0) < 2:
         tag = me["peer_partner_tag"]
         acts[f"join_{tag}"] = {"description": f"Join your partner's conversation with {tag}",
                                "commands": [f"talktag {tag}"], "join": tag}
@@ -1113,6 +1119,13 @@ async def run(args, policy):
                     # dropped. Re-check right before sending.
                     commands = []
                     results.append({"reply": "the conversation had closed; no Space"})
+                if act.get("join"):
+                    # Only while the partner is still in that conversation: a join that lands
+                    # after it ended starts a fresh one with the same character.
+                    partner_now = snapshot_retrying(games[1 - index])
+                    if not partner_now.get("conversation") or (partner_now.get("partner_tag") or "").lower() != act["join"].lower():
+                        commands = []
+                        results.append({"reply": "the partner's conversation had ended; no join"})
                 if act.get("reach"):
                     # The attack verb teleports the rest of the way (CheatController.Attack's
                     # melee snap). A route can look walkable on the room graph and still end at
