@@ -538,7 +538,7 @@ public sealed record CoopConfig
     /// door (docs/review-seamless-2026-09-18.md §2). Default 10; 0 turns the cadence off (the
     /// pre-disconnect quicksave stays). Clamped to a day.
     /// </summary>
-    public int CharacterCaptureIntervalMin { get; init; } = 10;
+    public int CharacterCaptureIntervalMin { get; init; } = 3;
 
     /// <summary>
     /// Whether a follower acts on a host's announced transition destination immediately,
@@ -1117,7 +1117,7 @@ public sealed record CoopConfig
             CharacterCaptureIntervalMin =
                 int.TryParse(kv.GetValueOrDefault("character_capture_interval_min"), out int captureMin)
                     ? Math.Clamp(captureMin, 0, 24 * 60)
-                    : 10,
+                    : 3,
             TransitionAnnounceEnabled = !kv.ContainsKey("transition_announce")
                 || IsTruthy(kv.GetValueOrDefault("transition_announce")),
             ClientDoorRefusalEnabled = !kv.ContainsKey("client_door_refusal")

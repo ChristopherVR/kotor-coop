@@ -7,8 +7,10 @@ namespace KotorCoop.Agent;
 public sealed partial class CoopCommandDispatcher
 {
     private sealed class PeriodicSaveCapture(ICoopSession session, long generation, string module,
-        uint serial, uint epoch, uint ownLoadEpoch, string source, DateTime stamp, uint completionBefore)
+        uint serial, uint epoch, uint ownLoadEpoch, string source, DateTime stamp, uint completionBefore,
+        string? fingerprint = null)
     {
+        public readonly string? Fingerprint = fingerprint;
         public readonly ICoopSession Session = session;
         public readonly long Generation = generation;
         public readonly string Module = module;
@@ -24,6 +26,25 @@ public sealed partial class CoopCommandDispatcher
     }
     private PeriodicSaveCapture? _periodicCapture;
     private bool _periodicBusyNoticed;
+
+    /// <summary>The personal state the last completed periodic capture saved; see
+    /// <see cref="PersonalCaptureFingerprint"/>. Null until the first one, so it always runs.</summary>
+    private string? _capturedFingerprint;
+    private bool _unchangedNoticed;
+
+    /// <summary>Credits, experience and this player's own items (theirs or in the party pool),
+    /// or null when any part cannot be read; null never skips a capture.</summary>
+    private string? PersonalCaptureFingerprintNow()
+    {
+        if (_kotor is null || !bridge.TryReadProgression(out uint gold, out uint experience)) return null;
+        uint localPlayer = _kotor.Player?.ObjectId ?? 0;
+        HashSet<uint>? pool = _kotor.TryReadPartyPoolItemIds();
+        if (localPlayer == 0 || pool is null) return null;
+        IReadOnlyList<KotorGameBridge.ItemListing> items = _kotor.ListItems(force: false);
+        return PersonalCaptureFingerprint.Compose(gold, experience, items
+            .Where(i => !i.IsDeleting && (i.Possessor == localPlayer || pool.Contains(i.ObjectId)))
+            .Select(i => (i.Resref, i.Identity)));
+    }
 
     private bool PeriodicSaveIsCurrent(PeriodicSaveCapture pending) =>
         manager.Current == pending.Session && manager.LifecycleGeneration == pending.Generation
@@ -76,6 +97,7 @@ public sealed partial class CoopCommandDispatcher
                 pending.OwnLoadEpoch, _ownLoadCaptureEpoch, completed, captured))
                 _ownLoadCaptureRequiresConfirmedSave = false;
             if (!captured) Log?.Invoke(captureOutcome);
+            if (captured) _capturedFingerprint = pending.Fingerprint;
             FinishPeriodicCapture(nowMs, captured
                 ? "character capture: completed periodic dedicated Co-op save captured (QuickSave untouched)"
                 : "character capture: periodic completed-source proof changed; kept the verified checkpoint");
@@ -98,13 +120,25 @@ public sealed partial class CoopCommandDispatcher
             _periodicBusyNoticed = true;
             return;
         }
+        // Nothing personal changed since the last capture: no save, no hitch. Checked again next
+        // interval; anything gained since then is still captured within one interval.
+        string? fingerprint = PersonalCaptureFingerprintNow();
+        if (fingerprint is not null && fingerprint == _capturedFingerprint)
+        {
+            if (!_unchangedNoticed) Log?.Invoke("character capture: nothing personal changed since the last capture - no save needed");
+            _unchangedNoticed = true;
+            _captureLastMs = nowMs;
+            return;
+        }
+
+        _unchangedNoticed = false;
         uint beforeSequence = bridge.TryReadNativeSaveCompletion(out uint oldSequence, out _, out _) ? oldSequence : 0;
         PeriodicSaveCapture? prepared = null;
         string? source = RequestDedicatedCoopSave(quiet: true,
             onPrepared: path =>
             {
                 prepared = new(session, generation, local.Module, serial, epoch, _ownLoadCaptureEpoch,
-                    path, SaveStamp(path), beforeSequence);
+                    path, SaveStamp(path), beforeSequence, fingerprint);
                 return PeriodicSaveIsCurrent(prepared);
             },
             onApplied: () => { if (prepared is not null) prepared.Answered = true; },

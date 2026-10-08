@@ -65,12 +65,12 @@ public sealed partial class CoopCommandDispatcher
     // Native completion and stable outputs certify that exact own-character source;
     // neither path creates, moves or restores the user's QuickSave.
 
-    /// <summary>coop.ini <c>character_capture_interval_min</c>; 0 = off; 10 when the ini is
+    /// <summary>coop.ini <c>character_capture_interval_min</c>; 0 = off; 3 when the ini is
     /// missing (the code default, same missing-ini note as the rejoin gates above).</summary>
     private int? _characterCaptureIntervalMin;
 
     private int CharacterCaptureIntervalMin =>
-        _characterCaptureIntervalMin ??= loadConfig?.Invoke()?.CharacterCaptureIntervalMin ?? 10;
+        _characterCaptureIntervalMin ??= loadConfig?.Invoke()?.CharacterCaptureIntervalMin ?? 3;
 
     /// <summary>When the last periodic capture ran (or the connection began) — the interval is
     /// measured from here. 0 = not yet baselined for this connection.</summary>
