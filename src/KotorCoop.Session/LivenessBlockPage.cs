@@ -10,10 +10,9 @@ namespace KotorCoop.Session;
 /// two capacities do not have to be reconciled the same way).
 ///
 /// Dead/gone entries are the ones that need ACTING on — a client's own copy might still be
-/// standing — so they always go first and are never rotated away, even if there are more of
-/// them than fit (an extreme case: truncating them is the only option left, and the channel's
-/// own eventual-consistency means whatever is dropped this pass is retried the moment the
-/// pump gets a spare slot). Alive entries exist only to catch the rarer "host alive, local
+/// standing — so they always go first. When there are more of them than fit, the page rotates
+/// through them across pumps (the same cursor the alive tail uses), so every verdict reaches
+/// the plugin within a few pumps instead of the overflow never arriving. Alive entries exist only to catch the rarer "host alive, local
 /// dead" anomaly, so when there is no room for all of them the remaining capacity rotates
 /// through them across pumps instead of always covering the same prefix and starving the
 /// rest forever.
@@ -35,9 +34,24 @@ public static class LivenessBlockPage
             (entry.State == CreatureLivenessState.Alive ? alive : actionable).Add(entry);
         }
 
-        if (actionable.Count >= capacity)
+        if (actionable.Count > capacity)
         {
-            return (actionable.GetRange(0, capacity), cursor);
+            // More verdicts than slots: rotate through them too. Truncating always kept the
+            // same prefix, and the owner appends its retained "gone" verdicts after the scan's
+            // corpses, so in a module full of bodies a destroy could never reach the plugin.
+            int first = ((cursor % actionable.Count) + actionable.Count) % actionable.Count;
+            List<CreatureLivenessEntry> window = new(capacity);
+            for (int i = 0; i < capacity; i++)
+            {
+                window.Add(actionable[(first + i) % actionable.Count]);
+            }
+
+            return (window, (first + capacity) % actionable.Count);
+        }
+
+        if (actionable.Count == capacity)
+        {
+            return (actionable, 0);
         }
 
         List<CreatureLivenessEntry> page = new(capacity);
