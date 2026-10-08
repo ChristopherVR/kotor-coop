@@ -205,8 +205,12 @@ class Game:
                         "distance": round(math.dist(xyz[:2], pos[:2]), 2)}
                 if kind == "creature":
                     stats = self.u32(body + 0xA74)
-                    item.update(hp=self.unpack(body + 0xDC, "<h"), faction=self.u32(stats + 0x78) if stats else None,
+                    # +0xDC current / +0xE0 max hit points (Odyssey.ObjCurrentHitPoints/ObjMaxHitPoints).
+                    hp, _, max_hp = struct.unpack("<hhh", self.read(body + 0xDC, 6))
+                    item.update(hp=hp, max_hp=max_hp, faction=self.u32(stats + 0x78) if stats else None,
                                 combat=bool(self.u32(body + 0x138)), party=bool(self.u32(body + 0xA88)))
+                if kind == "placeable":
+                    item.update(self.placeable_state(body))
                 if kind == "door":
                     item.update(open=self.unpack(body + 0x2CC, "<B"), destination=self.exo(body + 0x390),
                                 locked=bool(self.unpack(body + 0x2C4, "<B")))
@@ -232,6 +236,10 @@ class Game:
                             break
         return {"pid": self.pid, "loading": False, "module": module, "position": xyz,
                 "player_id": player_id, "hp": self.unpack(player + 0xDC, "<h"), "frame": self.u32(self.block + 0x250),
+                "max_hp": self.unpack(player + 0xE0, "<h"),
+                # Cross-game referee inputs; each is None when its read fails, and the check skips.
+                "xp": self.experience(player), "journal": self.journal(internal),
+                "globals": self.globals(internal, module), "remote_slots": self.remote_slots(),
                 # The creature under control: "" for the player character, a companion's tag
                 # (end_trask) after a portrait swap.
                 "controlled_tag": self.exo(player + 0x18),
@@ -243,6 +251,103 @@ class Game:
                 "peer_partner_tag": self.read(self.block + 0x1240, 32).split(b"\0")[0].decode("ascii", "replace")
                     if self.u32(self.block + 0x1228) else "",
                 "dialogue_line": self.string(self.block + 0x1100, 96), "objects": sorted(objects, key=lambda x: x["distance"])}
+
+    # ---- state the two games are supposed to agree on (read by the co-op referee) ------------
+    # Each reader returns None (or omits its keys) rather than raising, so a bad read costs a check,
+    # never a run.
+
+    def placeable_state(self, body):
+        """CSWSPlaceable locked +0x260, has_inventory +0x334, open +0x338 (Odyssey.Doors.cs,
+        docs/research/placeables-containers.md): one 0xDC-byte read."""
+        try:
+            blob = self.read(body + 0x260, 0xDC)
+            return {"locked": bool(struct.unpack_from("<I", blob, 0)[0]),
+                    "container": bool(struct.unpack_from("<I", blob, 0xD4)[0]),
+                    "open": bool(struct.unpack_from("<I", blob, 0xD8)[0])}
+        except (MemoryError, struct.error):
+            return {}
+
+    def experience(self, player):
+        """CSWSCreatureStats::experience: creature +0xA74 -> stats, +0x068 (Odyssey.Progression.cs)."""
+        try:
+            stats = self.u32(player + 0xA74)
+            return self.u32(stats + 0x68) if stats else None
+        except (MemoryError, struct.error):
+            return None
+
+    def journal(self, internal):
+        """{lowercase quest tag: state}: the party journal (CSWPartyTable +0x11C, the table is
+        server-internal +0x1B770) is a CExoArrayList {data, size, capacity} of 0x3C-byte entries
+        with the tag CExoString at +0x18 and the state int at +0x20 (KotorGameBridge.Journal.cs)."""
+        try:
+            journal = self.u32(internal + 0x1B770 + 0x11C)
+            if not journal:
+                return None
+            data, count = struct.unpack("<II", self.read(journal, 8))
+            if count > 512 or (count and not data):
+                return None
+            entries = {}
+            raw = self.read(data, count * 0x3C) if count else b""
+            for i in range(count):
+                pointer, length = struct.unpack_from("<II", raw, i * 0x3C + 0x18)
+                tag = self.string(pointer, length).lower()
+                if tag:
+                    entries[tag] = struct.unpack_from("<i", raw, i * 0x3C + 0x20)[0]
+            return entries
+        except (MemoryError, struct.error):
+            return None
+
+    GLOBALS_AT, GLOBAL_NAMES, GLOBAL_STRIDE = 0x100FC, 1775, 0x18
+    # Per-player scratch the bridge deliberately does not replicate (KotorGameBridge.WorldState.cs).
+    NOT_WORLD_TRUTH = {"k_current_planet", "k_last_module", "k_last_location", "k_stunt_module"}
+
+    def globals(self, internal, module):
+        """{name: value} of the non-zero synced global booleans (bit array at table +0xA668,
+        113 bytes, MSB first) and numbers (signed bytes at +0xA6D9, 500 of them). The name catalogue
+        (1775 x 0x18 bytes at the table start; u16 at +22 packs type<<14 | index) is read once per
+        module (GlobalVariableTable.cs). Excludes the bridge's own per-player names and k_vis_*."""
+        try:
+            table = internal + self.GLOBALS_AT
+            if getattr(self, "_catalogue_module", None) != module:
+                raw = self.read(table, self.GLOBAL_NAMES * self.GLOBAL_STRIDE)
+                names = {0: {}, 1: {}}
+                for slot in range(self.GLOBAL_NAMES):
+                    at = slot * self.GLOBAL_STRIDE
+                    if raw[at] == 0:
+                        continue
+                    name = raw[at:at + 22].split(b"\0", 1)[0].decode("ascii", "replace").lower()
+                    packed = struct.unpack_from("<H", raw, at + 22)[0]
+                    if packed >> 14 in names and name not in self.NOT_WORLD_TRUTH and not name.startswith("k_vis_"):
+                        names[packed >> 14][packed & 0x3FFF] = name
+                self._catalogue, self._catalogue_module = names, module
+            values = self.read(table + 0xA668, 113 + 500)
+            found = {}
+            for index, name in self._catalogue[0].items():
+                if index < 113 * 8 and (values[index >> 3] >> (7 - (index & 7))) & 1:
+                    found[name] = 1
+            for index, name in self._catalogue[1].items():
+                if index < 500 and values[113 + index]:
+                    found[name] = struct.unpack_from("<b", values, 113 + index)[0]
+            return found
+        except (MemoryError, struct.error):
+            return None
+
+    def remote_slots(self):
+        """The plugin's RemoteSlot[8] at block +0x50 (0x40 each): active u32 @0, peer id @4,
+        position 3 floats @8, health int @0x18, flags @0x3C (high 16 bits = the peer's max hp)."""
+        try:
+            raw = self.read(self.block + 0x50, 8 * 0x40)
+            slots = []
+            for i in range(8):
+                at = i * 0x40
+                if struct.unpack_from("<I", raw, at)[0]:
+                    slots.append({"peer": struct.unpack_from("<I", raw, at + 4)[0],
+                                  "position": struct.unpack_from("<fff", raw, at + 8),
+                                  "health": struct.unpack_from("<i", raw, at + 0x18)[0],
+                                  "max_health": struct.unpack_from("<I", raw, at + 0x3C)[0] >> 16})
+            return slots
+        except (MemoryError, struct.error):
+            return None
 
     # CSWGuiDialog reply items are inline: item i's text is a CExoString at panel + 0x158 +
     # i * 0x140 (found live 2026-10-08 on Trask's tutorial lines). The engine numbers them
