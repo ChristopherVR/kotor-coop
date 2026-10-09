@@ -898,8 +898,8 @@ internal sealed unsafe partial class PhantomController
     /// reach 0 through this path - the downed pose is <see cref="_down"/>'s job and the
     /// engine's death handling must not run on a body that stands for a living peer. A max
     /// of 0 means the agent is older than the packing (see <see cref="RemoteView.FlagsMask"/>)
-    /// and the stand-in keeps its blueprint values. Latched per slot; the engine's own hit
-    /// path may move +0xDC between steps and the next change re-asserts it.
+    /// and the stand-in keeps its blueprint values. Latched per slot, and re-asserted whenever
+    /// the engine's own hit path has moved +0xDC away from the peer's number.
     /// </summary>
     private void ApplyVitals(int slot, nint phantom, in RemoteView remote)
     {
@@ -910,7 +910,15 @@ internal sealed unsafe partial class PhantomController
         }
 
         int current = Math.Clamp(remote.Health, 1, max);
-        if (_appliedHealth[slot] == current && _appliedMaxHealth[slot] == max)
+
+        // The latch alone is not enough: a hit on this body moves +0xDC locally while the peer's
+        // own number may never change (a hit the peer's game does not take, or one taken before
+        // a revive that already reported the same value). Malak's chamber, 2026-10-09: the
+        // joiner revived at 15/120 and the host's stand-in sat at 1 hp for a minute, because 15
+        // had been applied once already. So the body's own value is compared too; it moves only
+        // when something hits it, never per frame.
+        if (_appliedHealth[slot] == current && _appliedMaxHealth[slot] == max
+            && Odyssey.GetCurrentHitPoints(phantom) == current)
         {
             return;
         }
