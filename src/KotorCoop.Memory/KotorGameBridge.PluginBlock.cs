@@ -602,7 +602,10 @@ public sealed partial class KotorGameBridge
     private FriendlyCreatureResolver? _friendlyCreatures;
 
     /// <inheritdoc />
-    public bool TryWriteFriendlyTemplates(string module)
+    public bool TryWriteFriendlyTemplates(string module) => TryWriteFriendlyTemplates([module]);
+
+    /// <inheritdoc />
+    public bool TryWriteFriendlyTemplates(IReadOnlyList<string> modules)
     {
         if (_pluginBlock == 0 || ResolveLoadGameDirectory() is not { Length: > 0 } directory)
         {
@@ -610,7 +613,13 @@ public sealed partial class KotorGameBridge
         }
 
         _friendlyCreatures ??= new FriendlyCreatureResolver(directory);
-        uint[] hashes = FriendlyTemplateRule.Publishable(_friendlyCreatures.FriendlyTemplates(module));
+        List<string> templates = [];
+        foreach (string module in modules)
+        {
+            templates.AddRange(_friendlyCreatures.FriendlyTemplates(module));
+        }
+
+        uint[] hashes = FriendlyTemplateRule.Publishable(templates);
 
         // Count down first, then the hashes, then the count: a reader never pairs a new count with old hashes.
         bool ok = _memory.TryWrite(_pluginBlock + BlockFriendlyTemplateCount, 0u);
