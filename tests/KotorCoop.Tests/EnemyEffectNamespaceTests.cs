@@ -70,6 +70,6 @@ public class EnemyEffectNamespaceTests
             Assert.InRange(offset,0xC420,0xC45C);Assert.True(fields.Add(offset));Assert.Equal(0,offset%4);
         }
         Assert.True(0xC460<=SharedBlock.TotalSize);
-        Assert.Contains("30 31 64 00 00 00",KotorGameBridge.PluginSignature); // v100: duel levels at 0xCC80
+        Assert.Contains("30 31 65 00 00 00",KotorGameBridge.PluginSignature); // v101: duel panel flags at 0xCC8C (v100: duel levels at 0xCC80)
     }
 }

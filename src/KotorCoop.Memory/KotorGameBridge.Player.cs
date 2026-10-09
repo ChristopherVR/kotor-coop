@@ -485,6 +485,8 @@ public sealed partial class KotorGameBridge
         ("duel phase", BlockPvpPhase),
         ("duel opponent", BlockPvpOpponentPeer),
         ("duel round", BlockPvpRound),
+        ("duel panel flags", BlockPvpUi),
+        ("duel panel peer", BlockPvpUiPeer),
         ("remote peers", BlockRemoteCount),
         ("enemy census", BlockEnemyCount),
         ("enemy presence", BlockEnemyPresenceCount),

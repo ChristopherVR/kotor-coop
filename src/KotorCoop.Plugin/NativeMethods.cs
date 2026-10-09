@@ -91,6 +91,13 @@ internal static partial class NativeMethods
     public const int VkDown = 0x28;
     public const int VkF9 = 0x78;
 
+    /// <summary>The duel panel's keys (PvpMenuController): F10 opens it, F11 / F12 answer a challenge,
+    /// F12 yields a fight, and the number keys 1-9 pick a row.</summary>
+    public const int VkF10 = 0x79;
+    public const int VkF11 = 0x7A;
+    public const int VkF12 = 0x7B;
+    public const int VkDigit1 = 0x31;
+
     /// <summary>Tab, edge-detected while the ~ console is open, cycles verb completion.</summary>
     public const int VkTab = 0x09;
 
@@ -154,6 +161,10 @@ internal static partial class NativeMethods
         VkPageUp => 0xC9,
         VkPageDown => 0xD1,
         VkF9 => 0x43,
+        VkF10 => 0x44,
+        VkF11 => 0x57,
+        VkF12 => 0x58,
+        >= VkDigit1 and <= VkDigit1 + 8 => (byte)(0x02 + (virtualKey - VkDigit1)),
         _ => 0,
     };
 
