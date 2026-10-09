@@ -100,6 +100,14 @@ internal sealed unsafe partial class SharedBlockView
     /// see <see cref="SharedBlock.OffsetMaterialisedOwnerIds"/>. <paramref name="ownerIds"/> is
     /// <c>MaterialisedEnemies.OwnerIdsSnapshot</c>, copied verbatim (already 0 = unused per
     /// slot, so no packing or count field is needed).</summary>
+    public void SetMaterialisedLocalIds(ReadOnlySpan<uint> localIds)
+    {
+        for (int i = 0; i < SharedBlock.EnemyCapacity; i++)
+        {
+            *U32(SharedBlock.OffsetMaterialisedLocalIds + (i * 4)) = i < localIds.Length ? localIds[i] : 0;
+        }
+    }
+
     public void SetMaterialisedOwnerIds(ReadOnlySpan<uint> ownerIds)
     {
         for (int i = 0; i < SharedBlock.EnemyCapacity; i++)

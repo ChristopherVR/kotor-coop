@@ -61,6 +61,7 @@ public sealed partial class KotorGameBridge
         // scripted scenes play, next to the player watching them.
         List<(EnemyState State, bool Fighting, float DistanceSquared)> candidates = [];
 
+        HashSet<uint> mirrorBodies = ReadMaterialisedLocalIds();
         foreach (CreatureRef creature in EnumerateCreatures())
         {
             int rosterSlot = havePartyState ? Array.IndexOf(rosterObjectIds, creature.ObjectId) : -1;
@@ -92,7 +93,7 @@ public sealed partial class KotorGameBridge
             // co-op blueprint spawned — phantoms and materialised stand-ins alike, none of
             // which is ever this instance's enemy to publish — and it survives to the last
             // readable moment.
-            if (creature.Tag == GameFiles.PhantomBlueprint.Tag)
+            if (creature.Tag == GameFiles.PhantomBlueprint.Tag || mirrorBodies.Contains(creature.ObjectId))
             {
                 continue;
             }
@@ -306,6 +307,33 @@ public sealed partial class KotorGameBridge
     }
 
     /// <summary>The plugin's live phantom object ids, or null when no plugin is attached.</summary>
+    private const int BlockMaterialisedLocalIds = 0xCA80;
+    private const int BlockMaterialisedLocalIdCapacity = 128;
+
+    /// <summary>The local ids of the mirror's own bodies (stand-ins and blueprint puppets), which a
+    /// census must never report. A blueprint puppet keeps its real tag, so the coop_phantom tag
+    /// alone no longer finds every one (v99).</summary>
+    private HashSet<uint> ReadMaterialisedLocalIds()
+    {
+        HashSet<uint> ids = [];
+        byte[] raw = new byte[BlockMaterialisedLocalIdCapacity * 4];
+        if (_pluginBlock == 0 || !_memory.TryRead(_pluginBlock + BlockMaterialisedLocalIds, raw))
+        {
+            return ids;
+        }
+
+        for (int i = 0; i < BlockMaterialisedLocalIdCapacity; i++)
+        {
+            uint id = BitConverter.ToUInt32(raw, i * 4);
+            if (id != 0)
+            {
+                ids.Add(id);
+            }
+        }
+
+        return ids;
+    }
+
     private HashSet<uint>? ReadPhantomObjectIds()
     {
         if (_pluginBlock == 0)

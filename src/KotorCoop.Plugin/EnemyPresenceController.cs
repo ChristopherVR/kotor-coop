@@ -1095,8 +1095,11 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
     /// same cadence keeps the two in lockstep with no separate schedule to reason about. See
     /// docs/research/enemy-materialisation.md's 2026-09-02 section.
     /// </summary>
-    private void PublishMaterialisedOwnerIds() =>
+    private void PublishMaterialisedOwnerIds()
+    {
         block.SetMaterialisedOwnerIds(MaterialisedEnemies.OwnerIdsSnapshot);
+        block.SetMaterialisedLocalIds(MaterialisedEnemies.LocalIdsSnapshot);
+    }
 
     private static byte[] EncodeAscii(string text)
     {

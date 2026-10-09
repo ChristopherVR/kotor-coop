@@ -271,7 +271,8 @@ public class TransitionMovieTests
         // 96 binds enemy-effect capture/report/apply to native world and process provenance.
         // 97 adds the host-start conversation relay mailboxes at 0x5C50..0x5CB0.
         // 98 adds host spawns only (SharedBlock.ScriptSpawns.cs, block grown to 0xCC00).
-        Assert.Equal(98, int.Parse(version.Groups[1].Value));
+        // 99 adds the mirror's local body ids at 0xCA80 (block grown to 0xCE00).
+        Assert.Equal(99, int.Parse(version.Groups[1].Value));
     }
 
     private static string RepositoryRoot(

@@ -39,4 +39,16 @@ public sealed class ScriptDestroyedLayoutTests
         Assert.Equal(ids, Constant(bridge, "BlockScriptDestroyedIds"));
         Assert.Equal(capacity, Constant(bridge, "BlockScriptDestroyedCapacity"));
     }
+
+    [Fact]
+    public void TheMirrorsLocalBodyIdsSitWherePluginAndAgentAgreeInsideTheBlock()
+    {
+        string combat = Source("src/KotorCoop.Plugin/SharedBlock.Combat.cs");
+        string block = Source("src/KotorCoop.Plugin/SharedBlock.cs");
+        string enemies = Source("src/KotorCoop.Memory/KotorGameBridge.Enemies.cs");
+
+        int offset = Constant(combat, "OffsetMaterialisedLocalIds");
+        Assert.Equal(offset, Constant(enemies, "BlockMaterialisedLocalIds"));
+        Assert.True(offset + (Constant(enemies, "BlockMaterialisedLocalIdCapacity") * 4) <= Constant(block, "TotalSize"));
+    }
 }

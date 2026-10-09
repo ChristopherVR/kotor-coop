@@ -174,8 +174,9 @@ internal partial struct SharedBlock
     /// v83 grows to 0xB800 for 1024 attributed peer/enemy damage rows at 0x8710.
     /// v85 grows to 0xBA00 for native placeable apply acknowledgements at 0xB800.
     /// v98 grows to 0xCC00 for the host-spawns-only channel (SharedBlock.ScriptSpawns.cs).
+    /// v99 grows to 0xCE00 for the mirror's local body ids at 0xCA80.
     /// </summary>
-    public const int TotalSize = 0xCC00;
+    public const int TotalSize = 0xCE00;
 
     public const int ProfileVisibleSize = 0x250;
 
