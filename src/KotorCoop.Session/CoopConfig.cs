@@ -342,6 +342,12 @@ public sealed record CoopConfig
     /// half-shared economy by accident.</summary>
     public bool CreditsPersonal { get; init; } = true;
 
+    /// <summary>coop.ini <c>corpse_loot</c> (`shared`/`personal`). False ("shared", the default)
+    /// means an enemy corpse's loot is one copy for the party: whoever takes an item, it leaves
+    /// the other player's body bag too. True ("personal") gives each player their own copy.
+    /// Host-authoritative. See CorpseLootPump.</summary>
+    public bool CorpseLootPersonal { get; init; }
+
     /// <summary>coop.ini <c>class_grant_sync</c> — relay a script's <c>AddMultiClass</c> (the
     /// Jedi class from Dorak's path choice) to every other player's character. OFF by default,
     /// NEEDS-LIVE; must match the plugin's own <c>PluginConfig.ReadBool("class_grant_sync",
@@ -882,7 +888,7 @@ public sealed record CoopConfig
         "mode", "host", "port", "password", "name", "server_name", "join_mode",
         "auto_adopt_world", "menu_button", "follow_lead", "dialogue_auto_join",
         "dialogue_auto_join_range", "spectate_on_down", "control_return",
-        "inventory_mode", "credits_mode",
+        "inventory_mode", "credits_mode", "corpse_loot",
         "enemy_health", "enemy_damage", "xp_rate", "store_stock", "store_prices",
         "hide_party_portraits", "status_toasts", "status_indicator", "chat_overlay",
         "chat_overlay_opacity", "chat_overlay_anchor", "chat_overlay_lines",
@@ -1100,6 +1106,8 @@ public sealed record CoopConfig
                 || IsTruthy(kv.GetValueOrDefault("script_item_sync")),
             InventoryPersonal = inventoryPersonal,
             CreditsPersonal = creditsPersonal,
+            CorpseLootPersonal = string.Equals(
+                kv.GetValueOrDefault("corpse_loot"), "personal", StringComparison.OrdinalIgnoreCase),
             ClassGrantSync = !kv.ContainsKey("class_grant_sync") || IsTruthy(kv.GetValueOrDefault("class_grant_sync")),
             FirstSaberColorSync = !kv.ContainsKey("first_saber_color_sync") || IsTruthy(kv.GetValueOrDefault("first_saber_color_sync")),
             DialogueFastJoin = !kv.ContainsKey("dialogue_fast_join")

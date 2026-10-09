@@ -268,6 +268,7 @@ public sealed partial class CoopHost : ICoopSession
             [PacketType.WorldTransferComplete] = HandleWorldTransferComplete,
             [PacketType.PartySelectRequest] = HandlePartySelectRequest,
             [PacketType.HostConversationRequest] = HandleHostConversationRequest,
+            [PacketType.CorpseTakes] = HandleCorpseTakes,
             [PacketType.None] = HandleNone,
         };
     }
@@ -494,6 +495,8 @@ public sealed partial class CoopHost : ICoopSession
         BroadcastEnemies(now, recipients);
         BroadcastCreatureLiveness(now, recipients);
         BroadcastSpawnTemplates(now, recipients);
+        BroadcastCorpseTakes(now, recipients);
+        BroadcastHostBodyBags(now, recipients);
         BroadcastTriggerRelay(recipients);
         BroadcastParty(now, recipients);
         BroadcastPartyRoster(now, recipients);

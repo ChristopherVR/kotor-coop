@@ -99,6 +99,7 @@ public static class BehaviourCompatibility
         CompareFlag(BehaviourFlags.LocalVarSync, "local_var_sync", hostAuthoritative: false);
         CompareFlag(BehaviourFlags.InventoryPersonal, "inventory_mode", hostAuthoritative: true);
         CompareFlag(BehaviourFlags.CreditsPersonal, "credits_mode", hostAuthoritative: true);
+        CompareFlag(BehaviourFlags.CorpseLootPersonal, "corpse_loot", hostAuthoritative: true);
 
         if (host.InterpolationMs != peer.InterpolationMs)
         {

@@ -800,4 +800,20 @@ public enum PacketType : byte
     /// joiner's are turned away, host_spawns_only), so a joiner builds the host's from these.
     /// </summary>
     SpawnTemplates = 108,
+
+    /// <summary>
+    /// both ways, unreliable level (resent every second and on change): what one player has taken
+    /// from enemy body bags in the current module - <see cref="CorpseTakesPacket"/>. Body bags
+    /// are made separately by each engine, so the takes travel by bag POSITION and item
+    /// blueprint; the host relays every player's list to every other player.
+    /// </summary>
+    CorpseTakes = 109,
+
+    /// <summary>
+    /// host -&gt; all, unreliable level (every body bag, each second): what one of the host's
+    /// enemy body bags holds - <see cref="HostBodyBagPacket"/>. With corpse_loot = shared the
+    /// host's bag is the truth; a joiner fills its own bag at that spot to match once, then the
+    /// take channel (<see cref="CorpseTakes"/>) keeps the two in step.
+    /// </summary>
+    HostBodyBag = 110,
 }

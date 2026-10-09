@@ -113,6 +113,11 @@ internal partial struct SharedBlock
     /// </summary>
     public const uint CheatTargetLocalPlayer = 0x7FFFFFFF;
 
+    /// <summary>GiveLoot: a target with this bit set names a LOCAL object id directly (the low
+    /// bits), no owner-id translation: a body bag that shared corpse loot fills to match the
+    /// host's (CorpseLootLedger). Server object ids never reach this bit.</summary>
+    public const uint CheatTargetLocalObjectFlag = 0x40000000;
+
 
 
 

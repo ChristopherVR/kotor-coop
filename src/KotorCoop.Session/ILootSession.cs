@@ -68,4 +68,17 @@ public interface ILootSession
     /// receiving side of this channel.
     /// </summary>
     void ResetMaterialisedLootDedup() { }
+
+    /// <summary>Shared corpse loot: this player's body-bag takes in <paramref name="module"/>.</summary>
+    void PublishCorpseTakes(string module, IReadOnlyList<CorpseTakeEntry> entries) { }
+
+    /// <summary>Shared corpse loot: every other player's body-bag takes in <paramref name="module"/>.</summary>
+    IReadOnlyList<(uint Origin, IReadOnlyList<CorpseTakeEntry> Entries)> GetRemoteCorpseTakes(string module) => [];
+
+    /// <summary>Host: every one of this game's body bags in <paramref name="module"/>, for joiners
+    /// to fill theirs to match (shared corpse loot).</summary>
+    void PublishHostBodyBags(string module, IReadOnlyList<(float X, float Y, IReadOnlyList<BodyBagItemEntry> Items)> bags) { }
+
+    /// <summary>Client: the host's body bags in <paramref name="module"/> heard about recently.</summary>
+    IReadOnlyList<HostBodyBagPacket> GetHostBodyBags(string module) => [];
 }

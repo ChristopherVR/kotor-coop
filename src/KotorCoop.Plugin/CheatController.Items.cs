@@ -95,6 +95,11 @@ internal sealed unsafe partial class CheatController
             Answer(SharedBlock.CheatStatusNoTarget, "giveloot needs the owner's enemy object id");
             return;
         }
+        else if ((ownerEnemyId & SharedBlock.CheatTargetLocalObjectFlag) != 0)
+        {
+            // Shared corpse loot: straight into this instance's own body bag.
+            localId = ownerEnemyId & ~SharedBlock.CheatTargetLocalObjectFlag;
+        }
         else
         {
             bool retainedCandidate = MaterialisedEnemies.IsRetainedOwnerCandidate(ownerEnemyId, block);

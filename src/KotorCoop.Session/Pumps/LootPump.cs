@@ -129,6 +129,17 @@ internal sealed class LootPump(
                 continue;
             }
 
+            if (_corpseLootShared)
+            {
+                // Shared corpse loot fills this game's body bag from the host's own bag
+                // (CorpseLootLedger.Reconcile). This older mirror copies what the dead creature
+                // carried, equipped items that never drop included, and misses the credits the
+                // engine adds to the bag (live 2026-10-09), so it would only add wrong extras.
+                session.AcknowledgeMaterialisedLoot(packet);
+                _deferredMaterialisedLoot.RemoveAt(packetIndex);
+                continue;
+            }
+
             if (!MaterialisedLootFilterRule.ShouldQueue(packet.OwnerEnemyId, materialisedOwnerIds))
             {
                 if (tagged)
@@ -230,8 +241,20 @@ internal sealed class LootPump(
     /// re-broadcast. Shares the Doors capability gate because it rests on the same
     /// object-id-across-the-same-save assumption doors do.
     /// </summary>
-    public void PumpContainerLoot(SessionCapabilities caps, string module = "")
+    private readonly CorpseLootLedger _corpseLoot = new();
+    private string _corpseLootModule = string.Empty;
+    private long _lastCorpseLootMs;
+    private bool _corpseLootShared;
+
+    /// <summary>The body-bag read walks the engine's whole object table; twice a second is far
+    /// quicker than anyone can open a bag and take something.</summary>
+    private const int CorpseLootIntervalMs = 500;
+
+    public void PumpContainerLoot(SessionCapabilities caps, string module = "", bool corpseLootPersonal = false)
     {
+        // Only a bridge that can see body bags can fill them from the host's; without one the
+        // older creature-loot mirror stays the only source.
+        _corpseLootShared = !corpseLootPersonal && bridge.SupportsContainerLoot;
         if (!bridge.SupportsContainerLoot || (caps & SessionCapabilities.Doors) == 0)
         {
             return;
@@ -257,10 +280,52 @@ internal sealed class LootPump(
             session.PublishContainerLoot(removal.ContainerId, removal.ItemId);
         }
 
+        // Shared corpse loot: body bags are paired by position and blueprint, since each engine
+        // makes its own (CorpseLootLedger). Personal corpse loot leaves each player's copy alone.
+        if (!string.Equals(module, _corpseLootModule, StringComparison.OrdinalIgnoreCase) || corpseLootPersonal)
+        {
+            _corpseLootModule = module;
+            _corpseLoot.Reset();
+        }
+
+        long corpseNowMs = Environment.TickCount64;
+        if (!corpseLootPersonal && module.Length > 0 && corpseNowMs - _lastCorpseLootMs >= CorpseLootIntervalMs)
+        {
+            _lastCorpseLootMs = corpseNowMs;
+            List<BodyBagState> bags = bridge.ReadBodyBags();
+            _corpseLoot.Update(bags, session.GetRemoteCorpseTakes(module));
+            session.PublishCorpseTakes(module, _corpseLoot.OwnTakes);
+
+            if (session.IsEnemyAuthority)
+            {
+                // The host's bags are the truth a joiner fills its own to match.
+                session.PublishHostBodyBags(module, [.. bags.Select(b =>
+                    (b.X, b.Y, (IReadOnlyList<BodyBagItemEntry>)[.. b.Items.Select(i => new BodyBagItemEntry(i.Resref, i.Stack))]))]);
+            }
+            else
+            {
+                foreach ((uint bagId, BodyBagItemEntry item) in _corpseLoot.Reconcile(bags, session.GetHostBodyBags(module)))
+                {
+                    lock (_pendingGate)
+                    {
+                        if (_pendingLoot.Count < MaxPendingLoot)
+                        {
+                            _pendingLoot.Enqueue(new CoopAgent.PendingMaterialisedLootGive(
+                                bagId | CheatKinds.LocalObjectTargetFlag,
+                                new MaterialisedLootItem(item.Resref,
+                                    new ItemIdentity(item.Stack, 0, 0, 0, ItemIdentity.FlagKnown))));
+                        }
+                    }
+                }
+            }
+        }
+
         // Re-declare the merged set — everyone's removals, this instance's own plus every peer
         // reported through the session — so each side's copy of every shared container
         // converges. Idempotent: an already-removed item resolves to a no-op.
-        bridge.TryWriteContainerLoot(session.ContainerLootHistory);
+        bridge.TryWriteContainerLoot(_corpseLoot.Removals.Count == 0
+            ? session.ContainerLootHistory
+            : [.. session.ContainerLootHistory, .. _corpseLoot.Removals]);
     }
 
     /// <summary>
