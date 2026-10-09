@@ -29,13 +29,17 @@ public sealed partial class CoopHost
 
     public bool PvpEnabled => _settings.Behaviour.Has(BehaviourFlags.Pvp);
 
+    public bool PvpArenaEnabled => _settings.Behaviour.Has(BehaviourFlags.PvpArena);
+
+    public bool PvpArenaReady => _settings.PvpArenaReady;
+
     public PvpView PvpState
     {
         get
         {
             lock (_gate)
             {
-                return new PvpView(_pvp.Phase, _pvp.RoundId, _pvp.Challenger, _pvp.Target);
+                return new PvpView(_pvp.Phase, _pvp.RoundId, _pvp.Challenger, _pvp.Target, _pvp.Arena);
             }
         }
     }
@@ -66,7 +70,7 @@ public sealed partial class CoopHost
     /// <summary>Caller holds <see cref="_gate"/>.</summary>
     private void ApplyPvpOp(uint origin, PvpOp op, uint target, long now)
     {
-        _pvp.Enabled = PvpEnabled;
+        SyncPvpSettings();
 
         switch (op)
         {
@@ -74,8 +78,16 @@ public sealed partial class CoopHost
                 _pvp.Challenge(origin, target, PvpParticipantOf(origin, now), PvpParticipantOf(target, now), now);
                 break;
 
+            case PvpOp.ChallengeArena:
+                _pvp.Challenge(
+                    origin, target, PvpParticipantOf(origin, now), PvpParticipantOf(target, now), now,
+                    arena: true, host: PvpParticipantOf(LocalPeerId, now));
+                break;
+
             case PvpOp.Accept:
-                _pvp.Accept(origin, PvpParticipantOf(_pvp.Challenger, now), PvpParticipantOf(_pvp.Target, now), now);
+                _pvp.Accept(
+                    origin, PvpParticipantOf(_pvp.Challenger, now), PvpParticipantOf(_pvp.Target, now), now,
+                    PvpParticipantOf(LocalPeerId, now));
                 break;
 
             case PvpOp.Decline:
@@ -98,28 +110,40 @@ public sealed partial class CoopHost
         CollectPvpNotices(now);
     }
 
+    /// <summary>The settings the round reads, refreshed before it is asked anything. Caller
+    /// holds <see cref="_gate"/>.</summary>
+    private void SyncPvpSettings()
+    {
+        _pvp.Enabled = PvpEnabled;
+        _pvp.ArenaEnabled = PvpArenaEnabled;
+        _pvp.HostPeerId = LocalPeerId;
+    }
+
     /// <summary>What the round needs to know about <paramref name="peer"/> right now. Caller
     /// holds <see cref="_gate"/>.</summary>
     private PvpParticipant PvpParticipantOf(uint peer, long now)
     {
         if (peer == LocalPeerId)
         {
-            return ParticipantFrom(_localState, _hasLocalState, aware: true);
+            return ParticipantFrom(_localState, _hasLocalState, aware: true, arenaReady: PvpArenaReady);
         }
 
         return _peers.TryGetValue(peer, out PeerConnection? connection)
-            ? ParticipantFrom(connection.LastState, present: true, aware: now < connection.PvpAwareUntilMs)
+            ? ParticipantFrom(
+                connection.LastState, present: true, aware: now < connection.PvpAwareUntilMs,
+                arenaReady: now < connection.PvpArenaAwareUntilMs)
             : default;
     }
 
-    private static PvpParticipant ParticipantFrom(in PlayerState state, bool present, bool aware) => new(
+    private static PvpParticipant ParticipantFrom(in PlayerState state, bool present, bool aware, bool arenaReady) => new(
         Present: present && state.Module.Length > 0 && !state.IsAway,
         Aware: aware,
         Busy: state.IsInDialogue || state.IsInMinigame || state.IsInSoloSegment,
         Module: state.Module,
         Health: state.Health,
         MaxHealth: state.MaxHealth,
-        Downed: state.IsDowned);
+        Downed: state.IsDowned,
+        ArenaReady: arenaReady);
 
     /// <summary>Moves what the round said into the numbered recent list (for the broadcast)
     /// and the host's own queue. Caller holds <see cref="_gate"/>.</summary>
@@ -159,9 +183,13 @@ public sealed partial class CoopHost
                 return;
             }
 
-            if (packet.Op == PvpOp.Aware)
+            if (packet.Op is PvpOp.Aware or PvpOp.AwareArena)
             {
                 peer.PvpAwareUntilMs = now + PvpAwareHoldMs;
+
+                // AwareArena says "duels AND I have the arena module"; plain Aware takes the
+                // second half back, so a player who removed the module stops being offered.
+                peer.PvpArenaAwareUntilMs = packet.Op == PvpOp.AwareArena ? now + PvpAwareHoldMs : 0;
                 return;
             }
 
@@ -195,7 +223,7 @@ public sealed partial class CoopHost
         PvpStatePacket packet;
         lock (_gate)
         {
-            _pvp.Enabled = PvpEnabled;
+            SyncPvpSettings();
             _pvp.Tick(now, id => PvpParticipantOf(id, now));
             CollectPvpNotices(now);
 
@@ -215,7 +243,8 @@ public sealed partial class CoopHost
             _lastPvpSentMs = now;
             packet = new PvpStatePacket(
                 _sessionId, _pvp.Phase, _pvp.RoundId, _pvp.Challenger, _pvp.Target,
-                [.. _pvpRecent.Select(entry => entry.Notice).TakeLast(PvpStatePacket.MaxNotices)]);
+                [.. _pvpRecent.Select(entry => entry.Notice).TakeLast(PvpStatePacket.MaxNotices)],
+                _pvp.Arena);
         }
 
         int length = PacketCodec.Write(_sendBuffer, packet);

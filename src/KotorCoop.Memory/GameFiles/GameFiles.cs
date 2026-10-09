@@ -108,6 +108,50 @@ public sealed class GameFiles : IDisposable
         return File.Exists(path) ? path : null;
     }
 
+    /// <summary>The install's modules folder as it is spelled on disk, or null when there is
+    /// none.</summary>
+    public string? ModulesDirectory => _modulesDirectory;
+
+    /// <summary>
+    /// Reads one member out of a module archive (<c>modules\&lt;name&gt;.rim</c>, or a
+    /// <c>.mod</c> of that name when there is no rim): the way to get a module's own
+    /// <c>.are</c>/<c>.git</c>/<c>module.ifo</c>, which live nowhere else. Read-only; false
+    /// when the module or the member is absent or the archive cannot be read.
+    /// </summary>
+    public bool TryReadModuleMember(string moduleName, string resref, string extension, out byte[] data)
+    {
+        data = [];
+
+        if (_modulesDirectory is null)
+        {
+            return false;
+        }
+
+        foreach (string suffix in new[] { ".rim", ".mod" })
+        {
+            string? path = FindFile(_modulesDirectory, moduleName + suffix);
+            if (path is null)
+            {
+                continue;
+            }
+
+            try
+            {
+                GameArchive archive = suffix == ".rim" ? RimArchive.Open(path) : ErfArchive.Open(path);
+                if (archive.TryRead(resref, extension, out data))
+                {
+                    return true;
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+            {
+                // A locked or damaged archive reads as "not there"; the caller reports it.
+            }
+        }
+
+        return false;
+    }
+
     // -- censuses ----------------------------------------------------------------
 
     /// <summary>Every loose file in override\ as (lowercase name, size), sorted by name.

@@ -127,6 +127,102 @@ public static class ErfWriter
         return result;
     }
 
+    /// <summary>
+    /// Builds a fresh ERF-family archive (<c>MOD </c> for a module, <c>ERF </c>, <c>HAK </c>)
+    /// from loose members, in the order given. Built for the PvP arena module that is generated
+    /// on the player's machine from their own game files (docs/research/pvp-arenas.md): no
+    /// localised-string block, build date zeroed and key ids numbered by position, so the same
+    /// members always produce the same bytes. Two players generating the arena from the same
+    /// game files must end up with identical files, because the content digest hashes them
+    /// (a timestamp in the header would make every install look modded).
+    ///
+    /// Layout is the one <see cref="ErfArchive"/> reads: 160-byte header, 24-byte key entries
+    /// (resref padded to 16, resId, type, 0), 8-byte resource entries (offset, size), then the
+    /// member bytes back to back.
+    /// </summary>
+    /// <exception cref="ArgumentException">A resref longer than 16 characters, or two members
+    /// with the same resref and type (the engine would only ever see one).</exception>
+    public static byte[] Build(string fileType, IReadOnlyList<(string Resref, int ResourceType, byte[] Data)> members)
+    {
+        ArgumentNullException.ThrowIfNull(fileType);
+        ArgumentNullException.ThrowIfNull(members);
+
+        if (fileType.Length != 4)
+        {
+            throw new ArgumentException("ERF file type must be four characters, e.g. \"MOD \"", nameof(fileType));
+        }
+
+        HashSet<(string, int)> seen = [];
+        foreach ((string resref, int type, byte[] data) in members)
+        {
+            ArgumentNullException.ThrowIfNull(data);
+            if (resref.Length is 0 or > 16)
+            {
+                throw new ArgumentException($"ERF resref '{resref}' must be 1 to 16 characters", nameof(members));
+            }
+
+            if (!seen.Add((resref.ToLowerInvariant(), type)))
+            {
+                throw new ArgumentException($"ERF member '{resref}' (type {type}) appears twice", nameof(members));
+            }
+        }
+
+        const int headerSize = 160;
+        int count = members.Count;
+        int keysOffset = headerSize;
+        int resourcesOffset = keysOffset + (24 * count);
+        int dataOffset = resourcesOffset + (8 * count);
+
+        long total = dataOffset;
+        foreach ((_, _, byte[] data) in members)
+        {
+            total += data.Length;
+        }
+
+        byte[] result = new byte[checked((int)total)];
+        Span<byte> span = result;
+
+        for (int i = 0; i < 4; i++)
+        {
+            span[i] = (byte)fileType[i];
+        }
+
+        "V1.0"u8.CopyTo(span[4..]);
+        WriteU32(span, 0x08, 0); // language count
+        WriteU32(span, 0x0C, 0); // localised string size
+        WriteU32(span, 0x10, (uint)count);
+        WriteU32(span, 0x14, headerSize); // localised string offset (empty block)
+        WriteU32(span, 0x18, (uint)keysOffset);
+        WriteU32(span, 0x1C, (uint)resourcesOffset);
+        WriteU32(span, 0x20, 0); // build year since 1900: zero on purpose, see summary
+        WriteU32(span, 0x24, 0); // build day
+        WriteU32(span, 0x28, uint.MaxValue); // description strref: none
+
+        int cursor = dataOffset;
+        for (int i = 0; i < count; i++)
+        {
+            (string resref, int type, byte[] data) = members[i];
+
+            int keyAt = keysOffset + (24 * i);
+            for (int c = 0; c < resref.Length; c++)
+            {
+                span[keyAt + c] = (byte)resref[c];
+            }
+
+            WriteU32(span, keyAt + 16, (uint)i);
+            BinaryPrimitives.WriteUInt16LittleEndian(span.Slice(keyAt + 20, 2), (ushort)type);
+
+            int valAt = resourcesOffset + (8 * i);
+            WriteU32(span, valAt, (uint)cursor);
+            WriteU32(span, valAt + 4, (uint)data.Length);
+
+            data.CopyTo(span[cursor..]);
+            cursor += data.Length;
+        }
+
+        return result;
+    }
+
     private static uint U32(byte[] data, int offset) =>
         BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(offset, 4));
 

@@ -74,5 +74,6 @@ public static class PvpPumpRule
 
     /// <summary>Saves are refused for a duellist: the 1 hp pin rides a save as a persistent
     /// creature field (docs/research/min-one-hitpoint.md).</summary>
-    public static bool SaveAllowed(in PvpView view, uint localPeerId) => !view.IsFighting(localPeerId);
+    public static bool SaveAllowed(in PvpView view, uint localPeerId) =>
+        !view.IsFighting(localPeerId) && !view.ArenaActive;
 }

@@ -126,6 +126,7 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.ShowGuiEquip] = "showgui equip 1",
         [CoopCommandKind.JediChoice] = "jedichoice",
         [CoopCommandKind.Duel] = "duel Aria",
+        [CoopCommandKind.DuelArena] = "arena Aria",
         [CoopCommandKind.DuelAccept] = "accept",
         [CoopCommandKind.DuelDecline] = "decline",
         [CoopCommandKind.DuelYield] = "yield",

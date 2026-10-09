@@ -54,7 +54,8 @@ public sealed record SessionOverrides(
     bool? InventoryPersonal = null,
     bool? CreditsPersonal = null,
     bool? CorpseLootPersonal = null,
-    bool? Pvp = null)
+    bool? Pvp = null,
+    bool? PvpArena = null)
 {
     // The five int? fields (2026-09-18/23) are the player-count scaling SETTINGS
     // (docs/research/player-count-scaling.md): the host's coop.ini value, adopted verbatim —

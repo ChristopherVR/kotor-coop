@@ -1,6 +1,6 @@
 # PvP arenas: where to fight, how to ship one, how to get in and out
 
-Status: research proposal, 2026-10-09. Nothing here is built or run. Companion to
+Status: research proposal, 2026-10-09. Section 2 and flow A of section 3 were BUILT afterwards (see "Phases 3 and 4 as built" in [pvp-plan.md](pvp-plan.md)); none of it has been run in the game. Companion to
 [pvp-product.md](pvp-product.md) (rules, consent, pause budget, handicap), which this doc does not
 repeat. Evidence below was read from the installed GOG data with `tools/kotorfiles.py` and
 `tools/ncsdis.py` (read-only), plus the repo sources named inline. Tags: **VERIFIED** = read from

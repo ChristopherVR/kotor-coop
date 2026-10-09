@@ -60,6 +60,11 @@ public sealed partial class CoopHost : ICoopSession
         /// two seconds (<see cref="PvpOp.Aware"/>), so an older build never gets there.</summary>
         public long PvpAwareUntilMs;
 
+        /// <summary>Until when this peer counts as able to go to the arena: its build knows
+        /// arenas AND it had the arena module when the game started
+        /// (<see cref="PvpOp.AwareArena"/>, every two seconds).</summary>
+        public long PvpArenaAwareUntilMs;
+
         /// <summary>The last duel request serial acted on, so the repeats of one request do
         /// nothing. Wrap-safe compare; see <c>HandlePvpIntent</c>.</summary>
         public uint PvpLastSerial;

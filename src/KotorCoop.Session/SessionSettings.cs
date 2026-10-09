@@ -8,6 +8,11 @@ public sealed record SessionSettings
 {
     public uint DamageIncarnation { get; init; }
 
+    /// <summary>True when this install had the generated arena module (<c>k_coop_arena.mod</c>)
+    /// in its modules folder when the game started, so the engine can load it. Said to the host
+    /// with every arena handshake; the host's own value decides whether it can take the party there.</summary>
+    public bool PvpArenaReady { get; init; }
+
     public string PlayerName { get; init; } = "player";
 
     /// <summary>

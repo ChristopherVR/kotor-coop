@@ -27,6 +27,17 @@ public enum PvpOp : byte
     /// them; a peer that never says it (an older build) is told no cleanly instead of being
     /// left to time out. Idempotent, so the host does not look at its serial.</summary>
     Aware = 7,
+
+    /// <summary><c>arena &lt;name&gt;</c>: a challenge to fight in the arena module instead of
+    /// where the two players stand (docs/research/pvp-plan.md, phases 3 and 4). The target peer
+    /// id rides in the packet.</summary>
+    ChallengeArena = 8,
+
+    /// <summary>"My game knows about duels AND has the arena module installed." Sent instead of
+    /// <see cref="Aware"/> by a game that can go to the arena; the host reads it as both. A peer
+    /// that only ever says <see cref="Aware"/> (or is an older build) is turned away from an
+    /// arena challenge with "does not have the arena".</summary>
+    AwareArena = 9,
 }
 
 /// <summary>Where the host's single duel round is.</summary>
@@ -44,6 +55,15 @@ public enum PvpPhase : byte
     /// <summary>The fight. Each duellist's stand-in is hostile to the other for as long as
     /// this lasts.</summary>
     Live = 3,
+
+    /// <summary>Arena rounds only: accepted, and the host is taking the whole party to the arena
+    /// module in one warp. Nobody is pinned yet; the countdown starts once everyone has arrived.</summary>
+    Entering = 4,
+
+    /// <summary>Arena rounds only: the fight is over (or was called off) and the host is taking
+    /// everyone back to where they were in one warp. Nobody is pinned or hostile any more; saving
+    /// stays blocked until everyone is back.</summary>
+    Leaving = 5,
 }
 
 /// <summary>Every line a player can be told about a duel. The text lives in
@@ -122,6 +142,25 @@ public enum PvpNoticeCode : byte
     /// <summary>To the asker: the request does not fit this moment (accept with nothing to
     /// accept, yield outside a duel).</summary>
     NothingToDo = 23,
+
+    /// <summary>To the asker: the host has duels on but not the arena (<c>pvp = duel</c>).</summary>
+    ArenaNotEnabled = 24,
+
+    /// <summary>To the challenger: <c>Other</c> (maybe the reader) has no arena module, or an
+    /// older build.</summary>
+    ArenaMissing = 25,
+
+    /// <summary>To the challenger: the host is in another area, so one warp cannot take everyone.</summary>
+    ArenaHostApart = 26,
+
+    /// <summary>To both: the answer was yes and everyone is on the way to the arena.</summary>
+    ArenaEntering = 27,
+
+    /// <summary>To both: the arena round is over and everyone is being taken back.</summary>
+    ArenaReturning = 28,
+
+    /// <summary>To both: getting everyone into the arena took too long; called off.</summary>
+    ArenaFailed = 29,
 }
 
 /// <summary>One message for one player. <paramref name="Serial"/> numbers them in the host's
@@ -138,11 +177,12 @@ public sealed record PvpIntentPacket(uint HostSessionId, uint OriginPeerId, uint
 /// (<paramref name="Challenger"/> is the one who asked, <paramref name="Target"/> the one who
 /// was asked; both 0 while idle), plus the last few <see cref="PvpNotice"/>s. Receivers drive
 /// their own game from the phase (pin, snapshot, hostile body, restore) and show a notice once
-/// per serial.
+/// per serial. <paramref name="Arena"/> says the round is fought in the arena module (appended
+/// after the notices; an older sender simply omits it, which reads as a plain duel).
 /// </summary>
 public sealed record PvpStatePacket(
     uint HostSessionId, PvpPhase Phase, uint RoundId, uint Challenger, uint Target,
-    IReadOnlyList<PvpNotice> Notices)
+    IReadOnlyList<PvpNotice> Notices, bool Arena = false)
 {
     public const int MaxNotices = 8;
 }
