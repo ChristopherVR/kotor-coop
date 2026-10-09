@@ -107,7 +107,7 @@ internal sealed unsafe class PvpMenuController(SharedBlockView block)
         }
 
         ListOpen = listOpen;
-        Draw(mode);
+        Draw(mode, keyboardFree);
     }
 
     /// <summary>The world changed or the session ended: a half-made pick names a player who may no
@@ -214,8 +214,15 @@ internal sealed unsafe class PvpMenuController(SharedBlockView block)
         PluginHost.Log($"duel panel: sent '{command}'");
     }
 
-    private void Draw(PvpMenuMode mode)
+    private void Draw(PvpMenuMode mode, bool keyboardFree)
     {
+        // Nothing over a conversation, a cutscene or a full-screen panel: the idle hint sat on top
+        // of Saul Karath's Leviathan cutscene (2026-10-09). An answer that is pending still shows.
+        if (!keyboardFree && mode == PvpMenuMode.Idle)
+        {
+            return;
+        }
+
         Odyssey.SetQueuedTextAlpha(1f);
         switch (mode)
         {

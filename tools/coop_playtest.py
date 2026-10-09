@@ -244,7 +244,8 @@ def npc_walk_actions(me, nav, tried, closed_doors, living):
     blocked = [tuple(d["position"][:2]) for d in closed_doors]
     far = [o for o in living if o["faction"] != 1 and 12 <= o["distance"] <= 80
            and re.fullmatch(r"[A-Za-z0-9_]{1,31}", o["tag"] or "")
-           and tried.get(f"gotalk:{me['module']}:{o['id']}", 0) < 2 and tried.get(f"talk:{me['module']}:{o['id']}", 0) < 3]
+           and tried.get(f"gotalk:{me['module']}:{o['id']}", 0) < 2 and tried.get(f"talk:{me['module']}:{o['id']}", 0) < 3
+           and not recently_ended(tried, me["module"], o["tag"])]
     for o in sorted(far, key=lambda o: o["distance"])[:6]:
         target = tuple(o["position"][:2])
         route = nav.path(here, target, blocked=blocked)
@@ -380,6 +381,7 @@ def actions_for(role, me, peer, tried, nav=None):
         acts[f"search_{o['id']}"] = {"description": f"Search the {what_is(me['module'], o['tag'])} {o['distance']:.0f} m away",
                                      "commands": [f"useplaceable 0x{o['id']:X}"], "target": key(o)}
     for o in [o for o in living if role == "host" and o["faction"] != 1 and o["distance"] < 12 and tried.get("talk:" + key(o), 0) < 3
+              and not recently_ended(tried, me["module"], o["tag"])
               and re.fullmatch(r"[A-Za-z0-9_]{1,31}", o["tag"] or "")][:2]:
         acts[f"talk_{o['id']}"] = {"description": f"Talk to {who_is(me['module'], o['tag'])}", "commands": [f"talktag {o['tag']}"],
                                    "target": "talk:" + key(o)}
@@ -911,6 +913,15 @@ def checkpoint_new_area(games, checkpointed, report):
     print("CHECKPOINT", module, flush=True)
 
 
+def recently_ended(tried, module, tag, window=300.0):
+    """True for five minutes after this player's conversation with `tag` ended. Talking straight
+    back to a cutscene's speaker restarts the cutscene out of sequence: Saul Karath's Leviathan
+    interrogation, reopened by the harness's talk verb, sat on node 1 for 25 minutes on both games
+    (2026-10-09). Whether a player could click him again is untested."""
+    at = tried.get(f"ended:{module}:{(tag or '').lower()}")
+    return at is not None and time.monotonic() - at < window
+
+
 def snapshot_retrying(game, attempts=60, pause=0.5):
     """A snapshot that survives the game freeing an object mid-read. Under the rig's full page
     heap a freed creature is unreadable at once, and one such read ended a 2026-10-09 run with
@@ -1157,6 +1168,8 @@ async def run(args, policy):
                     tried[role].pop("party_ok", None)  # a new party screen starts with adding a companion
                 if tried[role].get("was_talking") and not me.get("conversation"):
                     refresh_doors(tried[role], me)  # story beats unlock doors
+                if tried[role].get("was_talking") and not me.get("conversation"):
+                    tried[role][f"ended:{me.get('module')}:{tried[role].get('partner', '').lower()}"] = time.monotonic()
                 if tried[role].get("was_talking") and not me.get("conversation") and hasattr(policy, "note"):
                     policy.note(role, f"conversation with {who_is(me.get('module'), tried[role].get('partner', ''))} ended")
                 tried[role]["was_talking"] = bool(me.get("conversation"))
