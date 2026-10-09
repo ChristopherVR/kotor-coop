@@ -221,6 +221,10 @@ internal static unsafe partial class PluginHost
         AppendFrameSection(line, "combat.solo", ref _frameCombatSoloStats, frequency);
         AppendFrameSection(line, "combat.suppression", ref _frameCombatSuppressionStats, frequency);
 
+        // Engine guards that fired since start: a nonzero count is a scene worth a look.
+        line.Append("; engine guards: walkmesh -1 triangles ").Append(TriangleAdjacencyGuardHook.Count)
+            .Append(", padded path lists ").Append(WaypointGuardHook.PaddedCount);
+
         // Splits a long session's memory growth between the plugin and the engine: this is
         // the plugin's own managed heap, so a rising process private-bytes figure with a flat
         // heap here is the engine's (a 2026-09-25 soak grew ~4 MB per module warp).

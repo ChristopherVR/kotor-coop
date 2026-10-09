@@ -420,6 +420,15 @@ internal static unsafe partial class PluginHost
             Log($"waypoint guard NOT installed: {waypointDiagnostic}");
         }
 
+        if (TriangleAdjacencyGuardHook.Install(out string triangleDiagnostic))
+        {
+            Log($"pathing: {triangleDiagnostic}");
+        }
+        else
+        {
+            Log($"walkmesh triangle guard NOT installed: {triangleDiagnostic}");
+        }
+
         if (ShotCameraGuardHook.Install(out string shotDiagnostic))
         {
             Log($"dialogue: {shotDiagnostic}");
