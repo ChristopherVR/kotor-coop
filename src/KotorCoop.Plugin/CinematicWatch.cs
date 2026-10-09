@@ -63,6 +63,11 @@ internal static unsafe class CinematicWatch
     private static bool _wasPlaying;
     private static int _lastQueued;
 
+    /// <summary>Transition movies the engine holds queued as of the last callback. Nonzero means
+    /// a module move has committed: the movie plays inside the load, with the main thread
+    /// gone until the next world is up.</summary>
+    public static int QueuedMovieCount => _lastQueued;
+
     /// <summary>The block to publish the queue into, or null before one exists. Set on every
     /// callback rather than held, because this class outlives no session and owns nothing.</summary>
     private static SharedBlockView? _block;
