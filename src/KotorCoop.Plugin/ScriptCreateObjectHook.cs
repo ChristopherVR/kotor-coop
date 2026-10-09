@@ -51,6 +51,22 @@ internal static unsafe class ScriptCreateObjectHook
     private static nint _slot;
     private static byte* _block;
     private static int _logged;
+    private static int _friendlyLogged;
+    private static readonly uint[] _friendlyLoggedHashes = new uint[40];
+
+    /// <summary>The agent published this blueprint as friendly for the current module
+    /// (SharedBlock.OffsetFriendlyTemplateHashes); unknown is never friendly.</summary>
+    private static bool IsFriendlyTemplate(string template)
+    {
+        if (_block == null)
+        {
+            return false;
+        }
+
+        uint count = Math.Min(*(uint*)(_block + SharedBlock.OffsetFriendlyTemplateCount), (uint)SharedBlock.FriendlyTemplateCapacity);
+        return FriendlyTemplateRule.IsFriendlyTemplate(
+            template, new ReadOnlySpan<uint>(_block + SharedBlock.OffsetFriendlyTemplateHashes, (int)count));
+    }
 
     public static bool Enabled = true;
 
@@ -126,7 +142,18 @@ internal static unsafe class ScriptCreateObjectHook
         // original pops it.
         string template = ReadTemplate(Odyssey.PeekStackTopValue());
 
-        if (SuppressCreatures)
+        if (SuppressCreatures && IsFriendlyTemplate(template))
+        {
+            // Friendly story actors are never mirrored (the mirror takes hostiles only), so this
+            // game builds its own. Falls through to the original with the arguments untouched.
+            uint hash = FriendlyTemplateRule.Hash(template);
+            if (_friendlyLogged < 40 && Array.IndexOf(_friendlyLoggedHashes, hash) < 0)
+            {
+                _friendlyLoggedHashes[_friendlyLogged++] = hash;
+                PluginHost.Log($"host spawns only: '{template}' is a friendly story actor - spawned here");
+            }
+        }
+        else if (SuppressCreatures)
         {
             Suppressed++;
             *(uint*)(_block + SharedBlock.OffsetSuppressedScriptCreatures) = (uint)Suppressed;
