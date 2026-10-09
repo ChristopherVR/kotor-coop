@@ -1502,3 +1502,41 @@ future forced-solo content, not a feature toggle of its own.
 `src/KotorCoop.Session/CoopConfig.cs`, `CoopAgent.cs`, `src/KotorCoop.Protocol/PlayerState.cs`,
 `profiles/coop.ini.example`, `docs/CONFIG.md`, `README.md`, `docs/roadmap-seamless.md`,
 `docs/research/README.md`, `docs/live-verification.md`.
+
+## 7. The endings in co-op, live (2026-10-10)
+
+**Test fixture.** The rig's campaign saves were built from the Endar Spire save with console
+recruits and warps, so Trask never left party slot 0 and Bastila never took it; STUNT_55a's
+`k_scene_start` then saw slot 0 "available", spawned Trask, and its ceremony waited forever for
+Bastila. `tools/make_ending_fixture.py` copies a save and writes Trask out of the party table the
+way `k_pend_trask_d` would (slot 0 unavailable, no members): `000921 - ending_fixture` from
+`000919 - campaign_sta_m45ac`. The one ending save that started inside `STUNT_57` cannot load at
+all (a save written inside a cutscene module comes up with no player).
+
+**What happens on Malak's death.** `k_psta_ud_malak`, user event 1007: `STA_MALAK_DEAD`, both doors
+unlocked; `G_FinalChoice == 1` and a male player jumps to `STUNT_54a` (movie 54); otherwise
+nothing more, and the player walks out through `k45_door_end` (its conversation `sta45d_doors`),
+`sta_walkaway` -> `sta_endgame` -> `StartNewModule("sta_m45aa", "STA45A_WAY_45D")`, the
+Carth/Bastila confrontation. Malak's own conversation reaches the ending script `k_psta_mlkend`
+only through an easter-egg branch. `slay` skips event 1007's scripted path.
+
+**Verified end to end, both games together** (fixture, `setglobal STA_MALAK_DEAD true`,
+`warp sta_m45aa STA45A_WAY_45D`, first replies): the confrontation (dark choice) -> STUNT_54a's
+bridge scene -> STUNT_55a's dark-side ceremony -> movie 55 (42 s, both at once) -> credits ->
+main menu, no crash. The joiner now builds the scene's friendly actors (sta_carth, sta_bastila)
+itself and follows the host's lines; the stand-in stands beside the player in ordinary scenes and
+shows in STUNT_54a.
+
+**Open: the partner in stunt-driven shots.** STUNT_55a's `end_55a` and STUNT_57's `m41ad_c01`
+carry a StuntList (`PLAYER` -> `m44ac_c01_char02`, ...): the engine loads the stunt model onto the
+participant's client body as an add-in animation source (`SendDialogModels` 0x5A0080 ->
+`HandleDialogModels` 0x62E020 -> `LoadStuntModelsForDialog` 0x62C620, Gob vtable +0x20; undone in
+`UnloadStuntModelsForDialog` 0x62C6F0) and plays the dlg's own animation numbers on it (1200..1205
+for the player, live at client body +0x48) through `SetDialogAnimations` 0x6313A0. The player's
+object never moves (79.3, 69.5 the whole ceremony) while its body is drawn on the balcony beside
+Bastila, so a stand-in staged beside the object is off-camera. Branch `wip/scene-stunts` gives the
+stand-in the same add-in model (loads, Gob+0x64 set) and replays the player's ids with the
+engine's own sequence (animbase cutscene flag, idle, id), but the stand-in has not appeared on
+screen yet; the load also tended to land after the first ids (the stand-in is only staged once
+both players stand on the mark). Next step: load the track at conversation start, and check
+whether the body plays the add-in animation at all (read the Gob's current animation, not +0x48).
