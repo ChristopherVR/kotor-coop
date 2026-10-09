@@ -918,8 +918,16 @@ def recently_ended(tried, module, tag, window=300.0):
     back to a cutscene's speaker restarts the cutscene out of sequence: Saul Karath's Leviathan
     interrogation, reopened by the harness's talk verb, sat on node 1 for 25 minutes on both games
     (2026-10-09). Whether a player could click him again is untested."""
+    if (tag or "").lower() in CUTSCENE_SPEAKERS:
+        return True
     at = tried.get(f"ended:{module}:{(tag or '').lower()}")
     return at is not None and time.monotonic() - at < window
+
+
+# Speakers whose conversation only works when its own trigger starts it. Opened by the talk verb
+# instead, Saul Karath's Leviathan interrogation stops on node 1 with no replies, Space and Esc
+# both ignored (2026-10-10, the same on both games); started by its trigger it plays through.
+CUTSCENE_SPEAKERS = {"saulkarath401"}
 
 
 def snapshot_retrying(game, attempts=60, pause=0.5):
