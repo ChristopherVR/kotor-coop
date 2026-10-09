@@ -117,9 +117,10 @@ class Actions(unittest.TestCase):
         self.assertEqual(list(h.actions_for("host", player(menu_open=True, panels=["status_summary"]), player(), {})), ["ok_summary"])
         self.assertEqual(list(h.actions_for("host", player(menu_open=True, panels=["x", "message_box"]), player(), {})), ["ok_message"])
         party = player(menu_open=True, panels=["party_selection"])
-        self.assertEqual(list(h.actions_for("host", party, player(), {})), ["party_ok"])
-        self.assertEqual(h.actions_for("host", party, player(), {"party_ok": 1})["party_add"]["commands"],
+        # A companion is added first: OK on an empty party left Carth behind on Taris.
+        self.assertEqual(h.actions_for("host", party, player(), {})["party_add"]["commands"],
                          [h.PARTY_FIRST, h.PARTY_ADD, h.PARTY_OK])
+        self.assertEqual(list(h.actions_for("host", party, player(), {"party_ok": 1})), ["party_ok"])
 
     def test_equip_is_offered_once_per_character_and_never_in_a_fight(self):
         self.assertNotIn("equip", h.actions_for("host", player(), player(), {}))  # nothing taken yet

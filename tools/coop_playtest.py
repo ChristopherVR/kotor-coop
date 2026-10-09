@@ -133,10 +133,12 @@ def menu_actions(panels, tried):
                                "commands": [ok_click("message_box", tried.get("ok:message_box", 0))],
                                "ok": "message_box"}}
     if "party_selection" in panels:
+        # Add a companion first: OK on an empty party is accepted, and the Taris runs played the
+        # whole Upper City solo with Carth left waiting on the selection screen (2026-10-09).
         if tried.get("party_ok", 0) < 1:
-            return {"party_ok": {"description": "Accept the party selection (OK)", "commands": [PARTY_OK]}}
-        return {"party_add": {"description": "Add the first party member, then accept (OK)",
-                              "commands": [PARTY_FIRST, PARTY_ADD, PARTY_OK], "gap": 1.2}}
+            return {"party_add": {"description": "Add the first party member, then accept (OK)",
+                                  "commands": [PARTY_FIRST, PARTY_ADD, PARTY_OK], "gap": 1.2}}
+        return {"party_ok": {"description": "Accept the party selection (OK)", "commands": [PARTY_OK]}}
     if "container" in panels:
         # Take first, and only then close: a policy that closes a full container skips the
         # gear the story expects (Endar Spire: Trask waits for the footlocker's weapon).
@@ -1123,7 +1125,7 @@ async def run(args, policy):
                         and not me.get("loading") and math.dist(last_pos[:2], me["position"][:2]) > .3):
                     continue  # still walking to the door it was sent to; a new order would cancel it
                 if "party_selection" not in (me.get("panels") or []):
-                    tried[role].pop("party_ok", None)  # a new party screen starts with plain OK
+                    tried[role].pop("party_ok", None)  # a new party screen starts with adding a companion
                 if tried[role].get("was_talking") and not me.get("conversation"):
                     refresh_doors(tried[role], me)  # story beats unlock doors
                 if tried[role].get("was_talking") and not me.get("conversation") and hasattr(policy, "note"):
