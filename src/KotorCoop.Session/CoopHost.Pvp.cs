@@ -85,7 +85,9 @@ public sealed partial class CoopHost
                 break;
 
             case PvpOp.Accept:
-                _pvp.Accept(origin, PvpParticipantOf(_pvp.Challenger, now), PvpParticipantOf(_pvp.Target, now), now);
+                _pvp.Accept(
+                    origin, PvpParticipantOf(_pvp.Challenger, now), PvpParticipantOf(_pvp.Target, now), now,
+                    PvpParticipantOf(LocalPeerId, now));
                 break;
 
             case PvpOp.Decline:

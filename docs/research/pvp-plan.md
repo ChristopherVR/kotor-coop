@@ -7,7 +7,7 @@ Synthesis of four research passes, all read-only (code, docs, game files; nothin
 [pvp-arenas.md](pvp-arenas.md) (where to fight). Where they disagree, this file says which way
 and why. Phase 1 (the duel MVP) was built the same day and is unit- and loopback-tested but
 never watched in the game: see "Phase 1 as built" and the NEEDS-LIVE checklist at the end.
-Nothing later than phase 1 is built.
+Phases 3 and 4 (the arena) were built after it, also unit- and loopback-tested and never run in the game: see "Phases 3 and 4 as built" and its NEEDS-LIVE checklist at the end. Phase 2 (fidelity) is not built.
 
 ## Verdict
 
@@ -192,3 +192,104 @@ Fixed during the pass: the round now logs how it ended (health/max/down per side
 called off), which explained a round that seemed to end above 25% (the host had dipped to 1 hp
 between samples).
 
+## Phases 3 and 4 as built (2026-10-09)
+
+The arena prototype and the shipped arena module, built as one piece (the prototype flow of phase 3 only
+makes sense on top of the module of phase 4, so the in-place Taris ring was skipped). Nothing here has run
+in the game.
+
+- **The module.** `ArenaModule` (Memory) builds `modules\k_coop_arena.mod` from the player's OWN files, so the
+  package carries no BioWare bytes: `module.ifo`, `m02ae.are` and the instance file out of `tar_m02ae.rim`, the path
+  points out of `tar_m02ae_s.rim`, `m02ae.lyt`/`m02ae.vis` out of the BIFs (Override first, as the engine resolves
+  them). Cut to the ring room `m02ae_07a`: one room in the layout and area, a visibility file saying it sees nothing
+  else (which is what the cantina's says), the path points and waypoints inside the ring (x 184-216, y 84-118),
+  nothing else in the instance file (no creatures, doors, triggers, placeables, sounds, stores or cameras; the ring's
+  door is dropped, its blueprint lives in the cantina's script archive, so the doorway is a gap with no floor beyond
+  it). Every module and area script is blank except the stock player-death trio. New names throughout
+  (`k_coop_arena` for module, area, layout), so nothing of the cantina's is shadowed. Added waypoints:
+  `k_coop_arena_a1/a2` (team A, east end, facing west, 213.6 and 209.6, 100.0), `k_coop_arena_b1/b2` (team B, west
+  end, 186.6 and 190.5, 99.8-99.9) and `k_coop_arena_s` (spectators, 200.0, 88.4). The four fighter spawns are the
+  cantina's own `tar02_wppcarena`, `tar02_wppcarena2`, `tar02_wpopparena`, `tar02_wpopparena2`, known to stand on the
+  floor. The entry point is `a1`. `ErfWriter.Build` writes the archive with no dates and positional ids, so the same
+  game files always give the same bytes. A game whose cantina is not as expected (no ring room, no
+  `tar02_wppcarena`, trackcount or obstaclecount not 0) gets no arena and a reason, not a broken one.
+- **Install.** `PackageInstaller` generates it after the Override assets (never failing the install), `--check`
+  reports it (PASS when current, NOTE when absent or stale, never FAIL), uninstall removes that one file, the
+  locked-file probe covers it. The agent also writes it on first start when it is missing (this is the Linux route:
+  `install.sh` cannot run the generator natively, so it reports and removes the file, and says so). A file written
+  while the game is running does not count as ready until the next start, because the engine read its modules folder
+  at launch. The generated file is excluded from the module digest (presence is negotiated, a modded cantina already
+  differs).
+- **Setting.** `pvp = off | duel | arena` (arena implies duel); behaviour bit 23, key `pvp_arena`,
+  host-authoritative, three readers agreeing (`CoopConfig`, `AgentSettings`/`AgentComposition`, the digest). A game
+  says `PvpOp.AwareArena` instead of `Aware` when the setting is on and it had the arena file at start.
+- **Flow.** `arena <name>` is `PvpOp.ChallengeArena`. Extra refusals: arena off, a player or the host without the
+  file (named), the host in another area (one warp cannot take everyone). The round: Challenged -> (accept) Entering
+  -> Countdown -> Live -> Leaving -> Idle. Entering: the host's `ArenaPump` asks for ONE `TryRequestTravel` into the
+  arena and every other game follows the host's module as it always does; when both duellists and the host have been
+  in the module for 3 s the countdown starts; 60 s limit. Each game moves its own character (the `Teleport` cheat) to
+  its spawn on the countdown: challenger to team A, target to team B, anyone else to the spectator mark, landing
+  checked against the position read back, 6 tries. The fight is the duel as built. Leaving (any end, including called
+  off or a player leaving): 2 s later the host asks for ONE `TryRequestTravel` back to the module it stood in, and
+  every game, once back, is put on the spot it stood on. Idle when the two duellists and the host are all out of the
+  arena for 3 s, or after 60 s; a host still in the arena when the round let go is taken home once more (at most every
+  30 s). A player whose state vanishes for under 20 s during the moves is loading, not leaving. No new plugin block
+  fields: Entering and Leaving read as phase 0 to the plugin, so nobody is pinned or hostile on the way.
+- **Saving.** Blocked for EVERY player from Entering to the end of Leaving (`PvpPumpRule.SaveAllowed`), by the
+  dispatcher while standing in the arena module whatever the round says, and by the plugin's save hook while the
+  engine's current module is the arena (this catches the module-enter autosave of the walk in, before the pin is up).
+- **Not built.** 2v2 with companions (the spawn waypoints exist; companions stay benched), best of 3, a scoreboard,
+  the throwaway-save flow B, teams chosen by command. Best of 3 and 2v2 are the next arena step.
+
+## NEEDS-LIVE checklist (arena, phases 3 and 4)
+
+Two instances on the rig, a host and a joiner, `pvp = arena` on the host only, both with `modules\k_coop_arena.mod`
+present BEFORE the games start (run `install`, or start the agent once and relaunch). Same area for both. Log lines
+are `arena: ...` (agent), `duel: ...` and `arena: refused a save request` (plugin).
+
+1. **The file.** `install --check` PASSES with "arena fights available". List `modules\k_coop_arena.mod` with
+   `tools/kotorfiles.py list`: six members (`module.ifo`, `k_coop_arena` .are .git .lyt .vis .pth). Two installs from
+   the same game files give byte-identical files. Without the file on the joiner, `arena <joiner>` from the host
+   prints "<joiner> does not have the arena installed yet..." and nothing moves.
+2. **The module loads at all.** `warp k_coop_arena` on a throwaway instance (not during a round): the engine loads
+   it without crashing, the ring is visible and walkable, the player stands at the east end facing west. Record what
+   the doorway gap looks like and whether a player can walk out of the ring (they must not). If the engine refuses a
+   module whose layout and area are renamed, set `ArenaModule.AreaResref` back to `m02ae` (and drop the renamed
+   layout) and re-test.
+3. **Refusals.** With `pvp = duel` on the host, `arena <name>` says the host has not turned on the arena. With the
+   host standing in another area than the two players: "the host has to be in this area too".
+4. **One warp in.** Challenge and `accept`. Log `arena: round N - will return to <module> at (x, y)` on both, then on
+   the host exactly ONE `arena: Enter - asking the plugin for ONE module change to k_coop_arena (accepted)` and exactly
+   one plugin `travel: moving to module 'k_coop_arena'`. The joiner follows by itself (no second request from its
+   agent). No crash.
+5. **Spawns.** Challenger stands on the east end and target on the west end (`where` on each; log `arena: Place` then a
+   position within 3 of the spawn). A bystander (needs a third instance) stands on the spectator mark.
+6. **Countdown starts only after arrival.** "Duel with X starts in 5" appears about 3 s after both are in the arena,
+   not before; `duel: round N armed` appears after it, not on `accept`.
+7. **The fight.** Phase 1 items 4, 5, 8 and 9, now inside the ring (cursor turns red, damage lands on the real
+   character, the 1 hp floor holds, the host ends it at 25%).
+8. **Saving blocked in the arena.** F4, the save panel and `save` are refused on both sides from the moment of
+   `accept` ("You cannot save while the arena fight is on or in the arena"). Look for the plugin line `arena: refused a
+   save request` at arrival, and, after the whole round, that a quicksave made back in the campaign loads into the
+   campaign (not the arena) on both instances. The module-enter autosave of the walk in is the one most likely to slip
+   through: check the autosave slot's module afterwards.
+9. **One warp back.** On the end, 2 s after the result, ONE `arena: Return - asking the plugin for ONE module change to
+   <origin>` on the host and one plugin `travel:` line; the joiner follows. Each player is put back on the spot they
+   stood on (`arena: Restore`, position within 3 of it; the module's own entry point is not where they end up). Hit
+   points and Force points are what the countdown snapshot recorded. No stale hostile body, no pin left.
+10. **The round lets go.** The phase goes Idle about 3 s after both are home (log `duel: over - releasing the pin
+    (round N: ...; everyone is back)`), and a new `duel` or `arena` can be started a minute later.
+11. **Called off and failure paths.** `yield` during the walk in: both come back, nobody is left in the arena. Kill the
+    joiner's game during the fight: the host wins by leave and is taken home. Kill it during the walk in: after 20 s
+    the host is told the other left and goes home. Make the host's travel fail (rename the file on the host only, with
+    the game running, then challenge from a game that still has it): nothing moves, and after 60 s the round is called
+    off with "took too long".
+12. **A host that is a bystander.** Two joiners fight with the host looking on (needs a third instance): the host's own
+    game makes the two warps and stands on the spectator mark.
+13. **Rapid repeats.** Two arena rounds a minute apart: clean each time, no crash on the second warp in (the engine is
+    fragile around module changes, so look hard here; see transition-crashes.md).
+14. **Saving afterwards.** After the round, `save` works again on both, and loading that save puts the player in the
+    campaign module, not the arena.
+
+Items most likely to fail: 2 (renamed layout), 8 (the walk-in autosave), 5 (the `Teleport` cheat inside a module the
+agent knows nothing about), 9 (position restore after the module's entry spawn), 13 (rapid warps).

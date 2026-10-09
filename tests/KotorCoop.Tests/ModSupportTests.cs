@@ -76,6 +76,30 @@ public sealed class ModSupportTests : IDisposable
     }
 
     [Fact]
+    public void TheGeneratedArenaModuleIsNotPartOfTheContentOrGameplayDigest()
+    {
+        // A gameplay mismatch switches off unsafe replication, so a player who has the generated
+        // PvP arena file must not look "modded" next to one who has not (its presence is
+        // negotiated by the arena handshake instead). Another mod in modules still counts.
+        Directory.CreateDirectory(Path.Combine(_directory, "modules"));
+        string other = Path.Combine(_directory, "modules", "bos_ship.mod");
+        File.WriteAllText(other, "module A");
+        var without = ModContentManifest.Compute(_directory);
+
+        File.WriteAllBytes(Path.Combine(_directory, "modules", "k_coop_arena.mod"), [1, 2, 3, 4]);
+        var with = ModContentManifest.Compute(_directory);
+
+        Assert.Equal(without.Digest(file => file.Gameplay), with.Digest(file => file.Gameplay));
+        Assert.Equal(
+            without.Digest(file => file.Path.StartsWith("modules/", StringComparison.Ordinal)),
+            with.Digest(file => file.Path.StartsWith("modules/", StringComparison.Ordinal)));
+        Assert.Empty(without.Differences(with));
+
+        File.WriteAllText(other, "module B");
+        Assert.NotEmpty(with.Differences(ModContentManifest.Compute(_directory)));
+    }
+
+    [Fact]
     public void CosmeticTextureChangesDoNotDisableGameplayChannels()
     {
         Directory.CreateDirectory(Path.Combine(_directory, "Override"));
