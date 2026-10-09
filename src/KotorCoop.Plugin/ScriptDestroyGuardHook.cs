@@ -51,6 +51,8 @@ internal static unsafe class ScriptDestroyGuardHook
     private static bool _installed;
     private static int _logged;
 
+    private static byte* _block;
+
     /// <summary>Set by the plugin's own destroy (a host-decided removal) while it runs.</summary>
     public static bool Bypass;
 
@@ -101,8 +103,10 @@ internal static unsafe class ScriptDestroyGuardHook
     /// load-time scripts run before the first census pass arrives. A world that is NOT the
     /// host's drops the previous world's census set.
     /// </summary>
-    public static unsafe void OnWorldUp(bool hostsWorld)
+    public static unsafe void OnWorldUp(bool hostsWorld, byte* block)
     {
+        _block = block;
+        *(uint*)(block + SharedBlock.OffsetScriptDestroyRefusedCount) = 0;
         Snapshot.Clear();
         _snapshotUntilMs = 0;
         if (!hostsWorld)
@@ -126,6 +130,29 @@ internal static unsafe class ScriptDestroyGuardHook
 
         _snapshotUntilMs = Environment.TickCount64 + SnapshotMs;
         PluginHost.Log($"script destroy guard: protecting {Snapshot.Count} creature(s) of the host's world until the census arrives");
+    }
+
+    /// <summary>Hands a refused id to the agent (see SharedBlock.ScriptDestroy.cs): if the host
+    /// turns out not to have it either, the agent's local-only check removes it.</summary>
+    private static void RecordRefusal(uint id)
+    {
+        if (_block == null)
+        {
+            return;
+        }
+
+        uint* count = (uint*)(_block + SharedBlock.OffsetScriptDestroyRefusedCount);
+        uint* ids = (uint*)(_block + SharedBlock.OffsetScriptDestroyRefusedIds);
+        for (int i = 0; i < Math.Min(*count, (uint)SharedBlock.ScriptDestroyRefusedCapacity); i++)
+        {
+            if (ids[i] == id)
+            {
+                return;
+            }
+        }
+
+        ids[*count % SharedBlock.ScriptDestroyRefusedCapacity] = id;
+        *count += 1;
     }
 
     private static readonly HashSet<uint> PhantomBodies = [];
@@ -168,6 +195,7 @@ internal static unsafe class ScriptDestroyGuardHook
         if (!Bypass && eventId == *(uint*)DestroyEventIdAddress && IsProtected(target))
         {
             Refused++;
+            RecordRefusal(target);
             if (_logged < 20)
             {
                 _logged++;

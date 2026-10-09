@@ -625,7 +625,7 @@ internal static unsafe partial class PluginHost
                 {
                     bool client = guardView.TryGetLocalSessionRole(out bool isHost) && !isHost;
                     bool adopted = guardView.AdoptWorldApplied == SharedBlock.AdoptLoginCarriedCharacter;
-                    ScriptDestroyGuardHook.OnWorldUp(client || adopted);
+                    ScriptDestroyGuardHook.OnWorldUp(client || adopted, guardView.Base);
                 }
 
                 _transitionPending = false;
