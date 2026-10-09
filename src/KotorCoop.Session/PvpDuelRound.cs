@@ -300,8 +300,11 @@ public sealed class PvpDuelRound
         Say(target, PvpNoticeCode.Challenged, challenger);
     }
 
-    /// <summary><c>accept</c>: only the target of a standing challenge.</summary>
-    public void Accept(uint peer, PvpParticipant challenger, PvpParticipant target, long nowMs)
+    /// <summary><c>accept</c>: only the target of a standing challenge. For an arena round
+    /// <paramref name="host"/> is the host's own picture: it may have walked off while the
+    /// challenge was waiting, and one warp can only take a party that is together.</summary>
+    public void Accept(
+        uint peer, PvpParticipant challenger, PvpParticipant target, long nowMs, PvpParticipant host = default)
     {
         if (Phase != PvpPhase.Challenged || peer != Target)
         {
@@ -313,6 +316,16 @@ public sealed class PvpDuelRound
         if (!StillFits(challenger, target))
         {
             Cancel();
+            return;
+        }
+
+        if (Arena && HostPeerId != Challenger && HostPeerId != Target
+            && !string.Equals(host.Module, challenger.Module, StringComparison.OrdinalIgnoreCase))
+        {
+            Say(Challenger, PvpNoticeCode.ArenaHostApart, HostPeerId);
+            Say(Target, PvpNoticeCode.ArenaHostApart, HostPeerId);
+            LastEnding = $"round {RoundId}: the host moved away before the answer";
+            Reset();
             return;
         }
 

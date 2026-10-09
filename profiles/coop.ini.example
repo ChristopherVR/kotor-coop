@@ -121,6 +121,13 @@ corpse_loot = shared
 ;         and "duel off" refuses every challenge. Both are kept at 1 hp minimum while it lasts,
 ;         it ends at 25% health, and health and Force points are put back afterwards: nothing
 ;         is won or lost, and you cannot save during a duel.
+;   arena everything "duel" does, and also "arena <name>": the same challenge, fought in a
+;         small walled ring (the Taris duel ring) instead of where you stand. The host's game
+;         takes the whole party there in one move, you fight, and one move brings everyone
+;         back to the spot they stood on. You cannot save from the moment the move starts
+;         until everyone is back. Needs the arena file (modules\k_coop_arena.mod), which
+;         setup makes from your own Star Wars: KOTOR files (restart the game once if setup
+;         ran while it was open); a player without it is told so when challenged.
 pvp = off
 
 ; ------------------------------------------------------------------------------------------

@@ -127,6 +127,31 @@ public class PvpArenaRoundTests
         Assert.Equal([PvpNoticeCode.TooHurt], Codes(round, Host));
     }
 
+    [Fact]
+    public void AcceptingIsRefusedIfTheHostWalkedOffWhileTheChallengeWaited()
+    {
+        PvpDuelRound round = Round();
+        round.Challenge(Aria, Bao, Well(), Well(), 0, arena: true, host: Well());
+        round.DrainNotices();
+
+        round.Accept(Bao, Well(), Well(), 5_000, host: Well("tar_m02ab"));
+
+        Assert.Equal(PvpPhase.Idle, round.Phase);
+        Assert.Equal(0u, round.RoundId);
+        Assert.Equal([PvpNoticeCode.ArenaHostApart], Codes(round, Aria));
+    }
+
+    [Fact]
+    public void AcceptingWithTheHostAsOneOfTheTwoNeedsNoSeparateHostCheck()
+    {
+        PvpDuelRound round = Round();
+        round.Challenge(Host, Aria, Well(), Well(), 0, arena: true, host: Well());
+
+        round.Accept(Aria, Well(), Well(), 5_000);
+
+        Assert.Equal(PvpPhase.Entering, round.Phase);
+    }
+
     // ---- the way in --------------------------------------------------------------------------
 
     [Fact]
@@ -188,7 +213,7 @@ public class PvpArenaRoundTests
     {
         PvpDuelRound round = Round();
         round.Challenge(Aria, Bao, Well(), Well(), 0, arena: true, host: Well());
-        round.Accept(Bao, Well(), Well(), 0);
+        round.Accept(Bao, Well(), Well(), 0, host: Well());
         round.DrainNotices();
 
         Func<uint, PvpParticipant> hostStillHome = World(Well(), Well(Arena), Well(Arena));
