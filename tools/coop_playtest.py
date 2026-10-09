@@ -849,6 +849,18 @@ class Referee:
                 self.persist_each(kind, {}, states, now)
 
 
+def safe_to_checkpoint(me):
+    """A checkpoint saved mid-fight is a trap: the host loads it alone (the joiner connects later),
+    and the enemies standing there kill a lone host, which is a real game over (2026-10-09:
+    campaign_tar_m02aa came back to the main menu 20 s after loading). Save only with no living
+    hostile within 30 m and at least half health."""
+    hp, max_hp = me.get("hp") or 0, me.get("max_hp") or 0
+    if max_hp > 0 and hp * 2 < max_hp:
+        return False
+    return not any(o["kind"] == "creature" and o.get("faction") == 1 and o.get("hp", 0) > 0 and not o.get("party")
+                   and o.get("distance", 0) < 30 for o in me.get("objects", []))
+
+
 def checkpoint_new_area(games, checkpointed, report):
     """The host saves `campaign_<module>` the first time both players stand in a module, so a long
     campaign run can resume from its furthest area instead of the Endar Spire. Uses the co-op
@@ -857,7 +869,8 @@ def checkpoint_new_area(games, checkpointed, report):
     module = (host.get("module") or "").lower()
     if (not module or module in checkpointed or host.get("loading") or joiner.get("loading")
             or (joiner.get("module") or "").lower() != module or host.get("conversation") or joiner.get("conversation")
-            or (host.get("panels") and "main_interface" not in host["panels"])):
+            or (host.get("panels") and "main_interface" not in host["panels"])
+            or not safe_to_checkpoint(host) or not safe_to_checkpoint(joiner)):
         return
     checkpointed.add(module)
     blockpoke = os.path.join(os.path.dirname(os.path.abspath(__file__)), "blockpoke.ps1")

@@ -629,3 +629,13 @@ class SnapshotRetry(unittest.TestCase):
     def test_an_exited_game_is_not_retried(self):
         with self.assertRaises(h.MemoryError):
             h.snapshot_retrying(self.Flaky(failures=1, exited=True), pause=0)
+
+
+class Checkpoints(unittest.TestCase):
+    def test_no_checkpoint_with_a_hostile_close_or_at_low_health(self):
+        sith = {"kind": "creature", "faction": 1, "hp": 30, "party": False, "distance": 12}
+        self.assertFalse(h.safe_to_checkpoint({"hp": 100, "max_hp": 100, "objects": [sith]}))
+        self.assertFalse(h.safe_to_checkpoint({"hp": 12, "max_hp": 100, "objects": []}))
+        far = dict(sith, distance=60)
+        dead = dict(sith, hp=0)
+        self.assertTrue(h.safe_to_checkpoint({"hp": 80, "max_hp": 100, "objects": [far, dead]}))
