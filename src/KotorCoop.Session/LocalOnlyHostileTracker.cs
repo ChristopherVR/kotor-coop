@@ -8,19 +8,25 @@ namespace KotorCoop.Session;
 /// from <c>k_pend_reinfrc06</c>). The host owns enemies; a hostile it has never had is one this
 /// world should not have either.
 ///
-/// The host's view arrives in pages and a new cycle starts empty, so one look can miss an id
-/// the host does have. An id is reported only after it has been absent from every look for
-/// <see cref="GraceMs"/> (about ten host publish cycles), and only while there IS a host view
-/// to compare with: with none, nothing is judged and the clock restarts.
+/// Judged only against a COMPLETE host view (every page of one publish cycle), and only one
+/// that arrived at least <see cref="HostViewLagMs"/> after the id was first missing here: a
+/// complete view can still reflect a host scan up to two intervals old (2 s scan, 2 s
+/// broadcast), and a creature both worlds spawn together must be in the host's scan before it
+/// is judged. This replaced a flat 20 s grace (2026-10-09).
 /// </summary>
 public sealed class LocalOnlyHostileTracker
 {
-    public const long GraceMs = 20_000;
+    /// <summary>The host's scan interval plus its broadcast interval, plus slack.</summary>
+    public const long HostViewLagMs = 4_500;
 
     private readonly Dictionary<uint, long> _missingSince = [];
 
-    /// <summary>Ids absent from the host's view for at least <see cref="GraceMs"/>.</summary>
-    public List<uint> Update(IReadOnlyCollection<uint> localHostiles, IReadOnlySet<uint> hostIds, long nowMs)
+    /// <param name="hostIds">The host's current view; partial unless
+    /// <paramref name="completeViewReceivedAtMs"/> is set.</param>
+    /// <param name="completeViewReceivedAtMs">When the last page of the current, complete view
+    /// arrived; null while the current cycle is still incomplete.</param>
+    public List<uint> Update(
+        IReadOnlyCollection<uint> localHostiles, IReadOnlySet<uint> hostIds, long nowMs, long? completeViewReceivedAtMs)
     {
         List<uint> localOnly = [];
         if (hostIds.Count == 0)
@@ -45,8 +51,10 @@ public sealed class LocalOnlyHostileTracker
             if (!_missingSince.TryGetValue(id, out long since))
             {
                 _missingSince[id] = nowMs;
+                since = nowMs;
             }
-            else if (nowMs - since >= GraceMs)
+
+            if (completeViewReceivedAtMs is { } receivedAt && receivedAt - since >= HostViewLagMs)
             {
                 localOnly.Add(id);
             }
