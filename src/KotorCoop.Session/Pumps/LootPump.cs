@@ -129,17 +129,6 @@ internal sealed class LootPump(
                 continue;
             }
 
-            if (_corpseLootShared)
-            {
-                // Shared corpse loot fills this game's body bag from the host's own bag
-                // (CorpseLootLedger.Reconcile). This older mirror copies what the dead creature
-                // carried, equipped items that never drop included, and misses the credits the
-                // engine adds to the bag (live 2026-10-09), so it would only add wrong extras.
-                session.AcknowledgeMaterialisedLoot(packet);
-                _deferredMaterialisedLoot.RemoveAt(packetIndex);
-                continue;
-            }
-
             if (!MaterialisedLootFilterRule.ShouldQueue(packet.OwnerEnemyId, materialisedOwnerIds))
             {
                 if (tagged)
@@ -244,7 +233,6 @@ internal sealed class LootPump(
     private readonly CorpseLootLedger _corpseLoot = new();
     private string _corpseLootModule = string.Empty;
     private long _lastCorpseLootMs;
-    private bool _corpseLootShared;
 
     /// <summary>The body-bag read walks the engine's whole object table; twice a second is far
     /// quicker than anyone can open a bag and take something.</summary>
@@ -252,9 +240,6 @@ internal sealed class LootPump(
 
     public void PumpContainerLoot(SessionCapabilities caps, string module = "", bool corpseLootPersonal = false)
     {
-        // Only a bridge that can see body bags can fill them from the host's; without one the
-        // older creature-loot mirror stays the only source.
-        _corpseLootShared = !corpseLootPersonal && bridge.SupportsContainerLoot;
         if (!bridge.SupportsContainerLoot || (caps & SessionCapabilities.Doors) == 0)
         {
             return;
@@ -304,7 +289,7 @@ internal sealed class LootPump(
             }
             else
             {
-                foreach ((uint bagId, BodyBagItemEntry item) in _corpseLoot.Reconcile(bags, session.GetHostBodyBags(module)))
+                foreach ((uint bagId, BodyBagItemEntry item) in _corpseLoot.Reconcile(bags, session.GetHostBodyBags(module), corpseNowMs))
                 {
                     lock (_pendingGate)
                     {

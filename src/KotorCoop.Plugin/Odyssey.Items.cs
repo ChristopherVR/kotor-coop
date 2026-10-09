@@ -311,6 +311,55 @@ internal static unsafe partial class Odyssey
     ///
     /// MAIN THREAD ONLY.
     /// </summary>
+    /// <summary>CSWSPlaceable is_body_bag (+0x440): a dead creature's loot bag. VERIFIED live
+    /// 2026-10-09 (1 on a Sith's "body bag", 0 on lockers and scenery).</summary>
+    public static bool IsBodyBag(nint placeable) =>
+        placeable != 0 && NativeMethods.IsReadable(placeable + 0x440, 4) && *(int*)(placeable + 0x440) != 0;
+
+    /// <summary>True while the in-game container (loot) panel is among the GUI manager's active
+    /// panels: CGuiInGame+0x54 is that panel, CGuiInGame+0x38 the manager, whose active list is a
+    /// CExoArrayList at +0x88/+0x8C (the same read tools/laya_playtest.py's panel list makes).
+    /// Unreadable reads as active, so a caller waiting on it stays safe.</summary>
+    public static bool IsContainerPanelActive()
+    {
+        nint gui = GetInGameGui();
+        if (gui == 0 || !NativeMethods.IsReadable(gui + 0x38, 0x20))
+        {
+            return true;
+        }
+
+        nint panel = *(nint*)(gui + 0x54);
+        nint manager = *(nint*)(gui + 0x38);
+        if (manager == 0 || !NativeMethods.IsReadable(manager + 0x88, 8))
+        {
+            return true;
+        }
+
+        nint data = *(nint*)(manager + 0x88);
+        int count = *(int*)(manager + 0x8C);
+        if (count is < 0 or > 64 || (count > 0 && (data == 0 || !NativeMethods.IsReadable(data, (nuint)(count * 4)))))
+        {
+            return true;
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            if (*(nint*)(data + (i * 4)) == panel)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Items in a placeable's container; 0 for none or no container.</summary>
+    public static int ContainerItemCount(nint placeable)
+    {
+        nint repo = placeable == 0 ? 0 : *(nint*)(placeable + PlaceableRepository);
+        return repo == 0 ? 0 : Math.Max(0, *(int*)(repo + RepositoryItemCount));
+    }
+
     public static bool RemoveContainerItem(nint placeable, uint itemId)
     {
         if (placeable == 0)

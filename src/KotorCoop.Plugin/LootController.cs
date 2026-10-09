@@ -86,6 +86,37 @@ internal sealed unsafe class LootController(SharedBlockView block)
         {
             Apply(block.GetLoot(i));
         }
+
+        RemoveEmptiedBodyBags();
+    }
+
+    /// <summary>Body bags this instance emptied on another player's behalf (shared corpse loot),
+    /// waiting to be removed.</summary>
+    private readonly HashSet<uint> _emptiedBodyBags = [];
+
+    /// <summary>
+    /// The engine removes a body bag when its own player closes it empty; one emptied by a
+    /// partner's take stood there empty, opening to nothing. Removed here instead, but never
+    /// while a container panel is open, which may be showing that very bag.
+    /// </summary>
+    private void RemoveEmptiedBodyBags()
+    {
+        if (_emptiedBodyBags.Count == 0 || Odyssey.IsContainerPanelActive())
+        {
+            return;
+        }
+
+        foreach (uint bagId in _emptiedBodyBags)
+        {
+            nint bag = Odyssey.ResolvePlaceable(bagId);
+            if (bag != 0 && Odyssey.IsBodyBag(bag) && Odyssey.ContainerItemCount(bag) == 0
+                && Odyssey.DestroyObjectById(bagId, out _))
+            {
+                LogFew($"container 0x{bagId:X}: removed the emptied body bag");
+            }
+        }
+
+        _emptiedBodyBags.Clear();
     }
 
     private void Apply(LootView desired)
@@ -105,6 +136,10 @@ internal sealed unsafe class LootController(SharedBlockView block)
         if (Odyssey.RemoveContainerItem(placeable, desired.ItemId))
         {
             LogFew($"container 0x{desired.ContainerId:X}: removed looted item 0x{desired.ItemId:X} on the session's authority");
+            if (Odyssey.IsBodyBag(placeable) && Odyssey.ContainerItemCount(placeable) == 0)
+            {
+                _emptiedBodyBags.Add(desired.ContainerId);
+            }
         }
     }
 

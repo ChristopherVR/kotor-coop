@@ -106,17 +106,34 @@ public sealed class CorpseLootLedgerTests
         new(123, "end_m01aa", x, y, [.. items.Select(i => new BodyBagItemEntry(i.Resref, i.Stack))]);
 
     [Fact]
-    public void AJoinersBagIsMadeToHoldWhatTheHostsBagHolds()
+    public void AJoinersBagIsMadeToHoldWhatTheHostsBagHoldsAndExtrasGoOnlyAfterTheGivesLand()
     {
         // Live 2026-10-09: host bag credits x11 + medpac; joiner bag blaster, blade, medpac.
         CorpseLootLedger ledger = new();
         BodyBagState mine = Bag(0x14A, 15.3f, 82.4f, (0x147, "end_1damblast"), (0x148, "g_w_vbroshort002"), (0x149, "g_i_medeqpmnt01"));
+        HostBodyBagPacket host = HostBag(15.3f, 82.4f, ("g_i_credits001", 11), ("g_i_medeqpmnt01", 1));
         ledger.Update([mine], []);
 
-        var gives = ledger.Reconcile([mine], [HostBag(15.3f, 82.4f, ("g_i_credits001", 11), ("g_i_medeqpmnt01", 1))]);
-
+        var gives = ledger.Reconcile([mine], [host], nowMs: 0);
         Assert.Equal((0x14Au, new BodyBagItemEntry("g_i_credits001", 11)), Assert.Single(gives));
+        Assert.Empty(ledger.Removals); // not yet: emptying the bag first could let the engine remove it
+
+        BodyBagState refilled = Bag(0x14A, 15.3f, 82.4f, (0x147, "end_1damblast"), (0x148, "g_w_vbroshort002"),
+            (0x149, "g_i_medeqpmnt01"), (0x150, "g_i_credits001"));
+        Assert.Empty(ledger.Reconcile([refilled], [host], nowMs: 500));
         Assert.Equal([new ContainerLootRemoval(0x14A, 0x147), new ContainerLootRemoval(0x14A, 0x148)], ledger.Removals);
+    }
+
+    [Fact]
+    public void ExtrasGoAfterTheWaitEvenIfAGiveNeverLands()
+    {
+        CorpseLootLedger ledger = new();
+        BodyBagState mine = Bag(0x14A, 1f, 1f, (0x147, "g_i_credits001"));
+        ledger.Reconcile([mine], [HostBag(1f, 1f, ("g_i_medeqpmnt01", 1))], nowMs: 0);
+
+        ledger.Reconcile([mine], [HostBag(1f, 1f, ("g_i_medeqpmnt01", 1))], nowMs: CorpseLootLedger.GiveWaitMs);
+
+        Assert.Single(ledger.Removals);
     }
 
     [Fact]
@@ -125,11 +142,11 @@ public sealed class CorpseLootLedgerTests
         CorpseLootLedger ledger = new();
         BodyBagState mine = Bag(0x14A, 1f, 1f, (0x149, "g_i_medeqpmnt01"));
         ledger.Update([mine], []);
-        ledger.Reconcile([mine], [HostBag(1f, 1f, ("g_i_medeqpmnt01", 1))]);
+        ledger.Reconcile([mine], [HostBag(1f, 1f, ("g_i_medeqpmnt01", 1))], 0);
 
         // This player takes the medpac; the host's level still lists it until our take lands.
         ledger.Update([Bag(0x14A, 1f, 1f)], []);
-        Assert.Empty(ledger.Reconcile([Bag(0x14A, 1f, 1f)], [HostBag(1f, 1f, ("g_i_medeqpmnt01", 1))]));
+        Assert.Empty(ledger.Reconcile([Bag(0x14A, 1f, 1f)], [HostBag(1f, 1f, ("g_i_medeqpmnt01", 1))], 1000));
         Assert.Single(ledger.OwnTakes);
     }
 
@@ -139,19 +156,31 @@ public sealed class CorpseLootLedgerTests
         CorpseLootLedger ledger = new();
         BodyBagState mine = Bag(0x14A, 1f, 1f, (0x147, "end_1damblast"));
         ledger.Update([mine], []);
-        ledger.Reconcile([mine], [HostBag(1f, 1f, ("g_i_credits001", 11))]);
+        ledger.Reconcile([mine], [HostBag(1f, 1f, ("g_i_credits001", 11))], 0);
+        ledger.Reconcile([mine], [HostBag(1f, 1f, ("g_i_credits001", 11))], CorpseLootLedger.GiveWaitMs);
         ledger.Update([Bag(0x14A, 1f, 1f)], []);
 
         Assert.Empty(ledger.OwnTakes);
     }
 
     [Fact]
-    public void ABagWithNoHostBagNearWaits()
+    public void ABagWithNoHostBagNearWaitsThenIsEmptied()
     {
+        // The host's corpse left nothing; the joiner's bag only holds the stand-in's placeholder.
         CorpseLootLedger ledger = new();
-        BodyBagState mine = Bag(0x14A, 1f, 1f, (0x147, "end_1damblast"));
-        Assert.Empty(ledger.Reconcile([mine], [HostBag(30f, 1f, ("g_i_credits001", 11))]));
-        Assert.Single(ledger.Reconcile([mine], [HostBag(1.5f, 1f, ("g_i_credits001", 11))]));
+        BodyBagState mine = Bag(0x14A, 1f, 1f, (0x147, "g_i_credits001"));
+        Assert.Empty(ledger.Reconcile([mine], [HostBag(30f, 1f, ("g_i_credits001", 11))], 0));
+        Assert.Empty(ledger.Removals);
+
+        ledger.Reconcile([mine], [], CorpseLootLedger.OrphanMs);
+        Assert.Equal(new ContainerLootRemoval(0x14A, 0x147), Assert.Single(ledger.Removals));
+    }
+
+    [Fact]
+    public void ThePlaceholderIsOneCredit()
+    {
+        Assert.Equal("g_i_credits001", CorpseLootLedger.Placeholder.Resref);
+        Assert.Equal(1, CorpseLootLedger.Placeholder.Identity.StackSize);
     }
 
     [Fact]
