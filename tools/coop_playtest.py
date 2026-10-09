@@ -919,6 +919,7 @@ def snapshot_retrying(game, attempts=60, pause=0.5):
             if game.exited() or attempt == attempts - 1:
                 raise
             time.sleep(pause)
+            time.sleep(pause)
 
 
 def census_difference(host, joiner):
