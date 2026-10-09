@@ -69,6 +69,8 @@ DIK_W, DIK_A, DIK_D, DIK_SPACE = 17, 30, 32, 57  # W/A/D only released on exit
 COOP_TAG = re.compile(r"^coop", re.IGNORECASE)
 
 # Settle windows: how long a cross-game difference may last before it is a finding.
+# Mirrors KotorCoop.Protocol.SoloSegmentCatalogue.BaseModules.
+SOLO_SEGMENT_MODULES = {"tar_m02ae", "sta_m45ac", "sta_m45ad"}
 SETTLE = {"module": 45.0, "disconnected": 15.0, "census": 25.0, "join": 15.0, "stuckdialogue": 120.0,
           "door": 20.0, "container": 20.0, "enemyhp": 20.0, "party": 30.0, "peerhp": 15.0,
           "journal": 30.0, "globals": 30.0, "xp": 30.0}
@@ -855,7 +857,10 @@ class Referee:
         # A load is not a disconnect: each side reports nobody while either world loads, and two
         # quick area changes in a row (Dantooine 2026-10-09) kept that up past the window.
         loading = host.get("loading") or joiner.get("loading")
-        self.persist("disconnected", not loading and (not host["remote_count"] or not joiner["remote_count"]),
+        # A story-forced solo fight (SoloSegmentCatalogue.BaseModules) hides the partner on
+        # purpose while one player fights and the other spectates (Bastila's chamber, 2026-10-09).
+        solo = (host["module"] or "").lower() in SOLO_SEGMENT_MODULES
+        self.persist("disconnected", not loading and not solo and (not host["remote_count"] or not joiner["remote_count"]),
                      f"remote counts host {host['remote_count']} joiner {joiner['remote_count']}", states, now)
         for role, me in (("host", host), ("joiner", joiner)):
             tag = self.join_wanted.get(role)
