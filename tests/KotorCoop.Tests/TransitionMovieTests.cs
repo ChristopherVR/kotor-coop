@@ -270,7 +270,8 @@ public class TransitionMovieTests
         // 83 preserves per-peer damage attribution in the plugin mailbox.
         // 96 binds enemy-effect capture/report/apply to native world and process provenance.
         // 97 adds the host-start conversation relay mailboxes at 0x5C50..0x5CB0.
-        Assert.Equal(97, int.Parse(version.Groups[1].Value));
+        // 98 adds host spawns only (SharedBlock.ScriptSpawns.cs, block grown to 0xCC00).
+        Assert.Equal(98, int.Parse(version.Groups[1].Value));
     }
 
     private static string RepositoryRoot(

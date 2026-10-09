@@ -909,7 +909,7 @@ public sealed record CoopConfig
         "dialogue_fast_join", "dialogue_item_sync", "dialogue_join_teleport", "script_destroy_guard", "effect_expiry_fence",
         "dialogue_recruit_sync", "disguise_sync", "effect_sync", "enemy_drive",
         "enemy_effect_sync", "enemy_materialise",
-        "follow_stunt", "frame_stats", "galaxy_map_host_only", "gui_probe", "host_load_readopt",
+        "follow_stunt", "frame_stats", "galaxy_map_host_only", "gui_probe", "host_load_readopt", "host_spawns_only",
         "host_loss_release", "host_loss_timeout_ms", "interaction_locks", "interp_ms",
         "isolate_real_input",
         "item_template_spawn_sync", "journal_remove_sync", "liveness_sync", "local_combat", "local_var_sync",

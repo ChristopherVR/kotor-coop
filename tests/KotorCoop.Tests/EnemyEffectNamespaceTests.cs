@@ -70,6 +70,6 @@ public class EnemyEffectNamespaceTests
             Assert.InRange(offset,0xC420,0xC45C);Assert.True(fields.Add(offset));Assert.Equal(0,offset%4);
         }
         Assert.True(0xC460<=SharedBlock.TotalSize);
-        Assert.Contains("30 31 61 00 00 00",KotorGameBridge.PluginSignature);
+        Assert.Contains("30 31 62 00 00 00",KotorGameBridge.PluginSignature); // v98: host spawns only
     }
 }

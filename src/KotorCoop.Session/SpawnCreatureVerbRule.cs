@@ -67,7 +67,10 @@ public static class SpawnCreatureVerbRule
         }
 
         string template = args[0];
-        if (!IsTemplateResRef(template))
+
+        // `@template` spawns the way a script does (through the routine table), to exercise the
+        // host-spawns-only hook; the marker rides through to the plugin untouched.
+        if (!IsTemplateResRef(template.StartsWith('@') ? template[1..] : template))
         {
             error = $"'{template}' is not a valid template resref "
                 + $"(1-{MaxTemplateLength} ASCII letters/digits/underscore) - {Usage}";

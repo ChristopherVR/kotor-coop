@@ -86,6 +86,7 @@ public sealed partial class CoopAgent
     private readonly TriggerPump _triggerPump;
     private readonly CombatPump _combatPump;
     private readonly LivenessPump _livenessPump;
+    private readonly SpawnTemplatePump _spawnTemplatePump;
     private readonly PausePump _pausePump;
     private readonly DeathPump _deathPump;
     private readonly WorldStatePump _worldStatePump;
@@ -192,6 +193,7 @@ public sealed partial class CoopAgent
         _triggerPump = new TriggerPump(bridge, session, _log);
         _combatPump = new CombatPump(bridge, session, _log, _triggerPump);
         _livenessPump = new LivenessPump(bridge, session, _log);
+        _spawnTemplatePump = new SpawnTemplatePump(bridge, session);
         _pausePump = new PausePump(bridge, settings, _log);
         _deathPump = new DeathPump(bridge, session, _log);
         _worldStatePump = new WorldStatePump(bridge, session, settings, _recentlySyncedItems);
@@ -895,6 +897,7 @@ public sealed partial class CoopAgent
             PerfPhaseStart();
             _combatPump.PumpEnemies(local, visible, caps);
             _livenessPump.PumpCreatureLiveness(local, caps);
+            _spawnTemplatePump.Pump(local);
             _combatPump.PumpPhantomDamage(caps);
             _combatPump.PumpPeerEffects(caps);
 

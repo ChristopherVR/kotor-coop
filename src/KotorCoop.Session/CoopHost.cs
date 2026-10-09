@@ -493,6 +493,7 @@ public sealed partial class CoopHost : ICoopSession
 
         BroadcastEnemies(now, recipients);
         BroadcastCreatureLiveness(now, recipients);
+        BroadcastSpawnTemplates(now, recipients);
         BroadcastTriggerRelay(recipients);
         BroadcastParty(now, recipients);
         BroadcastPartyRoster(now, recipients);

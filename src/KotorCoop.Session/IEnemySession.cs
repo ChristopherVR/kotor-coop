@@ -55,6 +55,13 @@ public interface IEnemySession
     (IReadOnlyList<CreatureLivenessEntry> Entries, long? CompleteAtMs) GetCreatureLivenessView(string module) =>
         (GetCreatureLiveness(module), null);
 
+    /// <summary>Host only: the blueprints of the creatures this host's scripts created in its
+    /// current world (host spawns only). A no-op on a client.</summary>
+    void PublishSpawnTemplates(string module, uint nativeEpoch, IReadOnlyList<SpawnTemplateEntry> entries) { }
+
+    /// <summary>Client only: the host's spawn blueprints for <paramref name="module"/>.</summary>
+    IReadOnlyList<SpawnTemplateEntry> GetSpawnTemplates(string module) => [];
+
     /// <summary>
     /// Pushes the plugin's cumulative liveness-anomaly count (see
     /// <c>KotorGameBridge.ReadLivenessAnomalyCount</c>) into <see cref="GetStats"/>'s

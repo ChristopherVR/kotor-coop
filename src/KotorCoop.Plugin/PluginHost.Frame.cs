@@ -429,6 +429,11 @@ internal static unsafe partial class PluginHost
 
             WatchWorkerThread();
 
+            if (_view is { } spawnView && !ScriptCreateObjectHook.Installed && ScriptCreateObjectHook.Enabled)
+            {
+                ScriptCreateObjectHook.TryInstall(spawnView.Base);
+            }
+
             // Before the epoch gate: the delayed-event probe (coop.ini delay_probe, default OFF)
             // records on the game's thread inside four engine splices and must be turned into log
             // lines from somewhere file I/O is safe. Inert — and free — unless the probe installed.

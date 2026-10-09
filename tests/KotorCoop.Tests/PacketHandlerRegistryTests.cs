@@ -80,6 +80,8 @@ public class PacketHandlerRegistryTests
         PacketType.CompanionXpSnapshot,
         PacketType.ItemSnapshot, PacketType.ContainerLoot, PacketType.MaterialisedLoot,
         PacketType.CreatureLiveness, PacketType.Pong,
+        // Host spawns only: the host's script-spawned creature blueprints.
+        PacketType.SpawnTemplates,
         PacketType.PartyPoolOp, PacketType.PartyPoolAck,
         PacketType.StoreOp, PacketType.StoreAck,
         // v2 (host-authoritative absolute snapshot + client intents, docs/research/
