@@ -39,12 +39,20 @@ internal sealed class SpawnTemplatePump(IGameBridge bridge, ICoopSession session
         // Friendly story actors are not in the host's mirror; tell the plugin which of this
         // module's blueprints it may build itself. A level, so rewritten now and then (the block
         // is zeroed with the session).
+        // The host's module rides along: in a follow the host arrives first, and a scene's
+        // story actor can be created in the joiner's first second there, before this pump has
+        // run in the new module (sta_m45aa's Carth, 2026-10-10).
+        string hostModule = HostModule();
+        string key = module + "|" + hostModule;
         long now = SessionClock.NowMs;
-        if (!string.Equals(module, _friendlyModule, StringComparison.OrdinalIgnoreCase) || now - _friendlyAtMs >= FriendlyRefreshMs)
+        if (!string.Equals(key, _friendlyModule, StringComparison.OrdinalIgnoreCase) || now - _friendlyAtMs >= FriendlyRefreshMs)
         {
-            if (bridge.TryWriteFriendlyTemplates(module))
+            string[] modules = hostModule.Length == 0 || string.Equals(hostModule, module, StringComparison.OrdinalIgnoreCase)
+                ? [module]
+                : [module, hostModule];
+            if (bridge.TryWriteFriendlyTemplates(modules))
             {
-                _friendlyModule = module;
+                _friendlyModule = key;
             }
 
             _friendlyAtMs = now;
@@ -60,5 +68,19 @@ internal sealed class SpawnTemplatePump(IGameBridge bridge, ICoopSession session
         {
             _written = templates;
         }
+    }
+
+    private string HostModule()
+    {
+        foreach (RemotePeer peer in session.GetRemotePeers())
+        {
+            if (peer.PeerId == CoopHost.HostPeerId)
+            {
+                string module = peer.State.Module ?? string.Empty;
+                return ModuleNameGuard.IsFallbackModuleName(module) ? string.Empty : module;
+            }
+        }
+
+        return string.Empty;
     }
 }

@@ -91,6 +91,12 @@ public interface IPluginChannelBridge
     /// locally (SharedBlock.ScriptSpawns.cs, FriendlyTemplateRule). Rewritten as a level.</summary>
     bool TryWriteFriendlyTemplates(string module) => false;
 
+    /// <summary>The friendly templates of several modules at once (the joiner's current module
+    /// and the one the host has already moved to), so a story actor a scene creates in its
+    /// first second on arrival is already known.</summary>
+    bool TryWriteFriendlyTemplates(IReadOnlyList<string> modules) =>
+        modules.Count > 0 && TryWriteFriendlyTemplates(modules[0]);
+
     /// <summary>Barks the plugin captured since the last look. See <see cref="BarkRecord"/>.</summary>
     List<BarkRecord> ReadBarks() => [];
 
