@@ -639,6 +639,8 @@ internal static unsafe partial class PluginHost
         // A joiner's own scripts may not destroy a creature the host owns and has alive
         // (Rilka, 2026-09-26). Verify-bytes-or-refuse; coop.ini script_destroy_guard=0 opts out.
         EnemyPresenceController.ScriptDestroyGuardEnabled = PluginConfig.ReadBool("script_destroy_guard", true);
+        // Host spawns only (2026-10-09): installed lazily from the frame, once the VM exists.
+        ScriptCreateObjectHook.Enabled = PluginConfig.ReadBool("host_spawns_only", true);
         if (EnemyPresenceController.ScriptDestroyGuardEnabled)
         {
             bool guarded = ScriptDestroyGuardHook.Install(out string destroyGuardDiagnostic);

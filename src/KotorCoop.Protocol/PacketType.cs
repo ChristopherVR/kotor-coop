@@ -792,4 +792,12 @@ public enum PacketType : byte
     /// host-start relay section.
     /// </summary>
     HostConversationRequest = 107,
+
+    /// <summary>
+    /// host -&gt; all, unreliable level (resent every second and on change): the blueprint of
+    /// each creature the host's scripts created in its current world -
+    /// <see cref="SpawnTemplatesPacket"/>. Only the host creates creatures from scripts (a
+    /// joiner's are turned away, host_spawns_only), so a joiner builds the host's from these.
+    /// </summary>
+    SpawnTemplates = 108,
 }

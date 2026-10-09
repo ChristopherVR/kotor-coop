@@ -61,6 +61,14 @@ internal sealed unsafe partial class CheatController
 
         string template = Encoding.ASCII.GetString(text, length);
 
+        // `@template`: spawn the way a script does, through the routine table, so the
+        // host-spawns-only hook sees it (ScriptCreateObjectHook).
+        bool asScript = template.StartsWith('@');
+        if (asScript)
+        {
+            template = template[1..];
+        }
+
         int count = Math.Clamp(block.CheatAmount > 0 ? block.CheatAmount : 1, 1, MaxSpawnCount);
 
         Vec3 explicitPosition = block.CheatPosition;
@@ -75,7 +83,7 @@ internal sealed unsafe partial class CheatController
         for (int i = 0; i < count; i++)
         {
             Vec3 destination = SpawnCreatureGridRule.OffsetFor(anchor, i);
-            uint objectId = Odyssey.SpawnCreature(template, destination, facing, out int failure);
+            uint objectId = Odyssey.SpawnCreature(template, destination, facing, asScript, out int failure);
 
             if (objectId != Odyssey.ObjectInvalid && failure == 0)
             {

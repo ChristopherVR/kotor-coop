@@ -79,6 +79,13 @@ public interface IPluginChannelBridge
     /// liveness scan reports them gone even if it never saw them alive.</summary>
     HashSet<uint> ReadScriptDestroyedIds() => [];
 
+    /// <summary>Host: the creatures this game's scripts created in the world whose liveness
+    /// native epoch is <paramref name="nativeEpoch"/>, oldest first (SharedBlock.ScriptSpawns.cs).</summary>
+    List<SpawnTemplateEntry> ReadHostScriptSpawns(uint nativeEpoch) => [];
+
+    /// <summary>Joiner: hands the host's spawn blueprints for the current module to the plugin.</summary>
+    bool TryWriteSpawnTemplates(IReadOnlyList<SpawnTemplateEntry> entries) => false;
+
     /// <summary>Barks the plugin captured since the last look. See <see cref="BarkRecord"/>.</summary>
     List<BarkRecord> ReadBarks() => [];
 

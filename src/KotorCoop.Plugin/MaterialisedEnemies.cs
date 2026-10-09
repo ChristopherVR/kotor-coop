@@ -63,6 +63,11 @@ internal static unsafe class MaterialisedEnemies
     /// trying after the spawn frame.</summary>
     private static readonly uint[] Appearances = new uint[SharedBlock.EnemyCapacity];
 
+    /// <summary>The host's blueprint a slot's puppet was built from (host spawns only), or null
+    /// for a generic stand-in. A living puppet is handed back as a real creature of this
+    /// blueprint when the session ends (<see cref="ReleaseSession"/>).</summary>
+    private static readonly string?[] PuppetTemplates = new string?[SharedBlock.EnemyCapacity];
+
     /// <summary>Per-BODY latch: has the owner's appearance row reached this stand-in's CLIENT
     /// TWIN, which is the half that actually renders? See <see cref="Dress"/>.</summary>
     private static readonly bool[] TwinDressed = new bool[SharedBlock.EnemyCapacity];
@@ -72,6 +77,7 @@ internal static unsafe class MaterialisedEnemies
     private static bool _spawnDisabled;
     private static int _logged;
     private static int _falseAlarmsLogged;
+    private static int _puppetsLogged;
 
     /// <summary>Owner ids a full sweep has PROVED are present despite the cheap resolver
     /// returning 0. Without this the pair (failing resolver, authoritative sweep) sweeps the
@@ -506,13 +512,35 @@ internal static unsafe class MaterialisedEnemies
 
         uint localId = Odyssey.ObjectInvalid;
         int failure = 0;
+
+        // Host spawns only: a creature the host's script created is built from the blueprint the
+        // host named, as a puppet (scripts blanked, stand-in tag), so it looks and is equipped
+        // like the real one. Anything else, or a blueprint this install cannot load, gets the
+        // generic stand-in below.
+        string? puppetTemplate = null;
+        if (ScriptCreateObjectHook.TryGetHostTemplate(enemy.ObjectId, out string hostTemplate))
+        {
+            localId = Odyssey.SpawnPuppet(hostTemplate, enemy.Position, facing, out failure);
+            puppetTemplate = localId != Odyssey.ObjectInvalid ? hostTemplate : null;
+            if (localId != Odyssey.ObjectInvalid && _puppetsLogged < 20)
+            {
+                _puppetsLogged++;
+                PluginHost.Log($"materialise: owner 0x{enemy.ObjectId:X} built from the host's blueprint '{hostTemplate}' as 0x{localId:X}");
+            }
+            else if (localId == Odyssey.ObjectInvalid)
+            {
+                PluginHost.Log($"materialise: the host's blueprint '{hostTemplate}' for 0x{enemy.ObjectId:X} did not build here (failure {failure}); using a stand-in");
+            }
+        }
+
         foreach (string template in Templates)
         {
-            localId = Odyssey.SpawnCreature(template, enemy.Position, facing, out failure);
             if (localId != Odyssey.ObjectInvalid)
             {
                 break;
             }
+
+            localId = Odyssey.SpawnCreature(template, enemy.Position, facing, out failure);
         }
 
         if (localId == Odyssey.ObjectInvalid)
@@ -549,6 +577,7 @@ internal static unsafe class MaterialisedEnemies
         }
 
         OwnerIds[slot] = enemy.ObjectId;
+        PuppetTemplates[slot] = puppetTemplate;
         LocalIds[slot] = localId;
         Bodies[slot] = creature;
         RejectedOwners.AdmitFreshBody(enemy.ObjectId);
@@ -834,6 +863,7 @@ internal static unsafe class MaterialisedEnemies
                 continue;
             }
 
+            HandBackPuppet(i);
             if (!Destroy(i, "session released"))
             {
                 standing++;
@@ -841,6 +871,39 @@ internal static unsafe class MaterialisedEnemies
         }
 
         return standing;
+    }
+
+    /// <summary>
+    /// The session ended (disconnect, host loss): a living puppet the host's script spawned
+    /// becomes this game's own creature again. This game's scripts never spawned one (host
+    /// spawns only), so destroying the puppet alone would empty the fight the player is
+    /// standing in. A normal spawn of the same blueprint (scripts, AI and faction from the
+    /// blueprint, OnSpawn runs) at the puppet's spot and health, then the puppet goes.
+    /// </summary>
+    private static void HandBackPuppet(int slot)
+    {
+        string? template = PuppetTemplates[slot];
+        PuppetTemplates[slot] = null;
+        nint body = Bodies[slot];
+        if (template is null || body == 0 || !NativeMethods.IsReadable(body, 0x100)
+            || *(uint*)(body + 4) != LocalIds[slot] || Odyssey.IsCreatureDead(body))
+        {
+            return;
+        }
+
+        Vec3 position = Odyssey.GetPosition(body);
+        Vec3 facing = new() { X = 1f, Y = 0f, Z = 0f }; // cosmetic; its own AI turns it
+        short hitPoints = Odyssey.GetCurrentHitPoints(body);
+        uint own = Odyssey.SpawnCreature(template, position, facing, out int failure);
+        nint ownBody = own == Odyssey.ObjectInvalid ? 0 : CreatureFinder.FindByObjectId(own);
+        if (ownBody != 0 && hitPoints > 0)
+        {
+            Odyssey.SetCurrentHitPoints(ownBody, hitPoints);
+        }
+
+        PluginHost.Log(own == Odyssey.ObjectInvalid
+            ? $"materialise: could not hand '{template}' (0x{LocalIds[slot]:X}) back as this game's own creature (failure {failure})"
+            : $"materialise: session over - '{template}' is this game's own creature again (0x{own:X}, {hitPoints} hp)");
     }
 
     /// <summary>How many refusals before a body is written off. See PhantomController's
@@ -909,6 +972,7 @@ internal static unsafe class MaterialisedEnemies
         SpawnedAt[slot] = 0;
         DestroyAttempts[slot] = 0;
         Appearances[slot] = 0;
+        PuppetTemplates[slot] = null;
         TwinDressed[slot] = false;
     }
 

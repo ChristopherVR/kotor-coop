@@ -502,6 +502,61 @@ public sealed partial class KotorGameBridge
     private const int BlockScriptDestroyedIds = 0xC464;
     private const int BlockScriptDestroyedCapacity = 64;
 
+    // Host spawns only (shared block v98, SharedBlock.ScriptSpawns.cs).
+    private const int BlockScriptSpawnCount = 0xC600;
+    private const int BlockScriptSpawnRecords = 0xC604;
+    private const int BlockScriptSpawnCapacity = 24;
+    private const int BlockScriptSpawnStride = 24;
+    private const int BlockSpawnTemplateCount = 0xC880;
+    private const int BlockSpawnTemplateRecords = 0xC884;
+    private const int BlockSpawnTemplateCapacity = 24;
+    private const int BlockSpawnTemplateStride = 20;
+    private const int SpawnResrefLength = 16;
+
+    public List<SpawnTemplateEntry> ReadHostScriptSpawns(uint nativeEpoch)
+    {
+        List<SpawnTemplateEntry> entries = [];
+        if (_pluginBlock == 0 || !_memory.TryReadUInt32(_pluginBlock + BlockScriptSpawnCount, out uint total))
+        {
+            return entries;
+        }
+
+        uint first = total > BlockScriptSpawnCapacity ? total - BlockScriptSpawnCapacity : 0;
+        for (uint n = first; n < total; n++)
+        {
+            nint record = _pluginBlock + BlockScriptSpawnRecords + (int)(n % BlockScriptSpawnCapacity) * BlockScriptSpawnStride;
+            if (_memory.TryReadUInt32(record, out uint id) && id != 0
+                && _memory.TryReadUInt32(record + 4, out uint epoch) && epoch == nativeEpoch
+                && _memory.TryReadAsciiString(record + 8, SpawnResrefLength, out string template) && template.Length > 0)
+            {
+                entries.Add(new SpawnTemplateEntry(id, template));
+            }
+        }
+
+        return entries;
+    }
+
+    public bool TryWriteSpawnTemplates(IReadOnlyList<SpawnTemplateEntry> entries)
+    {
+        if (_pluginBlock == 0)
+        {
+            return false;
+        }
+
+        int count = Math.Min(entries.Count, BlockSpawnTemplateCapacity);
+        int skip = entries.Count - count; // the newest fit
+        bool ok = _memory.TryWrite(_pluginBlock + BlockSpawnTemplateCount, 0u);
+        for (int i = 0; i < count; i++)
+        {
+            nint record = _pluginBlock + BlockSpawnTemplateRecords + i * BlockSpawnTemplateStride;
+            ok &= _memory.TryWrite(record, 0u);
+            ok &= _memory.TryWriteAsciiString(record + 4, entries[skip + i].Template, SpawnResrefLength);
+            ok &= _memory.TryWrite(record, entries[skip + i].ObjectId);
+        }
+
+        return ok && _memory.TryWrite(_pluginBlock + BlockSpawnTemplateCount, (uint)count);
+    }
+
     /// <summary>Targets of the script DestroyObject calls this world let through
     /// (SharedBlock.ScriptDestroy.cs).</summary>
     public HashSet<uint> ReadScriptDestroyedIds()

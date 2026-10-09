@@ -299,6 +299,7 @@ public sealed partial class CoopClient : ICoopSession
             [PacketType.StoreOp] = HandleStoreOp,
             [PacketType.StoreAck] = HandleStoreAck,
             [PacketType.CreatureLiveness] = HandleCreatureLiveness,
+            [PacketType.SpawnTemplates] = HandleSpawnTemplates,
             [PacketType.PartyPoolSnapshotV2] = HandlePartyPoolSnapshotV2,
             [PacketType.PartyPoolIntentAckV2] = HandlePartyPoolIntentAckV2,
             [PacketType.StoreSnapshotV2] = HandleStoreSnapshotV2,

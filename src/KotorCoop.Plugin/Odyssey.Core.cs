@@ -202,6 +202,29 @@ internal static unsafe partial class Odyssey
     public static Vec3 GetPosition(nint creature) => *(Vec3*)(creature + ObjPosition);
 
     /// <summary>Resolves the command implementer, or 0 if the VM is not ready.</summary>
+    /// <summary>The address of the CreateObject slot in the live routine table, 0 while the VM
+    /// is not up yet. For <see cref="ScriptCreateObjectHook"/>.</summary>
+    public static nint CreateObjectRoutineSlot()
+    {
+        nint implementer = GetImplementer(out _, out _);
+        nint table = implementer == 0 ? 0 : Deref(implementer + CommandsTableOffset);
+        return table == 0 ? 0 : table + (RoutineCreateObject * 4);
+    }
+
+    /// <summary>The top VM stack entry's value word, read in place (see
+    /// <see cref="StackValueArrayOffset"/>); 0 when the stack is empty or unreadable.</summary>
+    public static nint PeekStackTopValue()
+    {
+        nint vm = *(nint*)VirtualMachinePtr;
+        if (vm == 0 || !NativeMethods.IsReadable(vm, 4)) return 0;
+        nint internalVm = *(nint*)vm;
+        if (internalVm == 0 || !NativeMethods.IsReadable(internalVm + StackValueArrayOffset, 4)) return 0;
+        int stackPointer = *(int*)(internalVm + StackPointerOffset);
+        nint values = *(nint*)(internalVm + StackValueArrayOffset);
+        if (stackPointer <= 0 || values == 0 || !NativeMethods.IsReadable(values + (stackPointer - 1) * 4, 4)) return 0;
+        return *(nint*)(values + (stackPointer - 1) * 4);
+    }
+
     private static nint GetImplementer(out nint virtualMachine, out nint internalVm)
     {
         virtualMachine = 0;
@@ -238,7 +261,13 @@ internal static unsafe partial class Odyssey
     /// "the layout moved under us" and "a script currently owns the VM stack" from a crash
     /// into a refusal.
     /// </summary>
-    public static uint SpawnCreature(string template, Vec3 position, Vec3 facingUnitVector, out int failure)
+    public static uint SpawnCreature(string template, Vec3 position, Vec3 facingUnitVector, out int failure) =>
+        SpawnCreature(template, position, facingUnitVector, viaScriptTable: false, out failure);
+
+    /// <param name="viaScriptTable">Dispatch through the live routine-table slot, as a script's
+    /// CreateObject does, instead of calling the handler directly: a dev test of
+    /// <see cref="ScriptCreateObjectHook"/> (the `spawncreature @template` form).</param>
+    public static uint SpawnCreature(string template, Vec3 position, Vec3 facingUnitVector, bool viaScriptTable, out int failure)
     {
         failure = 0;
 
@@ -257,7 +286,8 @@ internal static unsafe partial class Odyssey
             return ObjectInvalid;
         }
 
-        if (*(nint*)(table + (RoutineCreateObject * 4)) != ExpectedCreateObject)
+        nint createSlot = *(nint*)(table + (RoutineCreateObject * 4));
+        if (createSlot != ExpectedCreateObject && createSlot != ScriptCreateObjectHook.StubAddress)
         {
             failure = 3;
             return ObjectInvalid;
@@ -306,7 +336,9 @@ internal static unsafe partial class Odyssey
             return ObjectInvalid;
         }
 
-        int status = ExecuteCommandCreateObject(implementer, RoutineCreateObject, 4);
+        int status = viaScriptTable
+            ? ((delegate* unmanaged[Thiscall]<nint, int, int, int>)createSlot)(implementer, RoutineCreateObject, 4)
+            : ExecuteCommandCreateObject(implementer, RoutineCreateObject, 4);
         if (status != 0)
         {
             failure = 6;

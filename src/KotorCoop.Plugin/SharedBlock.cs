@@ -173,8 +173,9 @@ internal partial struct SharedBlock
     /// v82 uses 0x8630/0x8634 in that tail for manual travel/load request intent.
     /// v83 grows to 0xB800 for 1024 attributed peer/enemy damage rows at 0x8710.
     /// v85 grows to 0xBA00 for native placeable apply acknowledgements at 0xB800.
+    /// v98 grows to 0xCC00 for the host-spawns-only channel (SharedBlock.ScriptSpawns.cs).
     /// </summary>
-    public const int TotalSize = 0xC600;
+    public const int TotalSize = 0xCC00;
 
     public const int ProfileVisibleSize = 0x250;
 
