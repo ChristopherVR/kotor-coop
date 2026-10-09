@@ -858,10 +858,12 @@ def checkpoint_new_area(games, checkpointed, report):
     print("CHECKPOINT", module, flush=True)
 
 
-def snapshot_retrying(game, attempts=4, pause=0.3):
+def snapshot_retrying(game, attempts=60, pause=0.5):
     """A snapshot that survives the game freeing an object mid-read. Under the rig's full page
     heap a freed creature is unreadable at once, and one such read ended a 2026-10-09 run with
-    both games healthy. Only a process that has exited, or a read failing every attempt, raises."""
+    both games healthy; a module transition (the Endar Spire's escape pod to Taris) keeps reads
+    failing for several seconds, so a live game gets up to 30 s. Only a process that has exited,
+    or a read failing every attempt, raises."""
     for attempt in range(attempts):
         try:
             return game.snapshot()
