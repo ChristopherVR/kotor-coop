@@ -102,9 +102,49 @@ internal static unsafe partial class Odyssey
         CExoStringDtorFn((byte*)(creature + ObjectTagOffset));
         CExoStringCtorFn((byte*)(creature + ObjectTagOffset), tag);
 
+        EmptyPuppetBackpack(creature);
+
         Vec3 facing = facingUnitVector;
         ObjectSetOrientation(creature, &facing);
         CreatureAddToArea(creature, area, position.X, position.Y, position.Z, 1, 1);
         return *(uint*)(creature + 4);
+    }
+
+    /// <summary>
+    /// A blueprint's backpack is that creature's loot; the host's real corpse already sends its
+    /// own (MaterialisedLoot), so a puppet carrying the blueprint's too would double it. Each
+    /// item is unlinked from the creature's repository (+0xA30) and destroyed. Equipped items
+    /// are not in the backpack and stay, so the puppet looks right.
+    /// </summary>
+    private static void EmptyPuppetBackpack(nint creature)
+    {
+        nint repo = *(nint*)(creature + CreatureItemRepo);
+        if (repo == 0 || !NativeMethods.IsReadable(repo, RepositoryItemCount + 4))
+        {
+            return;
+        }
+
+        int count = *(int*)(repo + RepositoryItemCount);
+        nint ids = *(nint*)(repo + RepositoryItemArray);
+        if (ids == 0 || count is <= 0 or > 256)
+        {
+            return;
+        }
+
+        Span<uint> items = stackalloc uint[count];
+        for (int i = 0; i < count; i++)
+        {
+            items[i] = *(uint*)(ids + (i * 4));
+        }
+
+        foreach (uint itemId in items)
+        {
+            nint item = ResolveServerObject(itemId);
+            if (item != 0)
+            {
+                RepositoryRemoveItemFn(repo, item);
+                DestroyObjectById(itemId, out _);
+            }
+        }
     }
 }
