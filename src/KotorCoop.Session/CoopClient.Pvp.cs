@@ -35,6 +35,10 @@ public sealed partial class CoopClient
 
     public bool PvpEnabled => _overrides.Pvp ?? _settings.Behaviour.Has(BehaviourFlags.Pvp);
 
+    public bool PvpArenaEnabled => _overrides.PvpArena ?? _settings.Behaviour.Has(BehaviourFlags.PvpArena);
+
+    public bool PvpArenaReady => _settings.PvpArenaReady;
+
     public PvpView PvpState
     {
         get
@@ -52,9 +56,15 @@ public sealed partial class CoopClient
         {
             // Said here, not sent: with duels off a request would only come back as the same
             // refusal a round trip later (or, on an older host, never).
-            if (!PvpEnabled && op is PvpOp.Challenge or PvpOp.Accept)
+            if (!PvpEnabled && op is PvpOp.Challenge or PvpOp.ChallengeArena or PvpOp.Accept)
             {
                 _pvpInbox.Add(new PvpNotice(0, _localPeerId, PvpNoticeCode.NotEnabled, 0));
+                return;
+            }
+
+            if (PvpEnabled && !PvpArenaEnabled && op == PvpOp.ChallengeArena)
+            {
+                _pvpInbox.Add(new PvpNotice(0, _localPeerId, PvpNoticeCode.ArenaNotEnabled, 0));
                 return;
             }
 
@@ -111,7 +121,9 @@ public sealed partial class CoopClient
                 }
 
                 _lastPvpAwareMs = now;
-                packet = new PvpIntentPacket(_hostSessionId, _localPeerId, 0, PvpOp.Aware, 0);
+                packet = new PvpIntentPacket(
+                    _hostSessionId, _localPeerId, 0,
+                    PvpArenaEnabled && PvpArenaReady ? PvpOp.AwareArena : PvpOp.Aware, 0);
             }
         }
 
@@ -141,7 +153,7 @@ public sealed partial class CoopClient
                 return;
             }
 
-            _pvpView = new PvpView(packet.Phase, packet.RoundId, packet.Challenger, packet.Target);
+            _pvpView = new PvpView(packet.Phase, packet.RoundId, packet.Challenger, packet.Target, packet.Arena);
             _pvpViewAtMs = now;
 
             // The host numbers its messages from 1 each session, so a new host session restarts the

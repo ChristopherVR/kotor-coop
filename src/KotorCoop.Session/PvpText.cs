@@ -13,6 +13,9 @@ public static class PvpText
     public const string UsageLine =
         "duel <name> challenges a player. They type accept or decline. yield stops a duel. duel off refuses all challenges.";
 
+    public const string ArenaUsageLine =
+        "arena <name> challenges a player to a duel in the arena. They type accept or decline, the same as a duel.";
+
     public const string OptedOutLine = "You will not get duel challenges. Type duel on to allow them again.";
 
     public const string OptedInLine = "You can be challenged to a duel again.";
@@ -21,6 +24,9 @@ public static class PvpText
         "The host has not turned on duels. Ask them, or see the pvp setting.";
 
     public const string SavingBlockedLine = "You cannot save during a duel. Finish it or type yield first.";
+
+    public const string SavingBlockedInArenaLine =
+        "You cannot save while the arena fight is on or in the arena. Wait until everyone is back.";
 
     /// <summary>The line a notice becomes. <paramref name="otherName"/> is the player the notice
     /// is about (<see cref="PvpNotice.Other"/>); <paramref name="aboutSelf"/> is true when that
@@ -66,6 +72,19 @@ public static class PvpText
             $"The duel with {otherName} was called off. Nothing was lost.",
         PvpNoticeCode.NoSuchPlayer => "Nobody here has that name. Type who to see the players.",
         PvpNoticeCode.NothingToDo => "There is no duel or challenge for that right now.",
+        PvpNoticeCode.ArenaNotEnabled =>
+            "The host has not turned on the arena. Ask them to set pvp = arena, or fight with duel.",
+        PvpNoticeCode.ArenaMissing => aboutSelf
+            ? "You do not have the arena installed. Run the kotor-coop setup again, then restart the game."
+            : $"{otherName} does not have the arena installed yet, or has an older version. They need to run the kotor-coop setup again.",
+        PvpNoticeCode.ArenaHostApart =>
+            $"{otherName}, the host, has to be in this area too so everyone can be moved together.",
+        PvpNoticeCode.ArenaEntering =>
+            $"Arena duel with {otherName}. Moving everyone to the arena now. Type yield to call it off.",
+        PvpNoticeCode.ArenaReturning =>
+            "The arena fight is over. Taking everyone back to where they were. Hold on.",
+        PvpNoticeCode.ArenaFailed =>
+            $"Getting everyone into the arena took too long, so the fight with {otherName} was called off. Nothing was lost.",
         _ => string.Empty,
     };
 }

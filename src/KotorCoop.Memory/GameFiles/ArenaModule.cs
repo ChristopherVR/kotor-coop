@@ -78,6 +78,11 @@ public static class ArenaModule
         new("k_coop_arena_b2", 1, 1, 190.471f, 99.885f, 0f, 1f, 0f),
     ];
 
+    /// <summary>Where everyone else stands: the cantina's own spectator mark
+    /// (tar02_wppccutsc), at the south edge of the ring looking in.</summary>
+    public static ArenaSpawn Spectator { get; } = new("k_coop_arena_s", 2, 0, 199.984f, 88.412f, 0f, 0f, 1f);
+
+    /// <summary>The four fighting positions (two per team).</summary>
     public static IReadOnlyList<ArenaSpawn> Spawns => SpawnTable;
 
     /// <summary>The spawn for a team (0 or 1) and slot (0 or 1); falls back to the team's
@@ -242,7 +247,7 @@ public static class ArenaModule
             throw new InvalidDataException("the cantina's area has no 'tar02_wppcarena' waypoint inside the ring");
         }
 
-        foreach (ArenaSpawn spawn in SpawnTable)
+        foreach (ArenaSpawn spawn in (ArenaSpawn[])[.. SpawnTable, Spectator])
         {
             GffWriterStruct added = waypoints.Add(template.StructId);
             GffCopy.CopyInto(template, added);

@@ -28,7 +28,7 @@ public static partial class PacketCodec
         uint serial = r.ReadUInt32();
         byte op = r.ReadUInt8();
         uint target = r.ReadUInt32();
-        if (r.Failed || op is 0 or > (byte)PvpOp.Aware)
+        if (r.Failed || op is 0 or > (byte)PvpOp.AwareArena)
         {
             return null;
         }
@@ -57,6 +57,8 @@ public static partial class PacketCodec
             w.WriteUInt32(notice.Other);
         }
 
+        // Appended last: a reader of the older shape stops before it.
+        w.WriteUInt8(packet.Arena ? (byte)1 : (byte)0);
         return w.Failed ? 0 : w.Position;
     }
 
@@ -74,7 +76,7 @@ public static partial class PacketCodec
         uint challenger = r.ReadUInt32();
         uint target = r.ReadUInt32();
         byte count = r.ReadUInt8();
-        if (r.Failed || phase > (byte)PvpPhase.Live || count > PvpStatePacket.MaxNotices)
+        if (r.Failed || phase > (byte)PvpPhase.Leaving || count > PvpStatePacket.MaxNotices)
         {
             return null;
         }
@@ -86,7 +88,7 @@ public static partial class PacketCodec
             uint forPeer = r.ReadUInt32();
             byte code = r.ReadUInt8();
             uint other = r.ReadUInt32();
-            if (r.Failed || code == 0 || code > (byte)PvpNoticeCode.NothingToDo)
+            if (r.Failed || code == 0 || code > (byte)PvpNoticeCode.ArenaFailed)
             {
                 return null;
             }
@@ -94,6 +96,13 @@ public static partial class PacketCodec
             notices.Add(new PvpNotice(serial, forPeer, (PvpNoticeCode)code, other));
         }
 
-        return new PvpStatePacket(session, (PvpPhase)phase, round, challenger, target, notices);
+        // The arena flag follows the notices; a packet from a build without arenas ends before it.
+        bool arena = r.Remaining > 0 && r.ReadUInt8() == 1;
+        if (r.Failed)
+        {
+            return null;
+        }
+
+        return new PvpStatePacket(session, (PvpPhase)phase, round, challenger, target, notices, arena);
     }
 }

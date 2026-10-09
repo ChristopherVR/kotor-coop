@@ -151,7 +151,7 @@ public sealed class ArenaModuleTests : IDisposable
         Assert.DoesNotContain("tar02_wpangrywoman", tags);
         Assert.DoesNotContain("wp_serverdroid_01", tags);
 
-        foreach (ArenaSpawn spawn in ArenaModule.Spawns)
+        foreach (ArenaSpawn spawn in (ArenaSpawn[])[.. ArenaModule.Spawns, ArenaModule.Spectator])
         {
             GffStruct waypoint = git.GetList("WaypointList").Single(w => Text(w, "Tag") == spawn.Tag);
             Assert.True(waypoint.TryGetFloat("XPosition", out float x));
@@ -162,7 +162,7 @@ public sealed class ArenaModuleTests : IDisposable
             Assert.Equal(spawn.FaceX, faceX);
         }
 
-        Assert.Equal(2 + 4, tags.Length); // tar02_wppcarena + BP_FIGHT1_WP in the ring, then the four
+        Assert.Equal(2 + 5, tags.Length); // tar02_wppcarena + BP_FIGHT1_WP in the ring, then four fighters and the spectator
         Assert.True(git.TryGetByte("UseTemplates", out byte useTemplates));
         Assert.Equal(1, useTemplates);
         Assert.NotNull(git.GetStruct("AreaProperties"));
@@ -178,6 +178,7 @@ public sealed class ArenaModuleTests : IDisposable
         Assert.Equal(-1f, a.FaceX);
         Assert.Equal(1f, b.FaceX);
         Assert.Equal(4, ArenaModule.Spawns.Count);
+        Assert.InRange(ArenaModule.Spectator.Y, 85f, 117f);
         Assert.All(ArenaModule.Spawns, s => Assert.InRange(s.X, 185f, 215f));
         Assert.All(ArenaModule.Spawns, s => Assert.InRange(s.Y, 85f, 117f));
         Assert.Equal(ArenaModule.SpawnFor(1, 1), ArenaModule.Spawns[3]);

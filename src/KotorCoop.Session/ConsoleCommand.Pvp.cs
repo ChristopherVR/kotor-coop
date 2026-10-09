@@ -20,6 +20,11 @@ public static partial class ConsoleCommand
         return new CoopCommand(CoopCommandKind.Duel, Address: name);
     }
 
+    private static CoopCommand ParseArena(string[] rest) =>
+        rest.Length == 0
+            ? new CoopCommand(CoopCommandKind.Invalid, Error: PvpText.ArenaUsageLine)
+            : new CoopCommand(CoopCommandKind.DuelArena, Address: string.Join(' ', rest));
+
     private static CoopCommand ParseDuelAccept(string[] rest) => new(CoopCommandKind.DuelAccept);
 
     private static CoopCommand ParseDuelDecline(string[] rest) => new(CoopCommandKind.DuelDecline);
