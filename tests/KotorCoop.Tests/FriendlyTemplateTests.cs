@@ -58,15 +58,15 @@ public sealed class FriendlyTemplateTests : IDisposable
 
     [Theory]
     [InlineData(2, true)]
-    [InlineData(4, true)]
-    [InlineData(5, true)]
+    [InlineData(4, false)]
+    [InlineData(5, false)]
     [InlineData(0, false)]
     [InlineData(1, false)]
     [InlineData(3, false)]
     [InlineData(6, false)]
     [InlineData(7, false)]
     [InlineData(-1, false)]
-    public void OnlyFriendlyAndNeutralFactionsAreFriendly(int faction, bool expected) =>
+    public void OnlyFriendly1IsFriendly(int faction, bool expected) =>
         Assert.Equal(expected, FriendlyTemplateRule.IsFriendlyFaction(faction));
 
     [Fact]

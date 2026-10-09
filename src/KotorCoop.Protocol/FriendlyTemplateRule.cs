@@ -16,14 +16,14 @@ public static class FriendlyTemplateRule
     public const int Capacity = 80;
 
     /// <summary>
-    /// repute.2da rows that are not hostile to the player in the stock table: 2 Friendly_1,
-    /// 4 Friendly_2, 5 Neutral (rows 0..20 are Player, Hostile_1, Friendly_1, Hostile_2,
-    /// Friendly_2, Neutral, Insane, Tuskan, GLB_XOR, ..., see DataModInstaller's remarks).
-    /// Anything else (Hostile_1/2, Insane, Tuskan and the rest) stays suppressed: the mirror
-    /// owns it. Player (0) and GLB_XOR (8) are left out on purpose: no story creature is built
-    /// from them, and unknown must fail towards "host spawns".
+    /// Friendly_1 (repute.2da row 2) only. Neutral (5) and Friendly_2 (4) looked safe from the
+    /// table, but a blueprint's faction is only where a creature starts: the Star Forge's
+    /// sta45a_assault*, sta45a_malak and sta_jedi00* are Neutral or Friendly_2 in their .utc and
+    /// are turned hostile by script, and a joiner building them itself would duplicate the
+    /// host's mirror. Friendly_1 holds the story actors (sta_carth, sta_bastila, the light Jedi).
+    /// Anything else stays suppressed: the mirror owns it, and unknown fails towards "host spawns".
     /// </summary>
-    public static bool IsFriendlyFaction(int factionId) => factionId is 2 or 4 or 5;
+    public static bool IsFriendlyFaction(int factionId) => factionId == 2;
 
     /// <summary>Lowercase ASCII FNV-1a 32 of a blueprint resref, the value in the block.</summary>
     public static uint Hash(string template)
