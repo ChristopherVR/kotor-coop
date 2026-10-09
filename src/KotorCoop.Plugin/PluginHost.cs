@@ -443,7 +443,8 @@ internal static unsafe partial class PluginHost
         // 97: host-start conversation relay mailboxes at 0x5C50..0x5CB0 (SharedBlock.HostConversation.cs).
         // 100: duel phase/opponent/round levels at 0xCC80 (SharedBlock.Pvp.cs, docs/research/pvp-plan.md).
         // 101: duel panel flags/peer at 0xCC8C/0xCC90 (SharedBlock.Pvp.cs, PvpMenuController).
-        _block->Version = 101;
+        // 102: joiner's friendly creature template hashes at 0xCCA0/0xCCA4 (SharedBlock.ScriptSpawns.cs).
+        _block->Version = 102;
         *(uint*)((byte*)_block + SharedBlock.OffsetDamageDealtIncarnation) = PhantomHitHook.Dealt.Incarnation;
 
         // A guard dword after the version. Magic plus version alone was not selective

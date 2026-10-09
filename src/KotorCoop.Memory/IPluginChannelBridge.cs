@@ -86,6 +86,11 @@ public interface IPluginChannelBridge
     /// <summary>Joiner: hands the host's spawn blueprints for the current module to the plugin.</summary>
     bool TryWriteSpawnTemplates(IReadOnlyList<SpawnTemplateEntry> entries) => false;
 
+    /// <summary>Joiner: tells the plugin which creature blueprints of <paramref name="module"/>
+    /// are friendly (read from the game files), so its host-spawns-only hook lets those spawn
+    /// locally (SharedBlock.ScriptSpawns.cs, FriendlyTemplateRule). Rewritten as a level.</summary>
+    bool TryWriteFriendlyTemplates(string module) => false;
+
     /// <summary>Barks the plugin captured since the last look. See <see cref="BarkRecord"/>.</summary>
     List<BarkRecord> ReadBarks() => [];
 
