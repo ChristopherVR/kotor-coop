@@ -126,6 +126,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\PhantomTargetRule.cs" Link="Plugin\PhantomTargetRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PvpDuelMachine.cs" Link="Plugin\PvpDuelMachine.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PvpMenuRule.cs" Link="Plugin\PvpMenuRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\SceneStagingRule.cs" Link="Plugin\SceneStagingRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PhantomBodyIdentityRule.cs" Link="Plugin\PhantomBodyIdentityRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\StealthVisualMode.cs" Link="Plugin\StealthVisualMode.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PartnerHealMirrorRule.cs" Link="Plugin\PartnerHealMirrorRule.cs" />
