@@ -533,7 +533,42 @@ public sealed partial class KotorGameBridge
             }
         }
 
+        AdoptKnownCreatures(entries);
         return entries;
+    }
+
+    /// <summary>
+    /// Puts creatures this game's scripts just created into the creature list now. The list is
+    /// a memory scan refreshed every <c>CreatureCacheMs</c> (15 s), so a scripted spawn reached
+    /// the host's census, and so a joiner's screen, up to that long after it appeared (live
+    /// 2026-10-09: 8 s). The engine's own id lookup finds each one immediately.
+    /// </summary>
+    private void AdoptKnownCreatures(List<SpawnTemplateEntry> spawns)
+    {
+        lock (Sync)
+        {
+            if (_creatureCache is not { Count: > 0 } cache)
+            {
+                return;
+            }
+
+            List<nint>? fresh = null;
+            foreach (SpawnTemplateEntry spawn in spawns)
+            {
+                if (!cache.Exists(c => c.ObjectId == spawn.ObjectId)
+                    && EngineGlobals.TryResolveServerObject(_memory, spawn.ObjectId, out nint address)
+                    && _memory.TryReadUInt32(address, out uint vtable) && vtable == CreatureVtable)
+                {
+                    (fresh ??= []).Add(address);
+                }
+            }
+
+            if (fresh is not null)
+            {
+                cache.AddRange(ReadCreatures(fresh));
+                _liveCache = null;
+            }
+        }
     }
 
     public bool TryWriteSpawnTemplates(IReadOnlyList<SpawnTemplateEntry> entries)

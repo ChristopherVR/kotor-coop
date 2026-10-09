@@ -79,6 +79,12 @@ internal static unsafe class MaterialisedEnemies
     private static int _falseAlarmsLogged;
     private static int _puppetsLogged;
 
+    /// <summary>How long a newly seen owner id waits for its blueprint (host spawns only) before
+    /// a generic stand-in is built. The host sends both in one tick.</summary>
+    private const double TemplateWaitSeconds = 0.5;
+
+    private static readonly Dictionary<uint, double> FirstSeenWithoutTemplate = [];
+
     /// <summary>Owner ids a full sweep has PROVED are present despite the cheap resolver
     /// returning 0. Without this the pair (failing resolver, authoritative sweep) sweeps the
     /// whole process's memory several times a second for the life of the module — silently,
@@ -518,7 +524,32 @@ internal static unsafe class MaterialisedEnemies
         // like the real one. Anything else, or a blueprint this install cannot load, gets the
         // generic stand-in below.
         string? puppetTemplate = null;
-        if (ScriptCreateObjectHook.TryGetHostTemplate(enemy.ObjectId, out string hostTemplate))
+        bool hasTemplate = ScriptCreateObjectHook.TryGetHostTemplate(enemy.ObjectId, out string hostTemplate);
+
+        // The host's census and its spawn-template list leave in the same tick but arrive in
+        // either order; a creature first seen this instant may have a blueprint on the way
+        // (live 2026-10-09: the first reinforcement was built generic, its template landed a
+        // moment later). Wait a moment for it before settling for a stand-in.
+        if (!hasTemplate && ScriptCreateObjectHook.Installed)
+        {
+            if (FirstSeenWithoutTemplate.Count > 1024)
+            {
+                FirstSeenWithoutTemplate.Clear();
+            }
+
+            if (!FirstSeenWithoutTemplate.TryGetValue(enemy.ObjectId, out double firstSeen))
+            {
+                FirstSeenWithoutTemplate[enemy.ObjectId] = now;
+                return;
+            }
+
+            if (now - firstSeen < TemplateWaitSeconds)
+            {
+                return;
+            }
+        }
+
+        if (hasTemplate)
         {
             localId = Odyssey.SpawnPuppet(hostTemplate, enemy.Position, facing, out failure);
             puppetTemplate = localId != Odyssey.ObjectInvalid ? hostTemplate : null;
@@ -832,6 +863,7 @@ internal static unsafe class MaterialisedEnemies
     public static void Invalidate()
     {
         RejectedOwners.Clear();
+        FirstSeenWithoutTemplate.Clear();
         RetainedBodies.Clear();
         for (int i = 0; i < OwnerIds.Length; i++)
         {
