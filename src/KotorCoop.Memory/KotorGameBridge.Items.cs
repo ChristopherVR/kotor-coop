@@ -1,6 +1,7 @@
 ﻿// Item identity and the tag/address cache it is built on: resolving an inventory slot's
 // engine object id down to a blueprint resref, reading a live item's per-instance identity
 // (stack size, charges, upgrades), and listing every item body the sweep can see.
+using KotorCoop.Memory.GameFiles;
 using KotorCoop.Protocol;
 
 namespace KotorCoop.Memory;
@@ -125,6 +126,21 @@ public sealed partial class KotorGameBridge
     /// "g_a_clothes01\0" — the engine's CreateItemOnObject then found no blueprint and
     /// the equip was refused with failure 7 while the name LOOKED right in the log.
     /// </summary>
+    private ItemTemplateResolver? _itemTemplates;
+
+    /// <summary>The blueprint a tag-only item was built from (<see cref="ItemTemplateResolver"/>);
+    /// the tag itself when the install cannot say. Cached per module and tag.</summary>
+    private string ResolveItemTemplate(string tag)
+    {
+        if (ResolveLoadGameDirectory() is not { Length: > 0 } directory)
+        {
+            return tag;
+        }
+
+        _itemTemplates ??= new ItemTemplateResolver(directory);
+        return _itemTemplates.Resolve(tag, _cachedForModule);
+    }
+
     private static string SanitiseResref(string tag)
     {
         int end = 0;
@@ -442,7 +458,7 @@ public sealed partial class KotorGameBridge
         }
         else if (liveTag.Length > 0)
         {
-            resref = liveTag;
+            resref = ResolveItemTemplate(liveTag);
         }
         else
         {
