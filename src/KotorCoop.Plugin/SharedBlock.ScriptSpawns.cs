@@ -38,4 +38,22 @@ internal partial struct SharedBlock
     public const int SpawnTemplateCapacity = 24;
 
     public const int SpawnTemplateStride = 20;
+
+    // ---- friendly story actors on a joiner (v102: CCA0..CDE4, no TotalSize growth) -----------
+    //
+    // The joiner's mirror only materialises the host's HOSTILE creatures, so a friendly creature
+    // a script creates (sta_carth in sta_m45aa) would otherwise never exist there. The joiner's
+    // agent reads the module's creature blueprints from the game files and publishes the friendly
+    // ones (FriendlyTemplateRule: repute.2da rows Friendly_1/Friendly_2/Neutral) as a LEVEL,
+    // rewritten about every 2 s and zeroed with the session.
+
+    /// <summary>Agent -&gt; plugin, joiner: how many hashes follow (at most
+    /// <see cref="FriendlyTemplateCapacity"/>). Written after the hashes. Zero: none known, every
+    /// script creature stays suppressed.</summary>
+    public const int OffsetFriendlyTemplateCount = 0xCCA0;
+
+    /// <summary>Lowercase ASCII FNV-1a 32 of each friendly blueprint resref in the current module.</summary>
+    public const int OffsetFriendlyTemplateHashes = 0xCCA4;
+
+    public const int FriendlyTemplateCapacity = 80;
 }

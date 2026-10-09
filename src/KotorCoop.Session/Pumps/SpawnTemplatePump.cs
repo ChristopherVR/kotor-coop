@@ -11,7 +11,11 @@ namespace KotorCoop.Session.Pumps;
 /// </summary>
 internal sealed class SpawnTemplatePump(IGameBridge bridge, ICoopSession session)
 {
+    private const long FriendlyRefreshMs = 2_000;
+
     private IReadOnlyList<SpawnTemplateEntry> _written = [];
+    private string _friendlyModule = string.Empty;
+    private long _friendlyAtMs;
 
     public void Pump(in PlayerState local)
     {
@@ -30,6 +34,20 @@ internal sealed class SpawnTemplatePump(IGameBridge bridge, ICoopSession session
             }
 
             return;
+        }
+
+        // Friendly story actors are not in the host's mirror; tell the plugin which of this
+        // module's blueprints it may build itself. A level, so rewritten now and then (the block
+        // is zeroed with the session).
+        long now = SessionClock.NowMs;
+        if (!string.Equals(module, _friendlyModule, StringComparison.OrdinalIgnoreCase) || now - _friendlyAtMs >= FriendlyRefreshMs)
+        {
+            if (bridge.TryWriteFriendlyTemplates(module))
+            {
+                _friendlyModule = module;
+            }
+
+            _friendlyAtMs = now;
         }
 
         IReadOnlyList<SpawnTemplateEntry> templates = session.GetSpawnTemplates(module);

@@ -20,7 +20,7 @@ import time
 import tomllib
 
 REPO = Path(__file__).resolve().parent.parent
-SIGNATURE = bytes.fromhex("4B4F434F4F5030316500000001EEFFC0")
+SIGNATURE = bytes.fromhex("4B4F434F4F5030316600000001EEFFC0")
 PANELS = {0x7559E0, 0x755800, 0x755888, 0x755958}
 # CGuiInGame panel fields (symbol database, `tools/q.py offsets CGuiInGame`).
 PANEL_FIELDS = {0x08: "menu", 0x0C: "equip", 0x10: "inventory", 0x14: "character", 0x18: "abilities",

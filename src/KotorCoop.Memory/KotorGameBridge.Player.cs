@@ -487,6 +487,10 @@ public sealed partial class KotorGameBridge
         ("duel round", BlockPvpRound),
         ("duel panel flags", BlockPvpUi),
         ("duel panel peer", BlockPvpUiPeer),
+
+        // A joiner's friendly-creature list belongs to that session's module; zero means "none
+        // known", so every script creature is suppressed again (SharedBlock.ScriptSpawns.cs).
+        ("friendly creature templates", BlockFriendlyTemplateCount),
         ("remote peers", BlockRemoteCount),
         ("enemy census", BlockEnemyCount),
         ("enemy presence", BlockEnemyPresenceCount),
