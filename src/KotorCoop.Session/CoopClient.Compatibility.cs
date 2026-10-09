@@ -191,7 +191,8 @@ public sealed partial class CoopClient
             StorePrices: AdoptSetting("store_prices"),
             InventoryPersonal: Adopt("inventory_mode"),
             CreditsPersonal: Adopt("credits_mode"),
-            CorpseLootPersonal: Adopt("corpse_loot"));
+            CorpseLootPersonal: Adopt("corpse_loot"),
+            Pvp: Adopt("pvp"));
     }
 
     private void HandleWorldDigest(IPEndPoint from, ReadOnlySpan<byte> span, long now)

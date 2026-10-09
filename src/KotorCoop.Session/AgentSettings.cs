@@ -182,6 +182,11 @@ public sealed record AgentSettings
     /// ("personal") lets each player loot their own copy. HOST-AUTHORITATIVE.</summary>
     public bool CorpseLootPersonal { get; init; }
 
+    /// <summary>coop.ini <c>pvp</c>: true ("duel") lets players challenge each other to a
+    /// consensual duel (docs/research/pvp-plan.md); false ("off", the default) refuses every
+    /// challenge. HOST-AUTHORITATIVE: the host holds the round.</summary>
+    public bool Pvp { get; init; }
+
     /// <summary>
     /// Relay a class a script adds to one player's character (Dorak's Jedi path choice,
     /// <c>AddMultiClass</c>) to every other player's character through the same engine

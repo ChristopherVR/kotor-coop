@@ -745,6 +745,22 @@ public enum CoopCommandKind
     JediChoice,
 
     /// <summary>
+    /// <c>duel &lt;name&gt;</c> challenges a player to a consensual duel; <c>duel off</c> /
+    /// <c>duel on</c> refuses / allows challenges. The name, or <c>off</c>/<c>on</c>, is in
+    /// <see cref="CoopCommand.Address"/>. docs/research/pvp-plan.md.
+    /// </summary>
+    Duel,
+
+    /// <summary><c>accept</c> — say yes to the duel challenge waiting for you.</summary>
+    DuelAccept,
+
+    /// <summary><c>decline</c> — say no to the duel challenge waiting for you.</summary>
+    DuelDecline,
+
+    /// <summary><c>yield</c> — give up a duel (or withdraw your challenge).</summary>
+    DuelYield,
+
+    /// <summary>
     /// <c>followkick &lt;slot&gt;</c> — DEV-ONLY LIVE-TEST PRIMITIVE
     /// (docs/research/party-reconciliation.md Round 96). Dumps NPC roster slot
     /// <see cref="CoopCommand.Amount"/> (0-8)'s follow-record fields (phase, attempts, target,
@@ -1300,6 +1316,10 @@ public static partial class ConsoleCommand
         new(["attack"], ParseAttack),
         new(["showgui"], ParseShowGui),
         new(["jedichoice"], ParseJediChoice),
+        new(["duel"], ParseDuel),
+        new(["accept"], ParseDuelAccept),
+        new(["decline"], ParseDuelDecline),
+        new(["yield"], ParseDuelYield),
     ];
 
     /// <summary>Built once from <see cref="VerbSpecs"/>; every alias gets its own entry so the
@@ -1351,5 +1371,5 @@ public static partial class ConsoleCommand
 
     /// <summary>One-line help listing the commands, for the overlay and dashboard.</summary>
     public const string HelpText =
-        "commands: servers | connect <ip|#n> [password] | password <pw> | host | disconnect | reconnect | say <msg> | clear | status | lagstats | public_address | steamstatus | steaminvite <steamid64> | warp <module> | who | where | census | resolve <id> | cheats | netsim <off|status|loss|latency|blackout> | help (see `cheats` for applyeffect/effects and the rest of the staging verbs)";
+        "commands: servers | connect <ip|#n> [password] | password <pw> | host | disconnect | reconnect | say <msg> | clear | status | lagstats | public_address | steamstatus | steaminvite <steamid64> | warp <module> | who | where | duel <name> | accept | decline | yield | census | resolve <id> | cheats | netsim <off|status|loss|latency|blackout> | help (see `cheats` for applyeffect/effects and the rest of the staging verbs)";
 }

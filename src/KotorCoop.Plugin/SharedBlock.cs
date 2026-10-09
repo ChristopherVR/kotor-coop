@@ -175,6 +175,7 @@ internal partial struct SharedBlock
     /// v85 grows to 0xBA00 for native placeable apply acknowledgements at 0xB800.
     /// v98 grows to 0xCC00 for the host-spawns-only channel (SharedBlock.ScriptSpawns.cs).
     /// v99 grows to 0xCE00 for the mirror's local body ids at 0xCA80.
+    /// v100 puts the duel levels at 0xCC80..0xCC8C (SharedBlock.Pvp.cs) in that tail: no growth.
     /// </summary>
     public const int TotalSize = 0xCE00;
 

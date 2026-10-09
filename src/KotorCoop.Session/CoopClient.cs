@@ -302,6 +302,7 @@ public sealed partial class CoopClient : ICoopSession
             [PacketType.SpawnTemplates] = HandleSpawnTemplates,
             [PacketType.CorpseTakes] = HandleCorpseTakes,
             [PacketType.HostBodyBag] = HandleHostBodyBag,
+            [PacketType.PvpState] = HandlePvpState,
             [PacketType.PartyPoolSnapshotV2] = HandlePartyPoolSnapshotV2,
             [PacketType.PartyPoolIntentAckV2] = HandlePartyPoolIntentAckV2,
             [PacketType.StoreSnapshotV2] = HandleStoreSnapshotV2,
@@ -498,6 +499,7 @@ public sealed partial class CoopClient : ICoopSession
         FlushPlacedMineIntents(now);
         FlushEnemyEffects(now);
         FlushCorpseTakes(now);
+        FlushPvp(now);
 
         if (now - _lastPingMs >= PingIntervalMs)
         {

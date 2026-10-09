@@ -123,6 +123,7 @@ internal static class AgentComposition
             InventoryPersonal = config?.InventoryPersonal ?? true,
             CreditsPersonal = config?.CreditsPersonal ?? true,
             CorpseLootPersonal = config?.CorpseLootPersonal ?? false,
+            Pvp = config?.Pvp ?? false,
             // OFF with no coop.ini too: NEEDS-LIVE, matching the plugin's own fallback.
             ClassGrantSync = config?.ClassGrantSync ?? true,
             // OFF with no coop.ini too: NEEDS-LIVE, purely local, no plugin key at all.
@@ -262,7 +263,8 @@ internal static class AgentComposition
             localVarSync: agentSettings.LocalVarSync,
             inventoryPersonal: agentSettings.InventoryPersonal,
             creditsPersonal: agentSettings.CreditsPersonal,
-            corpseLootPersonal: agentSettings.CorpseLootPersonal);
+            corpseLootPersonal: agentSettings.CorpseLootPersonal,
+            pvp: agentSettings.Pvp);
 
         SessionManager manager = new(bridge, agentSettings);
 

@@ -63,10 +63,30 @@ internal static class PhantomTargetRule
         Neutral = 0,
         Player = 1,
         Friendly = 2,
+
+        /// <summary>The opponent in a duel (docs/research/pvp-plan.md): Hostile_1, which reads 0
+        /// from the Player row, so this player and their party attack it, and which the enemies
+        /// of that faction ignore. Held only for the length of the round.</summary>
+        PvpHostile = 3,
     }
 
-    public static Kind FactionFor(bool wantsPlayerFaction, bool partnerBuffs) =>
-        !wantsPlayerFaction ? Kind.Neutral : partnerBuffs ? Kind.Friendly : Kind.Player;
+    public static Kind FactionFor(bool wantsPlayerFaction, bool partnerBuffs, bool pvpHostile = false) =>
+        pvpHostile ? Kind.PvpHostile
+        : !wantsPlayerFaction ? Kind.Neutral : partnerBuffs ? Kind.Friendly : Kind.Player;
+
+    /// <summary>
+    /// Whether this peer's stand-in is the OPPONENT of the local player in a live duel, and so
+    /// turns hostile (docs/research/pvp-plan.md). Only the live phase: the countdown pins the
+    /// players but fights nobody. Unlike <see cref="WantsPlayerFaction"/> it ignores the
+    /// local_combat authority split (<c>holdNeutral</c>: that hold keeps this instance's mirrored
+    /// ENEMIES off the stand-in, and a duel needs the local player to be able to target it) and
+    /// the menu guard (the cushion is off for a duellist, agent-side, and a stale bit must not
+    /// shield one). A downed opponent is not a target, and a stealthed one is still hidden when
+    /// <c>stealth_sync</c> is on: a real hide mechanic.
+    /// </summary>
+    public static bool WantsPvpHostile(
+        bool pvpLive, bool isOpponent, bool alive, bool stealthSync, bool stealthed) =>
+        pvpLive && isOpponent && alive && !(stealthSync && stealthed);
 
     /// <summary>The one reason worth naming in the log when the body goes Neutral: the peer
     /// is hiding, as opposed to dead / the authority split / the key being off.</summary>

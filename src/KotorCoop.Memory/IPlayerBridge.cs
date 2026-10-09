@@ -45,6 +45,12 @@ public interface IPlayerBridge
     /// bridges without an in-process plugin block.</summary>
     void SetLocalSessionRole(bool sessionActive, bool isHost) { }
 
+    /// <summary>Agent -> plugin. Publishes the duel the local player is in (docs/research/pvp-plan.md):
+    /// <paramref name="phase"/> 0 none, 1 countdown (pin and snapshot), 2 live (the opponent's
+    /// stand-in is hostile); <paramref name="opponentPeer"/> is the other duellist's peer id. A
+    /// level, rewritten every pump; zeroed on disconnect. Default is a no-op.</summary>
+    void SetPvpState(uint phase, uint opponentPeer, uint round) { }
+
     /// <summary>How many remote-player slots this bridge publishes into.</summary>
     int RemoteSlotCapacity => 0;
 
