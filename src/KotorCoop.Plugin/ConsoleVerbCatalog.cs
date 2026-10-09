@@ -200,5 +200,12 @@ internal static class ConsoleVerbCatalog
         // jedichoice - docs/research/class-and-power-grants.md's 2026-09-25 section: forces the
         // local class-choice popup check, exactly as a peer's real Jedi choice would trigger it.
         ("jedichoice", "jedichoice  (dev-only: manufactures a local 'a peer's Jedi choice happened' request, so the class-choice popup can be exercised without a second player or the Dantooine conversation)"),
+
+        // Duels - docs/research/pvp-plan.md. Plain words a player types in answer to a challenge. None
+        // shadows a retail console verb (the engine registers no accept/decline/yield/duel).
+        ("duel", "duel <name>  (challenge a player; they type accept or decline); duel off / duel on  (refuse / allow challenges)"),
+        ("accept", "accept  (say yes to a duel challenge)"),
+        ("decline", "decline  (say no to a duel challenge)"),
+        ("yield", "yield  (give up a duel)"),
     ];
 }

@@ -28,6 +28,7 @@ public interface ICoopSession :
     IInteractionLockSession,
     IChatSession,
     ILootSession,
+    IPvpSession,
     IJournalSession,
     IPartyPoolSession,
     IStoreSession,

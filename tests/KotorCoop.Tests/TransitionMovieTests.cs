@@ -272,7 +272,8 @@ public class TransitionMovieTests
         // 97 adds the host-start conversation relay mailboxes at 0x5C50..0x5CB0.
         // 98 adds host spawns only (SharedBlock.ScriptSpawns.cs, block grown to 0xCC00).
         // 99 adds the mirror's local body ids at 0xCA80 (block grown to 0xCE00).
-        Assert.Equal(99, int.Parse(version.Groups[1].Value));
+        // 100 adds the duel phase/opponent/round levels at 0xCC80 (SharedBlock.Pvp.cs).
+        Assert.Equal(100, int.Parse(version.Groups[1].Value));
     }
 
     private static string RepositoryRoot(

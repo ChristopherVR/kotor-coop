@@ -210,6 +210,7 @@ internal static unsafe partial class PluginHost
         _mapReveal?.Invalidate();
         _connectMenu?.Invalidate();
         _death?.Invalidate();
+        _pvpDuel?.Invalidate();
         _spectate?.Invalidate();
         _soloSegment?.Invalidate();
         _soloSegmentSpectate?.Invalidate();
