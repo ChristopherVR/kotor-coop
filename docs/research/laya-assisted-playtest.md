@@ -206,7 +206,7 @@ Findings from those runs, resolved 2026-10-09:
   entering object, which failed that check, so only the joiner's own engine spawned them.
   `RelayPartyMemberHook` makes the check pass for the phantom during the relay's one call, and the
   joiner removes hostiles its own scripts spawned that the host never had
-  (`LocalOnlyHostileTracker`, 20 s grace). Live: host spawned both and the joiner got stand-ins;
+  (`LocalOnlyHostileTracker`, then a 20 s grace; since 2026-10-09 the first complete host view 4.5 s after the miss). Live: host spawned both and the joiner got stand-ins;
   the joiner's own copies (from `firetrigger 0x57`) were removed 20 s later.
 * **Companion mirror flapping: fixed.** Not about control at all: with any companion in the host's
   party, the joiner's agent rewrote the host roster bank every pump and the plugin read it
