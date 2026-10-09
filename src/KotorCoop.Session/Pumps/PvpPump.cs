@@ -13,6 +13,7 @@ internal sealed class PvpPump(IGameBridge bridge, ICoopSession session, Action<s
     private const long RefreshMs = 1_000;
 
     private (uint Phase, uint Opponent, uint Round) _written;
+    private (uint Flags, uint Peer) _uiWritten;
     private long _writtenAtMs;
     private bool _everWritten;
 
@@ -27,9 +28,11 @@ internal sealed class PvpPump(IGameBridge bridge, ICoopSession session, Action<s
         Fighting = phase != 0;
         uint round = phase == 0 ? 0 : view.RoundId;
 
+        (uint uiFlags, uint uiPeer) = PvpPumpRule.UiLevels(view, session.LocalPeerId, session.PvpEnabled);
+
         long now = SessionClock.NowMs;
         (uint Phase, uint Opponent, uint Round) next = (phase, opponent, round);
-        if (_everWritten && next == _written && now - _writtenAtMs < RefreshMs)
+        if (_everWritten && next == _written && (uiFlags, uiPeer) == _uiWritten && now - _writtenAtMs < RefreshMs)
         {
             return;
         }
@@ -41,8 +44,10 @@ internal sealed class PvpPump(IGameBridge bridge, ICoopSession session, Action<s
                 : $"duel: round {round} is {(phase == 2 ? "live" : "counting down")} against peer {opponent}");
         }
 
+        bridge.SetPvpUi(uiFlags, uiPeer);
         bridge.SetPvpState(phase, opponent, round);
         _written = next;
+        _uiWritten = (uiFlags, uiPeer);
         _writtenAtMs = now;
         _everWritten = true;
     }

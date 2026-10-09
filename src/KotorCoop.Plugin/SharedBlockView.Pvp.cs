@@ -18,4 +18,12 @@ internal sealed unsafe partial class SharedBlockView
     public uint PvpOpponentPeer => PvpPhase == SharedBlock.PvpPhaseNone ? 0 : *U32(SharedBlock.OffsetPvpOpponentPeer);
 
     public uint PvpRound => *U32(SharedBlock.OffsetPvpRound);
+
+    /// <summary>Agent-written duel panel flags (<see cref="PvpMenuRule.UiAllowed"/> and friends);
+    /// 0 when duels are off or there is no session.</summary>
+    public uint PvpUiFlags => *U32(SharedBlock.OffsetPvpUi);
+
+    /// <summary>Agent-written peer of a pending challenge, 0 when none.</summary>
+    public uint PvpUiPeer =>
+        (PvpUiFlags & (PvpMenuRule.UiIncoming | PvpMenuRule.UiOutgoing)) == 0 ? 0 : *U32(SharedBlock.OffsetPvpUiPeer);
 }

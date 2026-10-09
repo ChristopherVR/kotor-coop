@@ -25,6 +25,23 @@ internal partial struct SharedBlock
     /// row read the same phase, and only this tells a log reader they were different fights.</summary>
     public const int OffsetPvpRound = 0xCC88;
 
+    // ---- duel panel (version 101, CC8C..CC94, no TotalSize growth) ----------------------------------
+    //
+    // Agent -> plugin LEVELS for the in-game duel panel (PvpMenuController), written every pump from
+    // the same round and zeroed on disconnect with the fields above. The plugin never writes them:
+    // what the panel asks for goes out as an ordinary console line through the console mailbox
+    // (SharedBlockView.PublishConsoleCommand), the one path `duel <name>`, `accept`, `decline` and
+    // `yield` already take, so no new intent field exists.
+
+    /// <summary>Agent -&gt; plugin. <see cref="PvpMenuRule.UiAllowed"/> (the host allows duels),
+    /// <see cref="PvpMenuRule.UiIncoming"/> (this player was challenged and may answer),
+    /// <see cref="PvpMenuRule.UiOutgoing"/> (this player's challenge is waiting). Zero hides the panel.</summary>
+    public const int OffsetPvpUi = 0xCC8C;
+
+    /// <summary>Agent -&gt; plugin. The other player in a pending challenge (the challenger for
+    /// incoming, the target for outgoing), valid while one of those two bits is set.</summary>
+    public const int OffsetPvpUiPeer = 0xCC90;
+
     public const uint PvpPhaseNone = 0;
     public const uint PvpPhaseArmed = 1;
     public const uint PvpPhaseLive = 2;
