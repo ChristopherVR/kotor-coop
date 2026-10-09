@@ -274,7 +274,8 @@ public class TransitionMovieTests
         // 99 adds the mirror's local body ids at 0xCA80 (block grown to 0xCE00).
         // 100 adds the duel phase/opponent/round levels at 0xCC80 (SharedBlock.Pvp.cs).
         // 101 adds the duel panel flags and peer at 0xCC8C/0xCC90 (SharedBlock.Pvp.cs).
-        Assert.Equal(101, int.Parse(version.Groups[1].Value));
+        // 102 adds the joiner's friendly creature template hashes at 0xCCA0 (SharedBlock.ScriptSpawns.cs).
+        Assert.Equal(102, int.Parse(version.Groups[1].Value));
     }
 
     private static string RepositoryRoot(

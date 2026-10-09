@@ -2,6 +2,7 @@
 // signature/version, and the core IPC channels that talk directly to those offsets (barks,
 // creature liveness, peer effects, and the raw plugin-state read/write helpers). Other
 // concern files declare their OWN Block* offsets locally, next to the methods that use them.
+using KotorCoop.Memory.GameFiles;
 using KotorCoop.Protocol;
 
 namespace KotorCoop.Memory;
@@ -592,6 +593,33 @@ public sealed partial class KotorGameBridge
         }
 
         return ok && _memory.TryWrite(_pluginBlock + BlockSpawnTemplateCount, (uint)count);
+    }
+
+    // KEEP IN SYNC with SharedBlock.OffsetFriendlyTemplateCount/Hashes (v102).
+    private const int BlockFriendlyTemplateCount = 0xCCA0;
+    private const int BlockFriendlyTemplateHashes = 0xCCA4;
+
+    private FriendlyCreatureResolver? _friendlyCreatures;
+
+    /// <inheritdoc />
+    public bool TryWriteFriendlyTemplates(string module)
+    {
+        if (_pluginBlock == 0 || ResolveLoadGameDirectory() is not { Length: > 0 } directory)
+        {
+            return false;
+        }
+
+        _friendlyCreatures ??= new FriendlyCreatureResolver(directory);
+        uint[] hashes = FriendlyTemplateRule.Publishable(_friendlyCreatures.FriendlyTemplates(module));
+
+        // Count down first, then the hashes, then the count: a reader never pairs a new count with old hashes.
+        bool ok = _memory.TryWrite(_pluginBlock + BlockFriendlyTemplateCount, 0u);
+        for (int i = 0; i < hashes.Length; i++)
+        {
+            ok &= _memory.TryWrite(_pluginBlock + BlockFriendlyTemplateHashes + (i * 4), hashes[i]);
+        }
+
+        return ok && _memory.TryWrite(_pluginBlock + BlockFriendlyTemplateCount, (uint)hashes.Length);
     }
 
     /// <summary>Targets of the script DestroyObject calls this world let through
