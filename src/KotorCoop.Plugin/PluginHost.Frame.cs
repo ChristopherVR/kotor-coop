@@ -453,6 +453,7 @@ internal static unsafe partial class PluginHost
             // overlay. (The Co-op button, browsers and menu-load run on MainLoopHook — the swap
             // hook is dormant at the menu; the ~ console routes through FuncInterpHook.)
             _chatInput?.OnFrame();
+            _pvpMenu?.OnFrame();
             _chatOverlay?.OnFrame();
             _chatMessagesScreen?.OnFrame();
 

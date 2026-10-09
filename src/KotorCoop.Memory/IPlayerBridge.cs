@@ -51,6 +51,11 @@ public interface IPlayerBridge
     /// level, rewritten every pump; zeroed on disconnect. Default is a no-op.</summary>
     void SetPvpState(uint phase, uint opponentPeer, uint round) { }
 
+    /// <summary>Publishes the in-game duel panel's inputs (docs/research/pvp-plan.md): the flag
+    /// word (allowed / challenged / waiting) and the other player in a pending challenge. A level
+    /// like <see cref="SetPvpState"/>, zeroed on teardown.</summary>
+    void SetPvpUi(uint flags, uint peer) { }
+
     /// <summary>How many remote-player slots this bridge publishes into.</summary>
     int RemoteSlotCapacity => 0;
 

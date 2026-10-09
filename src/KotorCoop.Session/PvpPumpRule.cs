@@ -21,6 +21,42 @@ public static class PvpPumpRule
         return (view.Phase == PvpPhase.Live ? 2u : 1u, view.OpponentOf(localPeerId));
     }
 
+    // ⚠ KEEP IN SYNC with the plugin's PvpMenuRule.UiAllowed/UiIncoming/UiOutgoing (a NativeAOT x86
+    // DLL cannot reference this assembly, so the values are duplicated; PvpMenuRuleTests pins both).
+    public const uint UiAllowed = 1;
+    public const uint UiIncoming = 2;
+    public const uint UiOutgoing = 4;
+
+    /// <summary>
+    /// What the in-game duel panel needs to know (SharedBlock.OffsetPvpUi and OffsetPvpUiPeer):
+    /// whether duels are allowed here at all, and whether a challenge is waiting for this player's
+    /// answer (<see cref="UiIncoming"/>, peer = the challenger) or for the other player's
+    /// (<see cref="UiOutgoing"/>, peer = the target). The fight itself reaches the panel through
+    /// <see cref="Levels"/>. Zero when duels are off, so the panel is not drawn at all.
+    /// </summary>
+    public static (uint Flags, uint Peer) UiLevels(in PvpView view, uint localPeerId, bool enabled)
+    {
+        if (!enabled)
+        {
+            return (0, 0);
+        }
+
+        if (view.Phase == PvpPhase.Challenged)
+        {
+            if (view.Target == localPeerId)
+            {
+                return (UiAllowed | UiIncoming, view.Challenger);
+            }
+
+            if (view.Challenger == localPeerId)
+            {
+                return (UiAllowed | UiOutgoing, view.Target);
+            }
+        }
+
+        return (UiAllowed, 0);
+    }
+
     /// <summary>
     /// Whether <paramref name="peerId"/> may be counted into the "every player's party is down"
     /// vote that lifts the game-over screen (docs/research/death-handling.md). A duellist who is
