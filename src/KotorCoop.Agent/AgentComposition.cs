@@ -49,6 +49,13 @@ internal static class AgentComposition
         // same per-tick loop — so say/servers/connect/host all work at the main menu.
         CoopConfig? config = TryLoadCoopConfig(memory.ProcessId);
 
+        // The PvP arena module (docs/research/pvp-arenas.md): generated from the player's own
+        // game files. The installer normally put it there; an install that came any other way
+        // (an unpacked zip, the Linux script, a Proton prefix) gets it written now, but the game
+        // read its modules folder before this agent started, so it only counts as ready the NEXT
+        // time the game starts.
+        bool arenaReady = EnsureArenaModule(TryResolveInstallDirectory(memory.ProcessId));
+
         // Fingerprint this install so a mod mismatch with the peer is caught at join time.
         // Best-effort: a digest that could not be computed compares as "unchecked" and
         // never blocks a session.
@@ -124,6 +131,7 @@ internal static class AgentComposition
             CreditsPersonal = config?.CreditsPersonal ?? true,
             CorpseLootPersonal = config?.CorpseLootPersonal ?? false,
             Pvp = config?.Pvp ?? false,
+            PvpArena = config?.PvpArena ?? false,
             // OFF with no coop.ini too: NEEDS-LIVE, matching the plugin's own fallback.
             ClassGrantSync = config?.ClassGrantSync ?? true,
             // OFF with no coop.ini too: NEEDS-LIVE, purely local, no plugin key at all.
@@ -264,7 +272,8 @@ internal static class AgentComposition
             inventoryPersonal: agentSettings.InventoryPersonal,
             creditsPersonal: agentSettings.CreditsPersonal,
             corpseLootPersonal: agentSettings.CorpseLootPersonal,
-            pvp: agentSettings.Pvp);
+            pvp: agentSettings.Pvp,
+            pvpArena: agentSettings.PvpArena);
 
         SessionManager manager = new(bridge, agentSettings);
 
@@ -281,6 +290,7 @@ internal static class AgentComposition
             RequireIdenticalSave = options.RequireIdenticalSave,
             Password = sessionPassword.Length > 0 ? sessionPassword : fallbackPassword,
             PeerIdentity = peerIdentity,
+            PvpArenaReady = arenaReady,
             ItemContinuationPath = installDirectory is null ? null : Path.Combine(installDirectory, "coop.items.json"),
             ConnectTimeoutMs = config is { ConnectTimeoutMs: > 0 }
                 ? config.ConnectTimeoutMs
@@ -506,6 +516,36 @@ internal static class AgentComposition
     /// same lookup <see cref="TryLoadCoopConfig"/> does, named separately because it is also
     /// where per-install state that is not configuration lives (see <c>PeerIdentity</c>).
     /// </summary>
+    /// <summary>Whether the arena module was already in the install's modules folder, writing it
+    /// when it was not (and the game's own files can make one). Never throws: an install
+    /// that cannot have an arena simply has no arena fights.</summary>
+    private static bool EnsureArenaModule(string? installDirectory)
+    {
+        if (installDirectory is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            if (ArenaModuleInstaller.IsInstalled(installDirectory))
+            {
+                return true;
+            }
+
+            ArenaInstallResult result = ArenaModuleInstaller.Install(installDirectory);
+            Console.WriteLine(result.Outcome == ArenaInstallOutcome.Installed
+                ? "arena: wrote modules\\k_coop_arena.mod - restart the game once before arena fights can work"
+                : $"arena: not installed ({result.Message})");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Console.WriteLine($"arena: could not write the arena module ({ex.Message})");
+        }
+
+        return false;
+    }
+
     private static string? TryResolveInstallDirectory(int processId)
     {
         try

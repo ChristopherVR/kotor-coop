@@ -471,6 +471,7 @@ public sealed partial class CoopCommandDispatcher(
         [CoopCommandKind.AddClass] = c => SendCheat(new CheatRequest(CheatKinds.AddClass, Amount: c.Amount)),
         [CoopCommandKind.JediChoice] = _ => SendCheat(new CheatRequest(CheatKinds.JediChoice)),
         [CoopCommandKind.Duel] = DuelCommand,
+        [CoopCommandKind.DuelArena] = ArenaCommand,
         [CoopCommandKind.DuelAccept] = _ => DuelAnswerCommand(PvpOp.Accept),
         [CoopCommandKind.DuelDecline] = _ => DuelAnswerCommand(PvpOp.Decline),
         [CoopCommandKind.DuelYield] = _ => DuelAnswerCommand(PvpOp.Yield),

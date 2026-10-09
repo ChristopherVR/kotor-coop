@@ -751,6 +751,13 @@ public enum CoopCommandKind
     /// </summary>
     Duel,
 
+    /// <summary>
+    /// <c>arena &lt;name&gt;</c> challenges a player to a duel in the generated arena module: the
+    /// host takes the party there in one warp, the duel is fought, and one warp brings everyone
+    /// back. The name is in <see cref="CoopCommand.Address"/>. docs/research/pvp-plan.md.
+    /// </summary>
+    DuelArena,
+
     /// <summary><c>accept</c> — say yes to the duel challenge waiting for you.</summary>
     DuelAccept,
 
@@ -1317,6 +1324,7 @@ public static partial class ConsoleCommand
         new(["showgui"], ParseShowGui),
         new(["jedichoice"], ParseJediChoice),
         new(["duel"], ParseDuel),
+        new(["arena"], ParseArena),
         new(["accept"], ParseDuelAccept),
         new(["decline"], ParseDuelDecline),
         new(["yield"], ParseDuelYield),

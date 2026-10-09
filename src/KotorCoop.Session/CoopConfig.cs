@@ -348,10 +348,14 @@ public sealed record CoopConfig
     /// Host-authoritative. See CorpseLootPump.</summary>
     public bool CorpseLootPersonal { get; init; }
 
-    /// <summary>coop.ini <c>pvp</c> (`off`/`duel`). True ("duel") lets players challenge each
-    /// other to a consensual duel; false ("off", the default) refuses every challenge.
-    /// Host-authoritative. See PvpDuelRound and docs/research/pvp-plan.md.</summary>
+    /// <summary>coop.ini <c>pvp</c> (`off`/`duel`/`arena`). True ("duel" or "arena") lets players
+    /// challenge each other to a consensual duel; false ("off", the default) refuses every
+    /// challenge. Host-authoritative. See PvpDuelRound and docs/research/pvp-plan.md.</summary>
     public bool Pvp { get; init; }
+
+    /// <summary>coop.ini <c>pvp = arena</c>: duels, and also <c>arena &lt;name&gt;</c> fights in
+    /// the generated <c>k_coop_arena</c> module. Implies <see cref="Pvp"/>. Host-authoritative.</summary>
+    public bool PvpArena { get; init; }
 
     /// <summary>coop.ini <c>class_grant_sync</c> — relay a script's <c>AddMultiClass</c> (the
     /// Jedi class from Dorak's path choice) to every other player's character. OFF by default,
@@ -1113,7 +1117,10 @@ public sealed record CoopConfig
             CreditsPersonal = creditsPersonal,
             CorpseLootPersonal = string.Equals(
                 kv.GetValueOrDefault("corpse_loot"), "personal", StringComparison.OrdinalIgnoreCase),
-            Pvp = string.Equals(kv.GetValueOrDefault("pvp"), "duel", StringComparison.OrdinalIgnoreCase),
+            Pvp = kv.GetValueOrDefault("pvp") is { } pvpValue
+                && (string.Equals(pvpValue, "duel", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(pvpValue, "arena", StringComparison.OrdinalIgnoreCase)),
+            PvpArena = string.Equals(kv.GetValueOrDefault("pvp"), "arena", StringComparison.OrdinalIgnoreCase),
             ClassGrantSync = !kv.ContainsKey("class_grant_sync") || IsTruthy(kv.GetValueOrDefault("class_grant_sync")),
             FirstSaberColorSync = !kv.ContainsKey("first_saber_color_sync") || IsTruthy(kv.GetValueOrDefault("first_saber_color_sync")),
             DialogueFastJoin = !kv.ContainsKey("dialogue_fast_join")

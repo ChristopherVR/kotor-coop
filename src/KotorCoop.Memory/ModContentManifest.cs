@@ -43,6 +43,12 @@ public sealed record ModContentManifest(IReadOnlyList<ModContentFile> Files, IRe
                         || extension.Equals(".dll", StringComparison.OrdinalIgnoreCase)
                         || extension.Equals(".exe", StringComparison.OrdinalIgnoreCase)) continue;
                     if (folder == "modules" && extension.ToLowerInvariant() is not (".mod" or ".rim" or ".erf")) continue;
+                    // The PvP arena module is generated here from this player's own tar_m02ae
+                    // files (docs/research/pvp-arenas.md). Whether a peer HAS it is negotiated by
+                    // the arena handshake (PvpOp.AwareArena), and a modded cantina already shows
+                    // up as its own module file, so counting the generated file as well would only
+                    // raise "module files differ" over an install that simply has not run setup.
+                    if (folder == "modules" && Path.GetFileName(path).Equals("k_coop_arena.mod", StringComparison.OrdinalIgnoreCase)) continue;
                     string name = $"{folder}/{Path.GetFileName(path).ToLowerInvariant()}";
                     bool gameplay = folder == "modules" || GameplayExtensions.Contains(extension) || MediaExtensions.Contains(extension);
                     HashFile(path, name, gameplay);
