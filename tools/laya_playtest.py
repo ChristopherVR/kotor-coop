@@ -213,6 +213,7 @@ class Game:
                     item.update(self.placeable_state(body))
                 if kind == "door":
                     item.update(open=self.unpack(body + 0x2CC, "<B"), destination=self.exo(body + 0x390),
+                                static=bool(self.u32(body + 0x3C0)),  # CSWSDoor::LoadDoor's Static: scenery
                                 locked=bool(self.unpack(body + 0x2C4, "<B")))
                 objects.append(item)
         client = self.u32(self.u32(manager + 4) + 4)

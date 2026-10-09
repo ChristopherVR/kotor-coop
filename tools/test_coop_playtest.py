@@ -44,6 +44,13 @@ class Actions(unittest.TestCase):
         finally:
             h.kotor_lore = saved
 
+    def test_the_upgrade_screen_is_left_and_never_searched_into(self):
+        bench = {"id": 30, "kind": "placeable", "tag": "tar_workbench", "distance": 3,
+                 "position": [3, 0, 0], "open": False, "locked": False}
+        self.assertNotIn("search_30", h.actions_for("host", player(objects=[bench]), player(), {}))
+        inside = player(conversation=True, partner_tag="workbench")
+        self.assertEqual(list(h.actions_for("host", inside, player(), {})), ["close_menu"])
+
     def test_a_menu_over_a_conversation_is_closed_before_space_is_pressed(self):
         # 2026-10-08: a character sheet over a bark; Space under it toggled pause instead.
         me = player(conversation=True, menu_open=True, panels=["character", "menu"])

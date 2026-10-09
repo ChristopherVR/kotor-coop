@@ -29,6 +29,11 @@ namespace KotorCoop.Plugin;
 /// </summary>
 internal sealed unsafe partial class EnemyPresenceController(SharedBlockView block)
 {
+    /// <summary>creature+0xA60: the appearance.2da row on the server creature (the field the
+    /// owner publishes as <c>EnemyState.Appearance</c>, KotorGameBridge.OffAppearanceType).</summary>
+    private const int CreAppearanceRow = 0xA60;
+    private int _appearanceCollisionsLogged;
+
     /// <summary>The host's census ids seen alive this pass — handed to
     /// <see cref="ScriptDestroyGuardHook"/>.</summary>
     private readonly HashSet<uint> _aliveOwnerIds = [];
@@ -1257,6 +1262,30 @@ internal sealed unsafe partial class EnemyPresenceController(SharedBlockView blo
         if (creature == player)
         {
             return false;
+        }
+
+        // An unmapped owner id that resolves here can still name a DIFFERENT creature: the owner's
+        // script spawned it with an id this instance had already given to something of its own.
+        // The owner publishes the appearance row it reads at creature+0xA60; the same creature
+        // reads the same row here. A known, different row is a collision, handled like the
+        // phantom/stand-in collision above: build a stand-in rather than drive the wrong body.
+        // (2026-10-09: the host spawned end_reinforce3/4 and the joiner built a stand-in for one
+        // only; the other id was never materialised.)
+        if (mapped == 0 && enemy.Appearance != 0)
+        {
+            ushort localRow = *(ushort*)(creature + CreAppearanceRow);
+            if (localRow != 0 && localRow != enemy.Appearance)
+            {
+                if (_appearanceCollisionsLogged < 10)
+                {
+                    _appearanceCollisionsLogged++;
+                    PluginHost.Log($"enemy drive: owner 0x{enemy.ObjectId:X} (appearance {enemy.Appearance}) resolves here to a "
+                        + $"different creature (appearance {localRow}) - building a stand-in instead");
+                }
+
+                MaterialisedEnemies.TryMaterialise(enemy, now, knownCollision: true);
+                return false;
+            }
         }
 
         // A mirrored companion is party sync's to move, never ours.

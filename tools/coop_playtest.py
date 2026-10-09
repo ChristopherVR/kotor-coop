@@ -114,6 +114,8 @@ HUD_CHARACTER = "input click 625 20"          # the Character icon, top right of
 CHARACTER_AUTO_LEVEL = "input click 268 297"  # Character screen "Auto Level Up"; its confirm is a message box
 
 
+UPGRADE_STATIONS = re.compile(r"workbench|lab ?station|labstation", re.IGNORECASE)
+
 # Full-screen in-game menus (and the pause banner) that take the keyboard away from a
 # conversation underneath them.
 OVER_DIALOGUE = {"menu", "equip", "inventory", "character", "abilities", "messages", "journal", "map",
@@ -268,6 +270,9 @@ def actions_for(role, me, peer, tried, nav=None):
         # Space under it, and Space under a menu toggles PAUSE, which froze the bark.
         return menu_actions(panels, tried)
 
+    if me["conversation"] and UPGRADE_STATIONS.search(me.get("partner_tag") or ""):
+        return {"close_menu": {"description": "Leave the upgrade screen", "commands": ["closegui"]}}
+
     if me["conversation"]:
         if me["reply_count"]:
             texts = me.get("reply_texts") or []
@@ -347,7 +352,10 @@ def actions_for(role, me, peer, tried, nav=None):
         acts["level_up"] = {"description": "Level up if you can (Character screen, Auto Level Up); "
                             "some doors refuse a character with a level waiting",
                             "commands": [HUD_CHARACTER, CHARACTER_AUTO_LEVEL], "gap": 1.5, "level": who}
-    for o in [o for o in objs if o["kind"] == "placeable" and o["distance"] < 12 and fresh(o, 1)][:2]:
+    # A workbench or lab station opens the upgrade screen, which the harness cannot drive; it sat
+    # two minutes in one on Taris (2026-10-09).
+    for o in [o for o in objs if o["kind"] == "placeable" and o["distance"] < 12 and fresh(o, 1)
+              and not UPGRADE_STATIONS.search(f"{o.get('tag') or ''} {what_is(me['module'], o.get('tag'))}")][:2]:
         acts[f"search_{o['id']}"] = {"description": f"Search the {what_is(me['module'], o['tag'])} {o['distance']:.0f} m away",
                                      "commands": [f"useplaceable 0x{o['id']:X}"], "target": key(o)}
     for o in [o for o in living if role == "host" and o["faction"] != 1 and o["distance"] < 12 and tried.get("talk:" + key(o), 0) < 3
@@ -368,7 +376,8 @@ def actions_for(role, me, peer, tried, nav=None):
     # companion (the Endar Spire's lockdown door needs Trask).
     key = lambda o: f"{me['module']}:{o['id']}:{who}"
     fresh = lambda o, limit: tried.get(key(o), 0) < limit
-    doors = [o for o in objs if o["kind"] == "door" and fresh(o, 2) and not (o["open"] and not o["destination"])]
+    doors = [o for o in objs if o["kind"] == "door" and not o.get("static") and fresh(o, 2)
+             and not (o["open"] and not o["destination"])]
     # Open transitions first (the way on), then nearest; five, so dead-end story doors next to
     # the player do not crowd out the exit (Endar Spire: end_door10 behind four sealed doors).
     for o in sorted(doors, key=lambda o: (not (o["destination"] and o["open"]), o["distance"]))[:5]:
@@ -920,7 +929,8 @@ def door_differences(host, joiner):
     out = {}
     word = lambda o: f"{'open' if o['open'] else 'closed'}/{'locked' if o['locked'] else 'unlocked'}"
     for (tag, x, y), h, j in _state_pairs(host, joiner, "door",
-                                         lambda o: o.get("open") is not None and o.get("locked") is not None):
+                                         lambda o: o.get("open") is not None and o.get("locked") is not None
+                                         and not o.get("static")):  # scenery the mod does not sync
         if bool(h["open"]) != bool(j["open"]) or bool(h["locked"]) != bool(j["locked"]):
             out[f"{tag}@{x:g},{y:g}"] = (f"door {tag} at ({x:g}, {y:g}) in {host['module']}: host {word(h)}, joiner {word(j)}")
     return out

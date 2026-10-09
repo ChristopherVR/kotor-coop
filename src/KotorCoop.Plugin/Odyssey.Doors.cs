@@ -23,6 +23,12 @@ internal static unsafe partial class Odyssey
     private const int DoorLocked = 0x2C4;
 
     /// <summary>Resolves a door by object id, vtable-checked. 0 if absent or not a door.</summary>
+    /// <summary>CSWSDoor+0x3C0: the template's <c>Static</c> field (CSWSDoor::LoadDoor 0x0058A490
+    /// stores it), set on scenery doors the game never lets a player click.</summary>
+    private const int DoorStatic = 0x3C0;
+
+    public static bool DoorIsStatic(nint door) => door != 0 && *(int*)(door + DoorStatic) != 0;
+
     public static nint ResolveDoor(uint objectId)
     {
         nint door = ResolveServerObject(objectId);
