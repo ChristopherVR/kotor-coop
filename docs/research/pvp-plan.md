@@ -286,6 +286,16 @@ and a screenshot of each state.
    `0xCC8C` reads 1 with duels on and idle, 3 on the target while challenged, 5 on the challenger
    while waiting; all zero after `disconnect`.
 
+### Live results (duel panel, 2026-10-09, Manaan `manm28aa`, rig-held keys)
+
+| Item | Result | Evidence |
+| --- | --- | --- |
+| 3 list and challenge | PASS | joiner: `duel panel: list open (1 player(s))`, then Enter sent `duel Lanik` |
+| 4 accept by key | PASS | host: `Idle -> Incoming`, F11 sent `accept`, both `round 1 armed` |
+| 5 yield by key | PASS | joiner: F12 in the fight sent `yield`; host told "Malak yielded. You won."; both restored |
+| 8 block v101 | PASS | both attached at version 101 |
+| 1, 2, 6, 7 | not run | needs eyes on the screen (hint placement, retail key use) |
+
 ## Phases 3 and 4 as built (2026-10-09)
 
 The arena prototype and the shipped arena module, built as one piece (the prototype flow of phase 3 only
@@ -387,3 +397,20 @@ are `arena: ...` (agent), `duel: ...` and `arena: refused a save request` (plugi
 
 Items most likely to fail: 2 (renamed layout), 8 (the walk-in autosave), 5 (the `Teleport` cheat inside a module the
 agent knows nothing about), 9 (position restore after the module's entry spawn), 13 (rapid warps).
+
+### Live results (arena, 2026-10-09, Manaan `manm28aa`, `pvp = arena` on the host only)
+
+| Item | Result | Evidence |
+| --- | --- | --- |
+| 1 the file | PASS | both agents wrote `modules\k_coop_arena.mod` (13,280 bytes, identical) on first start |
+| 2 the module loads | PASS | `travel: moving to module 'k_coop_arena'` on both, no crash, the renamed area and layout load as built |
+| 4 one warp in | PASS | host: one `arena: Enter` request; joiner followed the announce in the same second |
+| 5 spawns | PASS | host at (186.6, 99.8), joiner at (213.6, 100.0), 27 m apart |
+| 6 countdown after arrival | PASS | countdown at +6 s after the move, live 5 s later |
+| 7 fight in the ring | PASS | the joiner's real queued attack took the host to 1/12: `challenger 120/120, target 1/12` |
+| 9 one warp back | PASS | `arena: Return`, both back in `manm28aa` at (131.1, 196.5), hp 12 and 120 as before; no W_GIT |
+| 8, 14 autosave | PASS | the only autosave written (leaving the arena) names `manm28aa` / Hrakert Station |
+| 3, 10-13 | not run | |
+
+The host's own agent also "followed" the joiner's echo announce back to `manm28aa` and the plugin
+held it (`this world came up 2782 ms ago`) and dropped it; no second load happened.
