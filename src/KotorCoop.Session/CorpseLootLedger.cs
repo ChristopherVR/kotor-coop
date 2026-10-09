@@ -41,11 +41,18 @@ public sealed class CorpseLootLedger
     /// idempotent container-loot apply.</summary>
     public IReadOnlyList<ContainerLootRemoval> Removals => _removals;
 
+    /// <summary>What a host seeds a dead stand-in with so the joiner's engine makes a body bag
+    /// to reconcile (shared mode sends no creature loot): one credit.</summary>
+    public static readonly MaterialisedLootItem Placeholder =
+        new("g_i_credits001", new ItemIdentity(1, 0, 0, 0, ItemIdentity.FlagKnown));
+
     private readonly HashSet<uint> _reconciled = [];
 
     public void Reset()
     {
         _reconciled.Clear();
+        _pendingExtras.Clear();
+        _firstSeen.Clear();
         _shadow.Clear();
         _removedForPeers.Clear();
         _ownTakes.Clear();
@@ -93,19 +100,33 @@ public sealed class CorpseLootLedger
     /// <summary>
     /// Joiner, once per bag: makes this game's body bag hold what the host's bag at that spot
     /// holds. The two engines fill their bags separately (a random treasure roll, a stand-in's
-    /// mirrored items, credits the engine adds on drop), so they start out different; after
-    /// this, takes keep them in step. Items this game has that the host's bag does not are
-    /// removed (and not counted as this player's takes); the host's items this bag lacks are
-    /// returned for the caller to give into it. A bag with no host bag near it yet waits.
+    /// placeholder, credits the engine adds on drop), so they start out different; after this,
+    /// takes keep them in step. The host's items this bag lacks are returned for the caller to
+    /// give into it; items it has that the host's does not are removed (never counted as this
+    /// player's takes) only once those gives have landed, so the bag is never emptied, which
+    /// would let the engine remove it. A bag with no host bag near it for
+    /// <see cref="OrphanMs"/> is a corpse the host left nothing on: it is emptied.
     /// </summary>
     public List<(uint BagId, BodyBagItemEntry Item)> Reconcile(
-        IReadOnlyList<BodyBagState> bags, IReadOnlyList<HostBodyBagPacket> hostBags)
+        IReadOnlyList<BodyBagState> bags, IReadOnlyList<HostBodyBagPacket> hostBags, long nowMs)
     {
         List<(uint, BodyBagItemEntry)> gives = [];
         foreach (BodyBagState bag in bags)
         {
             if (_reconciled.Contains(bag.Id))
             {
+                continue;
+            }
+
+            if (_pendingExtras.TryGetValue(bag.Id, out var pending))
+            {
+                if (bag.Items.Count >= pending.ExpectedCount || nowMs - pending.SinceMs >= GiveWaitMs)
+                {
+                    RemoveExtras(bag, pending.Extras);
+                    _pendingExtras.Remove(bag.Id);
+                    _reconciled.Add(bag.Id);
+                }
+
                 continue;
             }
 
@@ -123,11 +144,18 @@ public sealed class CorpseLootLedger
 
             if (host is null)
             {
+                long firstSeen = _firstSeen.TryGetValue(bag.Id, out long seen) ? seen : (_firstSeen[bag.Id] = nowMs);
+                if (nowMs - firstSeen >= OrphanMs)
+                {
+                    RemoveExtras(bag, [.. bag.Items.Select(i => i.ItemId)]);
+                    _reconciled.Add(bag.Id);
+                }
+
                 continue;
             }
 
-            _reconciled.Add(bag.Id);
             List<BodyBagItem> unmatchedHere = [.. bag.Items.Where(i => !_removedForPeers.Contains(i.ItemId))];
+            int bagGives = 0;
             foreach (BodyBagItemEntry wanted in host.Items)
             {
                 int match = unmatchedHere.FindIndex(i =>
@@ -139,17 +167,43 @@ public sealed class CorpseLootLedger
                 else
                 {
                     gives.Add((bag.Id, wanted));
+                    bagGives++;
                 }
             }
 
-            foreach (BodyBagItem extra in unmatchedHere)
+            List<uint> extras = [.. unmatchedHere.Select(i => i.ItemId)];
+            if (bagGives == 0 || extras.Count == 0)
             {
-                _removedForPeers.Add(extra.ItemId);
-                _removals.Add(new ContainerLootRemoval(bag.Id, extra.ItemId));
+                RemoveExtras(bag, extras);
+                _reconciled.Add(bag.Id);
+            }
+            else
+            {
+                _pendingExtras[bag.Id] = (extras, bag.Items.Count + bagGives, nowMs);
             }
         }
 
         return gives;
+    }
+
+    /// <summary>How long a bag's extras wait for the gives that refill it.</summary>
+    public const long GiveWaitMs = 10_000;
+
+    /// <summary>How long a bag with no host bag near it waits before it is emptied.</summary>
+    public const long OrphanMs = 10_000;
+
+    private readonly Dictionary<uint, (List<uint> Extras, int ExpectedCount, long SinceMs)> _pendingExtras = [];
+    private readonly Dictionary<uint, long> _firstSeen = [];
+
+    private void RemoveExtras(BodyBagState bag, IReadOnlyList<uint> extras)
+    {
+        foreach (uint itemId in extras)
+        {
+            if (bag.Items.Any(i => i.ItemId == itemId) && _removedForPeers.Add(itemId))
+            {
+                _removals.Add(new ContainerLootRemoval(bag.Id, itemId));
+            }
+        }
     }
 
     private void AddOwnTake(float x, float y, string resref)

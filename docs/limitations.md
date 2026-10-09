@@ -64,6 +64,7 @@ below do not close these newer reports. Public distribution is still gated by th
 | Companions following the party | **Works, with a catch** | Companions follow the host's game, and a companion left behind is gathered back automatically. A companion controlled by the other player moves exactly as that player's game says, not on its own. |
 | The map | **Works** | The map reveals around your partner as well as you. |
 | Chests and doors, and who opened them first | **Works** | If you both click the same chest, exactly one of you opens it. Loot goes to one of you, never both. |
+| Loot on enemy bodies | **Works** | One copy for the party: whatever one of you takes from a body is gone for the other too. Set `corpse_loot = personal` if you would rather each find your own copy. |
 | Doors and chests the story locks or closes again | **Works, with a catch** | Opening, closing, locking and unlocking reach the other player. The catch: a door or chest that the story itself locks again (for example in the Sith base) has not been watched yet. |
 | Using the `warp` console command quickly in a row | **Not supported** | Several `warp`s in a row can crash the game. That is a bug in the original game, and real doors do not do it. |
 

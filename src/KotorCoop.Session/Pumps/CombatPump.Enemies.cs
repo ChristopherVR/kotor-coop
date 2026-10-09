@@ -10,6 +10,10 @@ namespace KotorCoop.Session.Pumps;
 // docs/research/enemy-materialisation.md and docs/research/combat-when-apart.md.
 internal sealed partial class CombatPump
 {
+    /// <summary>coop.ini corpse_loot = shared, refreshed by the agent each pump; see the seed in
+    /// the death capture below.</summary>
+    public bool CorpseLootShared { get; set; }
+
     /// <summary>Owner-authority side only: enemy ids read as alive on the last clean census in
     /// <see cref="_deathCensusModule"/>. An id that drops out of this set with a
     /// <c>Dead</c> reading is a genuine death; one that drops out silently (out of census
@@ -368,6 +372,20 @@ internal sealed partial class CombatPump
 
         log($"materialised loot: {newlyDead.Count} enemy death(s) noticed this pass: "
             + string.Join(", ", newlyDead.Select(id => $"0x{id:X}")));
+
+        if (CorpseLootShared)
+        {
+            // Shared corpse loot: the joiner fills its body bag from the host's real bag
+            // (CorpseLootLedger.Reconcile). It only needs a bag to exist, and the engine makes
+            // one from a corpse that holds something, so the stand-in gets one placeholder
+            // credit; reconciling removes it unless the host's bag holds exactly that.
+            foreach (uint deadId in newlyDead)
+            {
+                session.PublishMaterialisedLoot(deadId, [CorpseLootLedger.Placeholder]);
+            }
+
+            return;
+        }
 
         Dictionary<uint, List<MaterialisedLootItem>> byOwner = [];
         foreach ((uint possessor, string resref, ItemIdentity identity) in

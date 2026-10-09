@@ -895,6 +895,9 @@ public sealed partial class CoopAgent
         {
             _lastCombatPumpMs = combatNowMs;
             PerfPhaseStart();
+            // Shared corpse loot needs a bridge that can see body bags to reconcile them.
+            _combatPump.CorpseLootShared = _bridge.SupportsContainerLoot
+                && !(_session.Overrides.CorpseLootPersonal ?? _settings.CorpseLootPersonal);
             _combatPump.PumpEnemies(local, visible, caps);
             _livenessPump.PumpCreatureLiveness(local, caps);
             _spawnTemplatePump.Pump(local);
