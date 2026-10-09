@@ -812,10 +812,10 @@ internal sealed unsafe partial class PhantomController
         _hostileToLocals[slot] = want;
         _factionKnown[slot] = true;
 
-        PluginHost.Log(want
-            ? kind == PhantomTargetRule.Kind.PvpHostile
-                ? $"phantom 0x{objectId:X}: joined the hostile faction (duel); the local player can attack it"
-                : kind == PhantomTargetRule.Kind.Friendly
+        PluginHost.Log(pvpHostile
+            ? $"phantom 0x{objectId:X}: joined the hostile faction (duel); the local player can attack it"
+            : want
+            ? kind == PhantomTargetRule.Kind.Friendly
                 ? $"phantom 0x{objectId:X}: joined the friendly faction (partner_buffs); local enemies can fight it and a friend-sphere cast reaches it"
                 : $"phantom 0x{objectId:X}: joined the player faction; local enemies can fight it"
             : stealthHold
