@@ -160,7 +160,10 @@ def walk_actions(me, nav, tried, closed_doors):
     if nav is None:
         return acts
     here = tuple(me["position"][:2])
-    for o in sorted(closed_doors, key=lambda o: o["distance"])[:4]:
+    # Doors into another area first: the story goes on through one, and a far exit lost to
+    # four nearer side doors kept a campaign circling Taris's Upper City (2026-10-09: the Lower
+    # City door tar02_lowdoor was never offered).
+    for o in sorted(closed_doors, key=lambda o: (not o.get("destination"), o["distance"]))[:4]:
         k = f"{me['module']}:{o['id']}:goto"
         if o["distance"] <= 4 or tried.get(k, 0) >= 2:
             continue
@@ -408,7 +411,10 @@ def actions_for(role, me, peer, tried, nav=None):
 
     if who == "pc":
         closed = [o for o in objs if o["kind"] == "door" and not o["open"]]
-        acts |= walk_actions(me, nav, tried, closed)
+        # An open exit beyond usedoor's reach is walked to as well.
+        far_exits = [o for o in objs if o["kind"] == "door" and o["open"] and o.get("destination")
+                     and o["distance"] > 95 and not o.get("static")]
+        acts |= walk_actions(me, nav, tried, closed + far_exits)
         acts |= npc_walk_actions(me, nav, tried, closed, living)
 
     # Only the host switches the controlled party member (party_switch_host_only). The HUD's
