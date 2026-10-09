@@ -222,7 +222,7 @@ internal static unsafe partial class PluginHost
         AppendFrameSection(line, "combat.suppression", ref _frameCombatSuppressionStats, frequency);
 
         // Engine guards that fired since start: a nonzero count is a scene worth a look.
-        line.Append("; engine guards: walkmesh -1 triangles ").Append(TriangleAdjacencyGuardHook.Count)
+        line.Append("; engine guards: walkmesh faces with no adjacency ").Append(TriangleAdjacencyGuardHook.Count)
             .Append(", padded path lists ").Append(WaypointGuardHook.PaddedCount);
 
         // Splits a long session's memory growth between the plugin and the engine: this is

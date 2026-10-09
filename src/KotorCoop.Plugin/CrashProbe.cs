@@ -485,6 +485,11 @@ internal static unsafe partial class CrashProbe
             + (missed > 0 ? $" ({missed} earlier not shown)" : string.Empty)
             + $"; image-range stack values:{trace}");
 
+        if (eip is >= TriangleAdjacencyGuardHook.FunctionLow and < TriangleAdjacencyGuardHook.FunctionHigh)
+        {
+            PluginHost.Log($"  in GetTriangleAdjacency: {TriangleAdjacencyGuardHook.LastCallSummary()}");
+        }
+
         // A fault in the path-update trim: name the creature and count the guard saw last.
         if (eip is >= WaypointGuardHook.FunctionLow and < WaypointGuardHook.FunctionHigh)
         {
