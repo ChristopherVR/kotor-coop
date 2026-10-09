@@ -204,7 +204,19 @@ check() {
     fi
     if [ -f "$game/coop.ini" ]; then report 0 "$game/coop.ini exists"; else report 1 "$game/coop.ini is MISSING"; fi
     if [ -f "$game/KotorCoop.Agent.exe" ]; then report 0 "$game/KotorCoop.Agent.exe is present"; else report 1 "$game/KotorCoop.Agent.exe is MISSING"; fi
+    # The PvP arena (modules/k_coop_arena.mod) is a NOTE when absent, never a FAIL, same as the
+    # Windows installer: duels work without it. The Windows installer generates it from the
+    # player's own Taris cantina files; this script cannot run that generator natively, so the
+    # agent writes it the first time it starts inside the prefix (AgentComposition.EnsureArenaModule)
+    # and the game needs one restart before arena fights work.
+    arena="$(arena_module)"
+    if [ -n "$arena" ]; then report 0 "$arena is present (arena fights available)"
+    else echo "NOTE: the arena module (modules/k_coop_arena.mod) is not installed yet - the co-op helper makes it from your own game files the first time the game starts; restart the game once after that. Duels work without it, arena fights do not."; fi
     return $ok
+}
+# The arena module wherever the game folder spells its modules directory ("modules", "Modules").
+arena_module() {
+    find "$game" -maxdepth 2 -type f -iname k_coop_arena.mod -ipath '*/modules/*' 2>/dev/null | head -n 1
 }
 chain_entries() {
     [ -f "$chain_file" ] || return 0
@@ -234,6 +246,8 @@ uninstall() {
     for f in "$game"/Override/k_coop_*; do
         [ -e "$f" ] && { rm -f "$f"; echo "removed override $f"; }
     done
+    arena="$(arena_module)"
+    [ -n "$arena" ] && { rm -f "$arena"; echo "removed arena module $arena"; }
     remove_mod_profiles
     restore_enable_cheats
     report_left_in_place
@@ -419,6 +433,13 @@ if [ -d "$package/Override" ]; then
         cp -f "$f" "$game/Override/$(basename "$f")"; n=$((n + 1))
     done
     echo "installed override assets -> $game/Override ($n files)"
+fi
+
+# The PvP arena module is generated from the player's own game files by the agent
+# (PackageInstaller.InstallArena on Windows). Nothing to copy here; the first start of the helper
+# in the prefix writes it (check says so).
+if [ -z "$(arena_module)" ]; then
+    echo "arena module: not installed yet - the co-op helper generates it from your own game files the first time the game starts"
 fi
 
 if [ -f "$game/coop.ini" ]; then

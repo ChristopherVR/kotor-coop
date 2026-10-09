@@ -18,6 +18,32 @@ internal static unsafe partial class PluginHost
 
     private static int _pvpSavesRefused;
 
+    private static int _arenaSavesRefused;
+
+    private const string ArenaModuleName = "k_coop_arena";
+
+    /// <summary>True when the engine's current module is the generated PvP arena. Read on the
+    /// game's own thread from inside the save detour; an unreadable name is "no".</summary>
+    private static bool InArenaModule()
+    {
+        byte* name = stackalloc byte[SharedBlock.ModuleNameLength];
+        int length = Odyssey.ReadCurrentModuleName(name, SharedBlock.ModuleNameLength);
+        if (length != ArenaModuleName.Length)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < length; i++)
+        {
+            if (char.ToLowerInvariant((char)name[i]) != ArenaModuleName[i])
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     /// <summary>The held request's arguments, replaced by a coalesced one (the latest wins).</summary>
     private static SaveFlushHook.Capture _heldSave;
 
@@ -98,6 +124,22 @@ internal static unsafe partial class PluginHost
             if (_pvpSavesRefused++ < 5)
             {
                 Log($"duel: refused a save request (slot {number}) while the duel pin is up");
+            }
+
+            return false;
+        }
+
+        // The PvP arena module (docs/research/pvp-arenas.md) must never be baked into a campaign
+        // save: loaded from it, the save would put the player in a room with no way out. The pin is
+        // not up yet when the party arrives (it starts with the countdown), so the module-enter
+        // autosave of the walk IN is the one this catches. Swallowed, not held, for the same reason
+        // as the pin above. NEEDS-LIVE: whether the engine already reports the arena as the current
+        // module at the moment its enter-autosave is requested.
+        if (InArenaModule())
+        {
+            if (_arenaSavesRefused++ < 5)
+            {
+                Log($"arena: refused a save request (slot {number}) inside the arena module");
             }
 
             return false;
