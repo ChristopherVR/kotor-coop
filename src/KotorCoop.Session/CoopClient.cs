@@ -300,6 +300,8 @@ public sealed partial class CoopClient : ICoopSession
             [PacketType.StoreAck] = HandleStoreAck,
             [PacketType.CreatureLiveness] = HandleCreatureLiveness,
             [PacketType.SpawnTemplates] = HandleSpawnTemplates,
+            [PacketType.CorpseTakes] = HandleCorpseTakes,
+            [PacketType.HostBodyBag] = HandleHostBodyBag,
             [PacketType.PartyPoolSnapshotV2] = HandlePartyPoolSnapshotV2,
             [PacketType.PartyPoolIntentAckV2] = HandlePartyPoolIntentAckV2,
             [PacketType.StoreSnapshotV2] = HandleStoreSnapshotV2,
@@ -495,6 +497,7 @@ public sealed partial class CoopClient : ICoopSession
         FlushClassGrants(now);
         FlushPlacedMineIntents(now);
         FlushEnemyEffects(now);
+        FlushCorpseTakes(now);
 
         if (now - _lastPingMs >= PingIntervalMs)
         {

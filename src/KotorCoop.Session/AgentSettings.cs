@@ -177,6 +177,11 @@ public sealed record AgentSettings
     /// </summary>
     public bool CreditsPersonal { get; init; } = true;
 
+    /// <summary>coop.ini <c>corpse_loot</c>: false ("shared", the default) makes an enemy
+    /// corpse's loot one copy for the party (<see cref="Pumps.CorpseLootPump"/>); true
+    /// ("personal") lets each player loot their own copy. HOST-AUTHORITATIVE.</summary>
+    public bool CorpseLootPersonal { get; init; }
+
     /// <summary>
     /// Relay a class a script adds to one player's character (Dorak's Jedi path choice,
     /// <c>AddMultiClass</c>) to every other player's character through the same engine

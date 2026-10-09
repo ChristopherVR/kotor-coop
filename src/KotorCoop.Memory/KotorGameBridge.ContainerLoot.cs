@@ -16,6 +16,12 @@ public sealed partial class KotorGameBridge
     /// <summary>CSWSPlaceable + this = CItemRepository* (0 when the placeable has no inventory).</summary>
     private const int PlaceableRepositoryField = 0x36C;
 
+    /// <summary>CSWSPlaceable + this = is_body_bag (docs/research/placeables-containers.md §1).
+    /// VERIFIED live 2026-10-09: 1 on a dead Sith's "body bag", 0 on lockers and scenery.</summary>
+    private const int PlaceableIsBodyBag = 0x440;
+
+    private const int ObjectPositionX = 0x90;
+
     /// <summary>CItemRepository + this = flat array of item OBJECT IDs (DWORDs, not pointers).</summary>
     private const int RepositoryItemArray = 0x0C;
 
@@ -104,6 +110,15 @@ public sealed partial class KotorGameBridge
             // A container each engine fills with its own party's items (the Leviathan party
             // locker) is not a shared chest: equal ids on the two sides name different items.
             if (ContainerLootExemptionRule.IsExempt(module, ReadExoString(address + OffTag)))
+            {
+                continue;
+            }
+
+            // A body bag is made separately by each engine when a creature dies, so equal ids
+            // on two sides name different bags (and different items): CorpseLootPump pairs them
+            // by position instead. Through here a joiner's take could even remove an unrelated
+            // host item that happens to share both ids.
+            if (_memory.TryReadInt32(address + PlaceableIsBodyBag, out int isBodyBag) && isBodyBag != 0)
             {
                 continue;
             }
@@ -282,4 +297,40 @@ public sealed partial class KotorGameBridge
         return true;
     }
 
+
+    public List<BodyBagState> ReadBodyBags()
+    {
+        List<BodyBagState> bags = [];
+        bool objectArrayResolved = EngineGlobals.TryGetServerObjectArray(_memory, out nint objectArray);
+        foreach (nint address in EngineGlobals.EnumerateServerObjects(_memory))
+        {
+            if (!_memory.TryReadUInt32(address, out uint vtable) || vtable != PlaceableVtable
+                || !_memory.TryReadInt32(address + PlaceableIsBodyBag, out int isBodyBag) || isBodyBag == 0
+                || !_memory.TryReadUInt32(address + OffObjectId, out uint bagId)
+                || !_memory.TryRead(address + ObjectPositionX, out float x)
+                || !_memory.TryRead(address + ObjectPositionX + 4, out float y)
+                || !_memory.TryReadPointer(address + PlaceableRepositoryField, out nint repo) || repo == 0
+                || !_memory.TryReadInt32(repo + RepositoryItemCount, out int count) || count is < 0 or > 256
+                || !_memory.TryReadPointer(repo + RepositoryItemArray, out nint ids) || (count > 0 && ids == 0))
+            {
+                continue;
+            }
+
+            List<BodyBagItem> items = [];
+            for (int i = 0; i < count; i++)
+            {
+                if (_memory.TryReadUInt32(ids + (nint)(i * 4), out uint itemId) && itemId is > 0 and < 0x7F000000
+                    && objectArrayResolved
+                    && TryReadLiveItemMetadata(itemId, objectArray, out _, out string resref, out ItemIdentity identity, out bool deleting)
+                    && !deleting && resref.Length > 0)
+                {
+                    items.Add(new BodyBagItem(itemId, resref, (ushort)Math.Max(1, (int)identity.StackSize)));
+                }
+            }
+
+            bags.Add(new BodyBagState(bagId, x, y, items));
+        }
+
+        return bags;
+    }
 }

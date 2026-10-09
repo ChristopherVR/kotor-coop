@@ -994,7 +994,8 @@ public sealed partial class CoopAgent
         // past it. See docs/research/dialogue-consequences.md's script-item-sync section for
         // the live evidence (Controls 2/3).
         PerfPhaseStart();
-        _lootPump.PumpContainerLoot(caps, local.Module);
+        _lootPump.PumpContainerLoot(caps, local.Module,
+            _session.Overrides.CorpseLootPersonal ?? _settings.CorpseLootPersonal);
         PerfPhaseEnd(PumpPhase.ContainerLoot);
 
         // Script-item grants: called every tick, same as the two fast-path calls above, so it

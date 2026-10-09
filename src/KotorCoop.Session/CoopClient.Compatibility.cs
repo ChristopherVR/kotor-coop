@@ -190,7 +190,8 @@ public sealed partial class CoopClient
             StoreStock: AdoptSetting("store_stock"),
             StorePrices: AdoptSetting("store_prices"),
             InventoryPersonal: Adopt("inventory_mode"),
-            CreditsPersonal: Adopt("credits_mode"));
+            CreditsPersonal: Adopt("credits_mode"),
+            CorpseLootPersonal: Adopt("corpse_loot"));
     }
 
     private void HandleWorldDigest(IPEndPoint from, ReadOnlySpan<byte> span, long now)

@@ -108,6 +108,12 @@ inventory_mode = personal
 ;   shared    one shared purse (the older behaviour).
 credits_mode = personal
 
+; What happens to an enemy's loot when you both reach the body. The host's choice applies.
+;   shared    the default - one copy for the party: whatever one of you takes is gone for
+;             the other too, the same as a chest.
+;   personal  each of you finds your own copy of the loot.
+corpse_loot = shared
+
 ; ------------------------------------------------------------------------------------------
 ; Screen
 ; ------------------------------------------------------------------------------------------

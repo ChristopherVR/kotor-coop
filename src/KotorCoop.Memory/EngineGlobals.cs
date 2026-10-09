@@ -140,6 +140,50 @@ public static class EngineGlobals
         && (nint)liveAddress == candidate;
 
     /// <summary>
+    /// Every live server object's address, straight from the engine's own id table: one 32 KB
+    /// read of the 8192-bucket head array, then each (short) chain. Unlike a vtable memory scan
+    /// it sees an object the instant the engine registers it, which is what a freshly dropped
+    /// body bag needs (CorpseLootPump). Empty when the array cannot be read.
+    /// </summary>
+    public static List<nint> EnumerateServerObjects(ProcessMemory memory)
+    {
+        List<nint> objects = [];
+        if (!TryGetServerObjectArray(memory, out nint objectArray)
+            || !memory.TryReadUInt32(objectArray + ObjectArrayTree, out uint tree) || tree == 0)
+        {
+            return objects;
+        }
+
+        byte[] heads = new byte[8192 * 4];
+        if (!memory.TryRead((nint)tree, heads))
+        {
+            return objects;
+        }
+
+        for (int bucket = 0; bucket < 8192; bucket++)
+        {
+            uint entry = BitConverter.ToUInt32(heads, bucket * 4);
+            for (int walked = 0; entry != 0 && walked < MaxChainWalk; walked++)
+            {
+                if (!memory.TryReadUInt32((nint)entry + EntryObject, out uint obj)
+                    || !memory.TryReadUInt32((nint)entry + EntryNext, out uint next))
+                {
+                    break;
+                }
+
+                if (obj != 0)
+                {
+                    objects.Add((nint)obj);
+                }
+
+                entry = next;
+            }
+        }
+
+        return objects;
+    }
+
+    /// <summary>
     /// The bucket arithmetic and chain walk on their own, over any reader.
     ///
     /// Split out so the transcription can be ASSERTED rather than described: it is the one

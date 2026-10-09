@@ -802,6 +802,10 @@ public static class CheatKinds
     /// "blank slot = yourself" default.
     /// </summary>
     public const uint LocalPlayerTarget = 0x7FFFFFFF;
+
+    /// <summary>Mirrors <c>SharedBlock.CheatTargetLocalObjectFlag</c>: a GiveLoot target with this
+    /// bit names a local object directly (shared corpse loot fills a body bag).</summary>
+    public const uint LocalObjectTargetFlag = 0x40000000;
 }
 
 /// <summary>

@@ -60,6 +60,8 @@ public class PacketHandlerRegistryTests
         // Host-start conversation relay (docs/research/dialogue-sync.md): a client's refused
         // host-only conversation start, asked of the host instead.
         PacketType.HostConversationRequest,
+        // Shared corpse loot: a client's body-bag takes reach the host.
+        PacketType.CorpseTakes,
         PacketType.None,
     ];
 
@@ -82,6 +84,8 @@ public class PacketHandlerRegistryTests
         PacketType.CreatureLiveness, PacketType.Pong,
         // Host spawns only: the host's script-spawned creature blueprints.
         PacketType.SpawnTemplates,
+        // Shared corpse loot: every other player's takes, relayed by the host, and the host's bags.
+        PacketType.CorpseTakes, PacketType.HostBodyBag,
         PacketType.PartyPoolOp, PacketType.PartyPoolAck,
         PacketType.StoreOp, PacketType.StoreAck,
         // v2 (host-authoritative absolute snapshot + client intents, docs/research/

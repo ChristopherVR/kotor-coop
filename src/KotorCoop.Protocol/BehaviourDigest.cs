@@ -153,6 +153,13 @@ public enum BehaviourFlags : uint
     /// different mode would either starve the host's merge of its own contribution or have its
     /// own purse silently overwritten by a merge it opted out of.</summary>
     CreditsPersonal = 1 << 20,
+
+    /// <summary>coop.ini <c>corpse_loot</c> (shared/personal). Shared (the default, bit clear):
+    /// an enemy corpse holds one copy of its loot for the whole party, so a take on either side
+    /// removes the item from the other side's body bag too (CorpseLootPump). Personal: each
+    /// player loots their own copy. HOST-AUTHORITATIVE: both sides must agree whether takes
+    /// travel, or one side's bag empties while the other keeps the items.</summary>
+    CorpseLootPersonal = 1 << 21,
 }
 
 /// <summary>
@@ -279,7 +286,8 @@ public readonly record struct BehaviourDigest(
         int storePrices = PlayerCountScalingRule.Vanilla,
         bool localVarSync = true,
         bool inventoryPersonal = true,
-        bool creditsPersonal = true)
+        bool creditsPersonal = true,
+        bool corpseLootPersonal = false)
     {
         uint flags = 0;
         void Set(bool on, BehaviourFlags bit)
@@ -311,6 +319,7 @@ public readonly record struct BehaviourDigest(
         Set(localVarSync, BehaviourFlags.LocalVarSync);
         Set(inventoryPersonal, BehaviourFlags.InventoryPersonal);
         Set(creditsPersonal, BehaviourFlags.CreditsPersonal);
+        Set(corpseLootPersonal, BehaviourFlags.CorpseLootPersonal);
 
         return FromFields(flags, interpolationMs, followLead, enemyHealth, enemyDamage, xpRate, storeStock, storePrices);
     }

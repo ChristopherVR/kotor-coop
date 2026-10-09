@@ -97,6 +97,7 @@ fallback (they agree here — `CoopIniExampleDocSyncTests` checks it).
 | `control_return` | ON | return control to your own character the moment you connect | [control-return.md](research/control-return.md) |
 | `control_return_diag_only` | OFF | rig-only: keep `control_return`'s detection/logging live but skip the actual hand-back, so a caught race stays latched instead of self-correcting | [dialogue-sync.md](research/dialogue-sync.md) |
 | `inventory_mode` | `personal` | `personal` (default): your backpack (pickups, purchases, sales, drops, crafting) is your own — only quest/plot items keep appearing for both players, so the story stays in sync. `shared`: today's older behaviour, every item mirrors to your partner. Host-authoritative — a client adopts whichever the host is running | [personal-inventory.md](research/personal-inventory.md) |
+| `corpse_loot` | `shared` | `shared` (default): an enemy's loot is one copy for the party, so whatever one of you takes disappears from the other's body too, like a chest; `personal`: each of you loots your own copy. Host-authoritative | [container-sync.md](research/container-sync.md) |
 | `credits_mode` | `personal` | `personal` (default): your credits are your own to earn and spend; `shared`: one party purse, today's older behaviour. Left unset, follows `inventory_mode`. Host-authoritative | [personal-inventory.md](research/personal-inventory.md) |
 
 ### Screen
