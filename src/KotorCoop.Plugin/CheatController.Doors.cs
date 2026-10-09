@@ -559,6 +559,14 @@ internal sealed unsafe partial class CheatController
             return false;
         }
 
+        // A static door is scenery the game never lets a player click; opening it here opened it on
+        // this instance only (door sync rightly ignores scenery), 2026-10-09 TarisDoor3.
+        if (Odyssey.DoorIsStatic(door))
+        {
+            Answer(SharedBlock.CheatStatusRefused, $"door {what} is static scenery; nothing opens it");
+            return true;
+        }
+
         float distance = player != 0
             ? Distance(Odyssey.GetPosition(player), Odyssey.GetPosition(door))
             : 0f;

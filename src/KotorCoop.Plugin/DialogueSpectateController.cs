@@ -817,7 +817,11 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
                 LogFew("dialogue: the engine started the same conversation here; adopting it to follow");
                 break;
             case DialogueFollowNote.Yielding:
-                LogFew("dialogue: a peer won the conversation token; closing our own to follow");
+                // Both sides named, so a join that loops (open, yield, re-open) shows what differed:
+                // a multi-speaker comm conversation reports the speaker of the moment as its partner.
+                LogFew("dialogue: a peer won the conversation token; closing our own to follow "
+                    + $"(ours '{Ascii(block.LocalDialoguePartnerTag, 32)}'/'{Ascii(block.LocalDialogueResref, 16)}', "
+                    + $"peer's '{Ascii(block.RemoteDialoguePartnerTag, 32)}'/'{Ascii(block.RemoteDialogueResref, 16)}')");
                 break;
             case DialogueFollowNote.ForcingUiShut:
                 LogFew("dialogue: our conversation would not close after the server's turns; forcing the UI shut");
@@ -894,6 +898,17 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
     /// tag means nobody has published who they are talking to yet, and treating that as a
     /// match would adopt an unrelated conversation as the peer's.
     /// </summary>
+    private static string Ascii(byte* text, int max)
+    {
+        int n = 0;
+        while (n < max && text[n] != 0)
+        {
+            n++;
+        }
+
+        return System.Text.Encoding.ASCII.GetString(text, n);
+    }
+
     private static bool SameTag(byte* a, byte* b)
     {
         ReadOnlySpan<byte> left = TagSpan(a);
