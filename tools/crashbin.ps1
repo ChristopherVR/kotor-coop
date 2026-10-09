@@ -26,7 +26,8 @@ $ErrorActionPreference = 'Stop'
 
 $RecStack = 0x18
 $StackWords = 64
-$RecordSize = $RecStack + ($StackWords * 4)
+$RecRegs = $RecStack + ($StackWords * 4)
+$RecordSize = $RecRegs + (7 * 4)   # eax ebx ecx edx esi edi ebp after the stack slice (2026-10-09)
 $ImageLow = 0x400000
 $ImageHigh = 0x8C3000
 
@@ -96,6 +97,9 @@ for ($r = 0; $r -lt $recordCount; $r++) {
     ''
     "record $r : serial $serial"
     ("  {0} (0x{1:X8}) at 0x{2:X}, eip 0x{3:X}{4}, esp 0x{5:X}" -f $name, $code, $address, $eip, $ours, $esp)
+    $regs = @('eax','ebx','ecx','edx','esi','edi','ebp')
+    $regText = (0..6 | ForEach-Object { '{0} 0x{1:X}' -f $regs[$_], (U32 ($base + $RecRegs + ($_ * 4))) }) -join ' '
+    "  registers: $regText"
     "  image-range stack values:$traceText"
 }
 
