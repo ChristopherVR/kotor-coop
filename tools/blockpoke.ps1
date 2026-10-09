@@ -34,7 +34,7 @@
 param(
     [string]$ProcessName = 'swkotor',
     [int]$ProcId = 0,
-    [Parameter(Position = 0)][ValidateSet('state', 'travel', 'announce', 'journal', 'pause', 'browser', 'death', 'hitphantom', 'combat', 'ledger', 'threat', 'talk', 'walk', 'dialogue', 'attack', 'encounters', 'triggers', 'cheat', 'console', 'item', 'chargen', 'menuload')]
+    [Parameter(Position = 0)][ValidateSet('state', 'travel', 'announce', 'journal', 'pause', 'browser', 'death', 'hitphantom', 'combat', 'ledger', 'threat', 'talk', 'walk', 'dialogue', 'attack', 'encounters', 'triggers', 'cheat', 'console', 'item', 'chargen', 'menuload', 'doors')]
     [string]$Command = 'state',
     [Parameter(Position = 1)][string]$Arg1 = '',
     [Parameter(Position = 2)][int]$Arg2 = 0
@@ -121,6 +121,16 @@ switch ($Command) {
         "  pause:   desired {0}  applied {1}" -f (U32 0x96C), (U32 0x970)
         "  journal: serial {0}  applied {1}  status {2}  tag '{3}' state {4}" -f `
             (U32 0x974), (U32 0x99C), (U32 0x9A0), (Ascii 0x978 32), (U32 0x998)
+    }
+    'doors' {
+        # The agent's desired door table for this module (SharedBlock.World: count 0x690,
+        # 32 slots of 8 bytes at 0x698: id, open state, unlocked, apply sequence).
+        $count = U32 0x690
+        "  desired doors: $count"
+        for ($i = 0; $i -lt [Math]::Min($count, 32); $i++) {
+            $b = [BP]::Read($h, $block + 0x698 + $i * 8, 8)
+            "  slot {0,2}: door 0x{1:X}  open {2}  unlocked {3}  applied seq {4}" -f $i, [BitConverter]::ToUInt32($b, 0), $b[4], $b[5], $b[7]
+        }
     }
     'menuload' {
         if ($Arg1 -ne 'read') {
