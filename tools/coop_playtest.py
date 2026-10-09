@@ -155,6 +155,20 @@ def menu_actions(panels, tried):
     return {"close_menu": {"description": f"Close the open menu ({', '.join(panels)})", "commands": ["closegui"]}}
 
 
+# Story gates a first-time player learns from the scene but the policy cannot see (the harness
+# tests co-op, not puzzle solving). Read from the game data: the Lower City elevator guard's
+# script (k_ptar_strgrd_en) passes a PC holding ptar_sithpapers or a party member wearing
+# ptar_sitharmor, and tar02_sithcomm in Upper City North carries the armor.
+_TARIS_UPPER = ("To reach the Lower City (the elevator guarded by a Sith in Upper City North, tar_m02ab) you "
+                "need Sith papers or Sith armor. The Sith commander harassing the alien in tar_m02ad carries "
+                "Sith armor: fight him and his troopers, search the body, equip the armor, then talk to the "
+                "elevator guard. Take Carth into the party when the party screen offers him.")
+CAMPAIGN_HINTS = {
+    "tar_m02af": "Talk to Carth when he speaks to you; take him into the party when the party screen opens.",
+    "tar_m02aa": _TARIS_UPPER, "tar_m02ab": _TARIS_UPPER, "tar_m02ac": _TARIS_UPPER, "tar_m02ad": _TARIS_UPPER,
+}
+
+
 def walk_actions(me, nav, tried, closed_doors):
     """Walking a player would do, on walkmesh routes that avoid closed doors: up to a closed
     door that is out of reach, and into rooms not visited yet."""
@@ -570,8 +584,9 @@ def build_prompt(role, me, peer, acts, plan="", history=(), image=None):
         speaking = who_is(module, me.get("partner_tag") or "")
         where += f" In a conversation with {speaking}; their last line: {(me.get('dialogue_line') or '').strip()[:200]!r}."
     for width in (350, 200, 120):
+        hint = CAMPAIGN_HINTS.get(module, "")
         parts = [CLAUDE_GOAL, "", "Journal (active quests, current entry):", *journal_lines(me.get("journal"), width=width), "",
-                 where, "", f"Your plan from last time: {plan or '(none yet)'}", "",
+                 where, "", *([f"Walkthrough hint for this area: {hint}", ""] if hint else []), f"Your plan from last time: {plan or '(none yet)'}", "",
                  "Recent decisions, oldest first:", *(history or ["(none yet)"]), "",
                  "Options (key: description):", *(f"{k}: {a['description']}" for k, a in acts.items()), ""]
         if image:
