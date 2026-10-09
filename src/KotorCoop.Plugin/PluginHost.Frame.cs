@@ -261,6 +261,7 @@ internal static unsafe partial class PluginHost
         // callbacks. Measuring it here brackets exactly the client tick, the server tick and
         // the present. See docs/research/cinematics.md.
         CinematicWatch.OnFrame(_view);
+        AnnounceMovieTransitionEarly();
 
         // Next, and unconditionally: whether the agent is even still talking to us has
         // nothing to do with menu/world state, and both failure modes it reports can happen
@@ -406,6 +407,36 @@ internal static unsafe partial class PluginHost
             Log($"the plugin worker thread is running again after {(now - _workerStalledSinceMs) / 1000.0:F1}s");
             _workerStalledSinceMs = 0;
         }
+    }
+
+    /// <summary>
+    /// A scripted move that queued a movie (a conversation's StartNewModule with a cutscene,
+    /// Manaan's submersible to manm26ae with 23b) blocks the main thread from the very next
+    /// tick until the new world is up: the SwapBuffers hook never runs in between, so its
+    /// move-to-module edge announced 15 s late and the joiner's agent pulled it back to the host
+    /// before the host heard where it went (2026-10-09, W_GIT in manm26ae). This main-loop hook
+    /// is the one that sees the queue, so it announces here, with the same guards as the
+    /// SwapBuffers path, and marks the edge seen so that path does not announce it again.
+    /// </summary>
+    private static void AnnounceMovieTransitionEarly()
+    {
+        if (CinematicWatch.QueuedMovieCount == 0
+            || _moveToModulePendingSeen
+            || !_transitionAnnounceScriptedEnabled
+            || _doorTransitionAnnouncedThisEpoch
+            || (_travel?.OwnWarpPending ?? false)
+            || _view is not { } view)
+        {
+            return;
+        }
+
+        if (ModuleMoveRequestHook.Serial == _observedModuleMoveSerial && !Odyssey.IsMoveToModulePending())
+        {
+            return;
+        }
+
+        _moveToModulePendingSeen = true;
+        TransitionAnnounceWatch.OnScriptedTransitionBegan(view);
     }
 
     private static void OnFrame() => OnFrame(countFrameInterval: true);
