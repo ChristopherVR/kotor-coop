@@ -815,4 +815,125 @@ public sealed class PackageInstallerTests : IDisposable
 
         Assert.Equal("[Game Options]\r\nEnableCheats=1\r\n", File.ReadAllText(Path.Combine(game, "swkotor.ini")));
     }
+
+    // ---- the generated PvP arena module -------------------------------------------------------
+
+    [Fact]
+    public void InstallGeneratesTheArenaModuleFromTheGamesOwnCantinaAndCheckSeesIt()
+    {
+        string root = NewRoot();
+        string package = CreatePackage(root);
+        string game = CreateGameDirectory(root);
+        ArenaTestGame.WriteCantina(game);
+
+        Assert.True(PackageInstaller.Install(new PackageInstaller.Options(package, game), Log));
+
+        string module = Path.Combine(game, "modules", "k_coop_arena.mod");
+        Assert.True(File.Exists(module));
+        Assert.Contains(_log, line => line.StartsWith("installed arena module ->", StringComparison.Ordinal));
+        Assert.Contains(_log, line => line.StartsWith("PASS:", StringComparison.Ordinal) && line.Contains("arena fights available"));
+
+        // The package carries none of it.
+        Assert.Empty(Directory.GetFiles(package, "*.mod", SearchOption.AllDirectories));
+
+        _log.Clear();
+        Assert.True(PackageInstaller.Check(game, Log));
+        Assert.Contains(_log, line => line.Contains("k_coop_arena.mod is present", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ReinstallingLeavesTheArenaModuleAloneAndASecondGameGetsIdenticalBytes()
+    {
+        string root = NewRoot();
+        string package = CreatePackage(root);
+        string first = CreateGameDirectory(root, "game1");
+        string second = CreateGameDirectory(root, "game2");
+        ArenaTestGame.WriteCantina(first);
+        ArenaTestGame.WriteCantina(second);
+
+        Assert.True(PackageInstaller.Install(new PackageInstaller.Options(package, first), Log));
+        Assert.True(PackageInstaller.Install(new PackageInstaller.Options(package, second), Log));
+        DateTime written = File.GetLastWriteTimeUtc(Path.Combine(first, "modules", "k_coop_arena.mod"));
+        _log.Clear();
+
+        Assert.True(PackageInstaller.Install(new PackageInstaller.Options(package, first), Log));
+
+        Assert.Contains(_log, line => line.StartsWith("arena module already current", StringComparison.Ordinal));
+        Assert.Equal(written, File.GetLastWriteTimeUtc(Path.Combine(first, "modules", "k_coop_arena.mod")));
+        Assert.Equal(
+            File.ReadAllBytes(Path.Combine(first, "modules", "k_coop_arena.mod")),
+            File.ReadAllBytes(Path.Combine(second, "modules", "k_coop_arena.mod")));
+    }
+
+    [Fact]
+    public void AGameWithoutTheCantinaStillInstallsAndSaysWhyThereIsNoArena()
+    {
+        string root = NewRoot();
+        string package = CreatePackage(root);
+        string game = CreateGameDirectory(root);
+
+        Assert.True(PackageInstaller.Install(new PackageInstaller.Options(package, game), Log));
+
+        Assert.False(File.Exists(Path.Combine(game, "modules", "k_coop_arena.mod")));
+        Assert.Contains(_log, line => line.StartsWith("arena module not installed", StringComparison.Ordinal) && line.Contains("duels still work"));
+        Assert.Contains(_log, line => line.StartsWith("NOTE:", StringComparison.Ordinal) && line.Contains("arena"));
+        Assert.DoesNotContain(_log, line => line.StartsWith("FAIL:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void CheckNotesAnArenaThatFellBehindTheGameFilesButDoesNotFailTheInstall()
+    {
+        string root = NewRoot();
+        string package = CreatePackage(root);
+        string game = CreateGameDirectory(root);
+        ArenaTestGame.WriteCantina(game);
+        Assert.True(PackageInstaller.Install(new PackageInstaller.Options(package, game), Log));
+
+        File.WriteAllText(
+            Path.Combine(game, "Override", "m02ae.lyt"),
+            ArenaTestGame.Layout("\r\n").Replace("200.0 70.0", "201.0 70.0", StringComparison.Ordinal),
+            Encoding.Latin1);
+        _log.Clear();
+
+        Assert.True(PackageInstaller.Check(game, Log));
+
+        Assert.Contains(_log, line => line.StartsWith("NOTE:", StringComparison.Ordinal) && line.Contains("run setup again to refresh"));
+    }
+
+    [Fact]
+    public void UninstallRemovesTheArenaModuleAndNothingElseInModules()
+    {
+        string root = NewRoot();
+        string package = CreatePackage(root);
+        string game = CreateGameDirectory(root);
+        ArenaTestGame.WriteCantina(game);
+        Assert.True(PackageInstaller.Install(new PackageInstaller.Options(package, game), Log));
+        File.WriteAllText(Path.Combine(game, "modules", "someone_elses.mod"), "another mod");
+
+        PackageInstaller.Uninstall(game, Log);
+
+        Assert.False(File.Exists(Path.Combine(game, "modules", "k_coop_arena.mod")));
+        Assert.True(File.Exists(Path.Combine(game, "modules", "someone_elses.mod")));
+        Assert.True(File.Exists(Path.Combine(game, "modules", "tar_m02ae.rim")));
+        Assert.Contains(_log, line => line.StartsWith("removed arena module", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ALockedArenaModuleRefusesTheInstallBeforeChangingAnything()
+    {
+        string root = NewRoot();
+        string package = CreatePackage(root);
+        string game = CreateGameDirectory(root);
+        ArenaTestGame.WriteCantina(game);
+        Assert.True(PackageInstaller.Install(new PackageInstaller.Options(package, game), Log));
+        File.WriteAllText(Path.Combine(game, "KotorCoop.Agent.exe"), "old helper");
+        using var held = new FileStream(
+            Path.Combine(game, "modules", "k_coop_arena.mod"), FileMode.Open, FileAccess.Read, FileShare.Read);
+
+        var error = Assert.Throws<PackageInstaller.RefusedException>(
+            () => PackageInstaller.Install(new PackageInstaller.Options(package, game), Log));
+
+        Assert.Contains("k_coop_arena.mod", error.Message);
+        Assert.Equal("old helper", File.ReadAllText(Path.Combine(game, "KotorCoop.Agent.exe")));
+    }
 }

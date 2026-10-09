@@ -424,6 +424,9 @@ public static class ArenaModuleInstaller
     /// parsing). What the running agent asks before offering arena fights.</summary>
     public static bool IsInstalled(string gameDirectory) => FindInstalled(gameDirectory) is not null;
 
+    /// <summary>The installed module file, or null when there is none.</summary>
+    public static string? InstalledPath(string gameDirectory) => FindInstalled(gameDirectory);
+
     /// <summary>Builds the module from this game's own files. False (with the reason) when the
     /// cantina module or a file in it is missing or not as expected.</summary>
     public static bool TryGenerate(string gameDirectory, out byte[] module, out string error)
