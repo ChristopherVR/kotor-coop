@@ -93,7 +93,16 @@ internal static unsafe partial class CrashProbe
     private const int RecStackWords = 0x14;
     private const int RecStack = 0x18;
     private const int StackWords = 64;
-    private const int RecordSize = RecStack + (StackWords * 4);
+
+    /// <summary>eax, ebx, ecx, edx, esi, edi, ebp at the fault, after the stack slice: the
+    /// operands a fault inside the engine dereferenced (2026-10-09: a joiner died in
+    /// CGameObjectArray::Destructor on a freed object, and nothing said which object).</summary>
+    private const int RecRegs = RecStack + (StackWords * 4);
+    private const int RegisterCount = 7;
+    private const int RecordSize = RecRegs + (RegisterCount * 4);
+
+    /// <summary>CONTEXT offsets of eax, ebx, ecx, edx, esi, edi, ebp (x86 winnt.h).</summary>
+    private static ReadOnlySpan<int> ContextRegisterOffsets => [0xB0, 0xA4, 0xAC, 0xA8, 0xA0, 0x9C, 0xB4];
 
     // Past RecordSize, so WriteFile's fixed nNumberOfBytesToWrite=RecordSize never touches
     // them: scratch cells the stub reaches by absolute address, exactly like the record
@@ -312,7 +321,7 @@ internal static unsafe partial class CrashProbe
     /// </summary>
     private static nint BuildHandler(nint record, nint fileHandle)
     {
-        nint stub = NativeMethods.VirtualAlloc(0, 256, MemCommitReserve, PageExecuteReadWrite);
+        nint stub = NativeMethods.VirtualAlloc(0, 512, MemCommitReserve, PageExecuteReadWrite);
         if (stub == 0)
         {
             return 0;
@@ -358,6 +367,13 @@ internal static unsafe partial class CrashProbe
         Emit(0x89, 0x4F, RecEip);                 // mov [edi+0x0C], ecx
         Emit(0x8B, 0x8B); Emit32(0xC4);           // mov ecx, [ebx+0xC4]   ; CONTEXT.Esp
         Emit(0x89, 0x4F, RecEsp);                 // mov [edi+0x10], ecx
+        for (int r = 0; r < RegisterCount; r++)
+        {
+            Emit(0x8B, 0x8B); Emit32(ContextRegisterOffsets[r]);   // mov ecx, [ebx+CONTEXT.reg]
+            Emit(0x89, 0x8F); Emit32(RecRegs + (r * 4));            // mov [edi+RecRegs+4r], ecx
+        }
+
+        Emit(0x8B, 0x8B); Emit32(0xC4);           // mov ecx, [ebx+0xC4]   ; CONTEXT.Esp again (the stack copy below reads it)
         Emit(0xC7, 0x47, RecStackWords); Emit32(0); // mov dword [edi+0x14], 0
 
         Emit(0x8B, 0xF1);                         // mov esi, ecx          ; faulting esp
@@ -483,7 +499,9 @@ internal static unsafe partial class CrashProbe
         PluginHost.Log(
             $"FIRST-CHANCE {name} (0x{code:X8}) at 0x{address:X}, eip 0x{eip:X}{ours}, esp 0x{esp:X}"
             + (missed > 0 ? $" ({missed} earlier not shown)" : string.Empty)
-            + $"; image-range stack values:{trace}");
+            + $"; eax 0x{record[RecRegs / 4]:X} ebx 0x{record[(RecRegs / 4) + 1]:X} ecx 0x{record[(RecRegs / 4) + 2]:X}"
+            + $" edx 0x{record[(RecRegs / 4) + 3]:X} esi 0x{record[(RecRegs / 4) + 4]:X} edi 0x{record[(RecRegs / 4) + 5]:X}"
+            + $" ebp 0x{record[(RecRegs / 4) + 6]:X}; image-range stack values:{trace}");
 
         if (eip is >= TriangleAdjacencyGuardHook.FunctionLow and < TriangleAdjacencyGuardHook.FunctionHigh)
         {
