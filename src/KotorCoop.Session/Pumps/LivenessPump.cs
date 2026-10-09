@@ -226,8 +226,8 @@ internal sealed class LivenessPump(IGameBridge bridge, ICoopSession session, Act
             List<uint> fresh = _localOnlyIds.Where(_localOnlyLogged.Add).ToList();
             if (fresh.Count > 0)
             {
-                log($"liveness: {fresh.Count} hostile(s) exist only here, the host never had them "
-                    + $"(a local script spawned them): {string.Join(", ", fresh.Select(id => $"0x{id:X}"))} - removing");
+                log($"liveness: {fresh.Count} creature(s) exist only here, the host does not have them "
+                    + $"(a local script spawned them, or removed them on the host first): {string.Join(", ", fresh.Select(id => $"0x{id:X}"))} - removing");
             }
         }
 
