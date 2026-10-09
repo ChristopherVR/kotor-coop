@@ -71,6 +71,13 @@ internal sealed unsafe class PvpMenuController(SharedBlockView block)
 
         if (!keyboardFree)
         {
+            if (keys.Any)
+            {
+                PluginHost.Log("duel panel: key ignored - the keyboard belongs to "
+                    + (Odyssey.IsConsoleOpen ? "the console" : Odyssey.IsConversationActive ? "a conversation"
+                        : Odyssey.IsFullScreenGuiUp ? "a full-screen panel" : "a password prompt"));
+            }
+
             // Esc also opens the game menu, and a conversation or panel can start under an open
             // list: the pick does not survive either.
             _listOpen = false;
@@ -93,7 +100,13 @@ internal sealed unsafe class PvpMenuController(SharedBlockView block)
         }
 
         _firstFrame = false;
-        ListOpen = _listOpen && mode == PvpMenuMode.Idle;
+        bool listOpen = _listOpen && mode == PvpMenuMode.Idle;
+        if (listOpen != ListOpen)
+        {
+            PluginHost.Log(listOpen ? $"duel panel: list open ({_entries.Count} player(s))" : "duel panel: list closed");
+        }
+
+        ListOpen = listOpen;
         Draw(mode);
     }
 
