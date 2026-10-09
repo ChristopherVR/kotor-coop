@@ -23,18 +23,21 @@ public sealed partial class CoopClient
     /// (the same numbers name different creatures there), so a mismatch returns empty rather
     /// than reconciling against a snapshot that means nothing here.
     /// </summary>
-    public IReadOnlyList<CreatureLivenessEntry> GetCreatureLiveness(string module)
+    public IReadOnlyList<CreatureLivenessEntry> GetCreatureLiveness(string module) =>
+        GetCreatureLivenessView(module).Entries;
+
+    public (IReadOnlyList<CreatureLivenessEntry> Entries, long? CompleteAtMs) GetCreatureLivenessView(string module)
     {
         lock (_gate)
         {
             if (_livenessLocalLoadQuarantined || _hostWorld.IsEmpty || _livenessLoadSerial != _hostWorld.LoadSerial
                 || _livenessNativeEpoch != _hostWorld.NativeWorldEpoch
-                || !string.Equals(_livenessModule, _hostWorld.Module, StringComparison.OrdinalIgnoreCase)) return [];
+                || !string.Equals(_livenessModule, _hostWorld.Module, StringComparison.OrdinalIgnoreCase)) return ([], null);
             return _livenessModule.Length == 0
                 || module.Length == 0
                 || string.Equals(_livenessModule, module, StringComparison.OrdinalIgnoreCase)
-                    ? [.. _livenessById.Values]
-                    : [];
+                    ? ([.. _livenessById.Values], _livenessCompleteAtMs)
+                    : ([], null);
         }
     }
 
@@ -50,11 +53,18 @@ public sealed partial class CoopClient
     private bool _livenessLocalLoadQuarantined;
     private bool _livenessAwaitFreshGeneration;
 
+    /// <summary>Pages of the current generation received so far, and when the last one landed
+    /// (null until every page of it has).</summary>
+    private readonly HashSet<byte> _livenessPages = [];
+    private long? _livenessCompleteAtMs;
+
     public void InvalidateCreatureLivenessForWorldTransition()
     {
         lock (_gate)
         {
             _livenessById.Clear();
+            _livenessPages.Clear();
+            _livenessCompleteAtMs = null;
             _livenessAwaitFreshGeneration = true;
         }
     }
@@ -65,6 +75,8 @@ public sealed partial class CoopClient
         {
             _livenessLocalLoadQuarantined = true;
             _livenessById.Clear();
+            _livenessPages.Clear();
+            _livenessCompleteAtMs = null;
             _livenessHasGeneration = false;
         }
     }
@@ -101,6 +113,8 @@ public sealed partial class CoopClient
                     || !_livenessHasGeneration || _livenessGeneration != liveness.Generation)
                 {
                     _livenessById.Clear();
+                    _livenessPages.Clear();
+                    _livenessCompleteAtMs = null;
                     _livenessModule = liveness.Module;
                     _livenessGeneration = liveness.Generation;
                     _livenessHasGeneration = true;
@@ -112,6 +126,13 @@ public sealed partial class CoopClient
                 {
                     _livenessById[entry.ObjectId] = entry;
                 }
+
+                _livenessPages.Add(liveness.PageIndex);
+                if (_livenessCompleteAtMs is null && _livenessPages.Count >= Math.Max(1, (int)liveness.PageCount))
+                {
+                    _livenessCompleteAtMs = Environment.TickCount64;
+                }
+
                 _livenessAwaitFreshGeneration = false;
             }
     }

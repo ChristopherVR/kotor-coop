@@ -48,6 +48,14 @@ public interface IEnemySession
     IReadOnlyList<CreatureLivenessEntry> GetCreatureLiveness(string module) => [];
 
     /// <summary>
+    /// Client only: <see cref="GetCreatureLiveness"/> plus when its last page arrived, read
+    /// together. The time is null while the current cycle is still missing pages (a partial view
+    /// can lack ids the host has). Null on the host.
+    /// </summary>
+    (IReadOnlyList<CreatureLivenessEntry> Entries, long? CompleteAtMs) GetCreatureLivenessView(string module) =>
+        (GetCreatureLiveness(module), null);
+
+    /// <summary>
     /// Pushes the plugin's cumulative liveness-anomaly count (see
     /// <c>KotorGameBridge.ReadLivenessAnomalyCount</c>) into <see cref="GetStats"/>'s
     /// <c>LivenessAnomalies</c> field, so <c>status</c> can show it. The session never

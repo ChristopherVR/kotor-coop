@@ -50,6 +50,26 @@ public sealed class LivenessAdmissionTests
     }
 
     [Fact]
+    public void AViewIsCompleteOnlyOnceEveryPageOfItsCycleArrived()
+    {
+        // LocalOnlyHostileTracker judges only a complete view: a partial one can lack ids the host has.
+        using var client = Client();
+        CreatureLivenessPacket PageOf(byte index, uint id, uint generation = 10) =>
+            new(1, "end_m01aa", 0, generation, index, 2, [new(id, CreatureLivenessState.Alive)])
+                { HostSessionId = 123, HostLoadSerial = 7 };
+
+        client.ApplyCreatureLiveness(PageOf(0, 300));
+        Assert.Null(client.GetCreatureLivenessView("end_m01aa").CompleteAtMs);
+
+        client.ApplyCreatureLiveness(PageOf(1, 301));
+        Assert.NotNull(client.GetCreatureLivenessView("end_m01aa").CompleteAtMs);
+        Assert.Equal(2, client.GetCreatureLivenessView("end_m01aa").Entries.Count);
+
+        client.ApplyCreatureLiveness(PageOf(0, 300, generation: 11));
+        Assert.Null(client.GetCreatureLivenessView("end_m01aa").CompleteAtMs);
+    }
+
+    [Fact]
     public void LocalLoadQuarantineIsStickyAcrossDuplicateWelcomeIdentityAndPackets()
     {
         using var client = Client();

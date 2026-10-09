@@ -156,7 +156,7 @@ internal sealed class LivenessPump(IGameBridge bridge, ICoopSession session, Act
         // reconcile controller. Ordered so a truncation at the block's capacity never drops
         // the entries that actually need acting on (dead/gone) ahead of the ones that merely
         // confirm agreement (alive) — see LivenessBlockPage's own doc.
-        IReadOnlyList<CreatureLivenessEntry> received = session.GetCreatureLiveness(censusModule);
+        (IReadOnlyList<CreatureLivenessEntry> received, long? completeAtMs) = session.GetCreatureLivenessView(censusModule);
         bool beforeSerialReadable = bridge.TryReadWorldLoadSerial(out uint beforeWriteSerial);
         bool beforeEpochReadable = bridge.TryReadLivenessEpoch(out uint beforeWriteEpoch);
         bool beforeModuleReadable = bridge.TryReadCurrentModule(out string beforeWriteModule);
@@ -171,7 +171,7 @@ internal sealed class LivenessPump(IGameBridge bridge, ICoopSession session, Act
         }
         if (received.Count > 0)
         {
-            received = WithLocalOnlyHostiles(received);
+            received = WithLocalOnlyHostiles(received, completeAtMs);
             (List<CreatureLivenessEntry> page, int nextCursor) =
                 LivenessBlockPage.Select(received, SharedBlockLivenessCapacity, _livenessBlockCursor);
             _livenessBlockCursor = nextCursor;
@@ -210,7 +210,7 @@ internal sealed class LivenessPump(IGameBridge bridge, ICoopSession session, Act
     /// <summary>The host's view plus a Gone verdict for every hostile only this world has, so the
     /// plugin's ordinary destroy path removes it (its guards already skip stand-ins, the partner's
     /// body and the player).</summary>
-    private IReadOnlyList<CreatureLivenessEntry> WithLocalOnlyHostiles(IReadOnlyList<CreatureLivenessEntry> received)
+    private IReadOnlyList<CreatureLivenessEntry> WithLocalOnlyHostiles(IReadOnlyList<CreatureLivenessEntry> received, long? completeAtMs)
     {
         long nowMs = Environment.TickCount64;
         if (nowMs - _lastLocalHostileScanMs >= LivenessScanIntervalMs)
@@ -222,7 +222,7 @@ internal sealed class LivenessPump(IGameBridge bridge, ICoopSession session, Act
                 hostIds.Add(entry.ObjectId);
             }
 
-            _localOnlyIds = _localOnly.Update(bridge.ReadLocalHostileCreatureIds(), hostIds, nowMs);
+            _localOnlyIds = _localOnly.Update(bridge.ReadLocalHostileCreatureIds(), hostIds, nowMs, completeAtMs);
             List<uint> fresh = _localOnlyIds.Where(_localOnlyLogged.Add).ToList();
             if (fresh.Count > 0)
             {
