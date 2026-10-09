@@ -23,12 +23,23 @@ namespace KotorCoop.Protocol;
 /// loaded world, so a later ordinary save (which drifts the identities apart again, see
 /// <see cref="SaveLineage"/>) must not bring the warning back. A different pair (a new
 /// baseline after a load) is judged afresh.
+///
+/// A REVISIT is the other artifact. Every module change starts a new baseline from whichever
+/// save is newest on each side's disk, and mid-session those are different saves: the host's
+/// own save, the joiner's character capture. Neither is where a revisited module comes from
+/// (the engine restores it from the state both players left behind), so on 2026-10-09 every
+/// walk back into an area switched enemies, doors and items off there. Once both sides' known
+/// digests agreed in a module, a later mismatch there is absorbed while neither side's
+/// <see cref="WorldDigest.LoadSerial"/> has moved; a load on either side is judged afresh.
 /// </summary>
 public sealed class ModuleGitLineage
 {
     private string _module = string.Empty;
     private uint _localGit;
     private uint _remoteGit;
+
+    /// <summary>Modules whose known digests agreed, with both sides' load serials at the time.</summary>
+    private readonly Dictionary<string, (uint Local, uint Remote)> _agreed = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>True while the most recent comparison had a GIT mismatch this absorbed.</summary>
     public bool Absorbing { get; private set; }
@@ -42,7 +53,23 @@ public sealed class ModuleGitLineage
         Absorbing = false;
         if (!raw.ModuleGitMismatch)
         {
+            if (raw.Module.Length > 0 && local.ModuleGit != 0 && remote.ModuleGit != 0)
+            {
+                _agreed[raw.Module] = (local.LoadSerial, remote.LoadSerial);
+            }
+
             return raw;
+        }
+
+        if (_agreed.TryGetValue(raw.Module, out (uint Local, uint Remote) serials))
+        {
+            if (serials == (local.LoadSerial, remote.LoadSerial))
+            {
+                Absorbing = true;
+                return raw with { ModuleGitMismatch = false };
+            }
+
+            _agreed.Remove(raw.Module);
         }
 
         if (local.SaveIdentity != 0 && local.SaveIdentity == remote.SaveIdentity

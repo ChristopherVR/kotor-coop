@@ -63,4 +63,50 @@ public sealed class ModuleGitLineageTests
 
         Assert.True(Run(lineage, D(8, 10, "danm15"), D(9, 20, "danm15")).ModuleGitMismatch);
     }
+
+    private static WorldDigest V(uint git, uint loadSerial, string module = "tar_m02aa") =>
+        WorldDigest.Empty with { SaveIdentity = 3, ModuleGit = git, Module = module, GlobalsCatalogue = 1, LoadSerial = loadSerial };
+
+    [Fact]
+    public void ARevisitOfAnAgreedModuleWithoutALoadKeepsTheChannels()
+    {
+        // 2026-10-09: the first visit agreed; the walk back rebaselined from each side's own
+        // newest save (host save vs joiner capture) and switched doors and enemies off.
+        ModuleGitLineage lineage = new();
+        Assert.False(Run(lineage, V(10, 4), V(10, 2)).ModuleGitMismatch);
+        Run(lineage, V(30, 4, "tar_m02ac"), V(30, 2, "tar_m02ac"));
+
+        WorldDigestComparison revisit = Run(lineage, V(11, 4), V(12, 2));
+
+        Assert.False(revisit.ModuleGitMismatch);
+        Assert.True(lineage.Absorbing);
+    }
+
+    [Fact]
+    public void ALoadOnEitherSideJudgesAnAgreedModuleAfresh()
+    {
+        ModuleGitLineage lineage = new();
+        Run(lineage, V(10, 4), V(10, 2));
+
+        Assert.True(Run(lineage, V(11, 5), V(12, 2)).ModuleGitMismatch);
+        Assert.True(Run(lineage, V(11, 4), V(12, 2)).ModuleGitMismatch); // the agreement is gone
+    }
+
+    [Fact]
+    public void AModuleThatNeverAgreedKeepsTheMismatch()
+    {
+        // A mod that edits this module's placements disagrees from the first visit on.
+        ModuleGitLineage lineage = new();
+        Assert.True(Run(lineage, V(10, 4), V(20, 2)).ModuleGitMismatch);
+        Assert.True(Run(lineage, V(10, 4), V(20, 2)).ModuleGitMismatch);
+    }
+
+    [Fact]
+    public void AnUnknownDigestIsNotAnAgreement()
+    {
+        ModuleGitLineage lineage = new();
+        Run(lineage, V(0, 4), V(10, 2));
+
+        Assert.True(Run(lineage, V(11, 4), V(12, 2)).ModuleGitMismatch);
+    }
 }
