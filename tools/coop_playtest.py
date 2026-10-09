@@ -1003,6 +1003,11 @@ def enemy_hp_differences(host, joiner):
         a, b = h[oid], j[oid]
         if (a["tag"] or "").lower() != (b["tag"] or "").lower():
             continue
+        # Full on both sides is agreement. A blueprint can carry MaxHitPoints above its base
+        # HitPoints (Korriban's war droids: 30 base, 48 max), and one game may sit at the bonus
+        # maximum while the other sits at the base one; both health bars read full.
+        if all(o["hp"] >= (o.get("max_hp") or o["hp"] + 1) for o in (a, b)):
+            continue
         top = max(a.get("max_hp") or 0, b.get("max_hp") or 0, a["hp"], b["hp"], 1)
         tolerance = max(3, 0.15 * top)
         dead = (a["hp"] <= 0) != (b["hp"] <= 0)
