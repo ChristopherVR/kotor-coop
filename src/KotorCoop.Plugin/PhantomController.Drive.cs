@@ -1080,8 +1080,31 @@ internal sealed unsafe partial class PhantomController
         float sx = target.X - mine.X;
         float sy = target.Y - mine.Y;
         float apartSquared = (sx * sx) + (sy * sy);
+        float facing = remote.Facing;
 
-        if (apartSquared < MinSeparation * MinSeparation)
+        // A scripted scene puts both players on the same mark; stand the peer at the local
+        // player's side instead of wherever the overlap push lands (SceneStagingRule).
+        if (SceneStagingRule.ShouldStage(Odyssey.IsConversationActive, target, mine))
+        {
+            Vec3 orientation = Odyssey.GetOrientation(player);
+
+            // The spot is chosen once per mark, not per frame: it walks the object table and asks
+            // the engine about walkability, and a body that swapped spots would read as teleporting.
+            float fromX = mine.X - _stagedFrom[slot].X;
+            float fromY = mine.Y - _stagedFrom[slot].Y;
+            if (_stagedSide[slot] == 0 || (fromX * fromX) + (fromY * fromY) > 0.25f)
+            {
+                _stagedFrom[slot] = mine;
+
+                // The first spot that is walkable and clear of every other body.
+                _stagedSide[slot] = ChooseStagingSpot(player, phantom, mine, orientation) + 1;
+                PluginHost.Log($"scene staging: peer slot {slot} stands at spot {_stagedSide[slot] - 1} "
+                    + $"beside the local player at ({mine.X:F1},{mine.Y:F1})");
+            }
+
+            (target, facing) = SceneStagingRule.Spot(mine, orientation, _stagedSide[slot] - 1);
+        }
+        else if (StopStaging(slot) && apartSquared < MinSeparation * MinSeparation)
         {
             float apart = MathF.Sqrt(apartSquared);
             if (apart > 0.01f)
@@ -1184,7 +1207,7 @@ internal sealed unsafe partial class PhantomController
         // estimate is the steadier signal while simply following.
         float gaitSpeed = MathF.Max(_peerSpeed[slot], chaseSpeed);
 
-        Odyssey.DrivePhantom(phantom, shown, remote.Facing, gaitSpeed, moving);
+        Odyssey.DrivePhantom(phantom, shown, facing, gaitSpeed, moving);
         _lastGoal[slot] = remote.Position;
     }
 
@@ -1220,4 +1243,47 @@ internal sealed unsafe partial class PhantomController
     /// <summary>How close a phantom may get to the local player before it is pushed out.
     /// Roughly a body's width — enough that the camera never enters it.</summary>
     private const float MinSeparation = 1.2f;
+
+    /// <summary>Which SceneStagingRule spot each slot's stand-in is staged on during a scene
+    /// (spot + 1; 0 = not staged) and the player position it was chosen at.</summary>
+    private readonly int[] _stagedSide = new int[SharedBlock.SlotCapacity];
+    private readonly Vec3[] _stagedFrom = new Vec3[SharedBlock.SlotCapacity];
+
+    /// <summary>The first candidate spot (SceneStagingRule) that is on the walkmesh and clear of
+    /// every other creature in the area, or 0 when none is. Runs once per mark, not per frame:
+    /// it walks the object table and asks the engine about walkability.</summary>
+    private static int ChooseStagingSpot(nint player, nint phantom, Vec3 anchorAt, Vec3 orientation)
+    {
+        nint* bodies = stackalloc nint[256];
+        int count = Odyssey.CollectCreaturesByObjectTable(bodies, 256);
+        Span<Vec3> others = stackalloc Vec3[256];
+        int n = 0;
+        for (int i = 0; i < count; i++)
+        {
+            if (bodies[i] != phantom)
+            {
+                others[n++] = Odyssey.GetPosition(bodies[i]);
+            }
+        }
+
+        for (int c = 0; c < SceneStagingRule.CandidateCount; c++)
+        {
+            Vec3 spot = SceneStagingRule.Spot(anchorAt, orientation, c).Position;
+            if (SceneStagingRule.IsClear(spot, others[..n])
+                && Odyssey.TryValidateMoveDestination(player, spot, out _))
+            {
+                return c;
+            }
+        }
+
+        return 0;
+    }
+
+    /// <summary>Forgets a slot's staging once its scene is over. Always true, so it can lead the
+    /// overlap test's condition.</summary>
+    private bool StopStaging(int slot)
+    {
+        _stagedSide[slot] = 0;
+        return true;
+    }
 }
