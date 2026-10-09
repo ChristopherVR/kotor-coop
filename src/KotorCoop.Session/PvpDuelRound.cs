@@ -225,6 +225,7 @@ public sealed class PvpDuelRound
         }
 
         RoundId++;
+        LastEnding = $"round {RoundId}: still running";
         Phase = PvpPhase.Countdown;
         _phaseDeadlineMs = nowMs + CountdownMs;
         Say(Challenger, PvpNoticeCode.Countdown, Target);
@@ -251,6 +252,11 @@ public sealed class PvpDuelRound
         {
             Say(peer, PvpNoticeCode.NothingToDo);
             return;
+        }
+
+        if (Phase != PvpPhase.Challenged)
+        {
+            LastEnding = $"round {RoundId}: peer {peer} yielded";
         }
 
         if (Phase == PvpPhase.Challenged)
@@ -345,6 +351,12 @@ public sealed class PvpDuelRound
 
         bool aOut = a.Downed || IsBeaten(a.Health, a.MaxHealth);
         bool bOut = b.Downed || IsBeaten(b.Health, b.MaxHealth);
+        if (aOut || bOut)
+        {
+            LastEnding = $"round {RoundId}: challenger {a.Health}/{a.MaxHealth}{(a.Downed ? " downed" : string.Empty)}, "
+                + $"target {b.Health}/{b.MaxHealth}{(b.Downed ? " downed" : string.Empty)}";
+        }
+
         if (aOut && bOut)
         {
             Say(Challenger, PvpNoticeCode.Draw, Target);
@@ -362,6 +374,9 @@ public sealed class PvpDuelRound
     }
 
     /// <summary>The session ended (or the host went): drop the round without a word.</summary>
+    /// <summary>How the last round ended (health/max/down of each side as judged), for the log.</summary>
+    public string LastEnding { get; private set; } = string.Empty;
+
     public void Clear()
     {
         Reset();
@@ -377,6 +392,7 @@ public sealed class PvpDuelRound
 
     private void Cancel()
     {
+        LastEnding = $"round {RoundId}: called off (busy, apart or gone)";
         Say(Challenger, PvpNoticeCode.Cancelled, Target);
         Say(Target, PvpNoticeCode.Cancelled, Challenger);
         Reset();

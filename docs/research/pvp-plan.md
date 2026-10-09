@@ -168,3 +168,27 @@ evidence to capture; the plugin log lines are `duel: ...` (`kotorcoop-plugin.log
 Items most likely to fail: 4 (the reaction byte may lag the faction flip), 5 (whether the
 defender's engine applies the forwarded damage under the pin at all), 10 (the Force point write is
 a plain field poke), and 13 (the autosave race).
+
+### Live results (2026-10-09, Dantooine `danm13`, host Lanik 12 hp vs joiner Malak 120 hp, `pvp = duel` on the host only)
+
+| Item | Result | Evidence |
+| --- | --- | --- |
+| 1 setting adopted | PASS | joiner: `adopted host's pvp (on; local setting was off)` |
+| 2 challenge / accept | PASS | both sides: countdown, then `Fight!` |
+| 3 countdown pin and snapshot | PASS | `round 1 armed ... pinned at 1 hp minimum, snapshot hp 12` / `hp 120` |
+| 4 opponent attackable | PASS (cursor colour not captured) | a queued attack on the host's stand-in landed |
+| 5 damage reaches the real character | PASS | host: `took 2 damage ... took 5 damage from a hit on our phantom`, hp fell |
+| 8 1 hp floor | PASS | the round ended at `target 1/12`, no death path |
+| 9 host ends the round | PASS | `Malak won the duel`; ending logged as `round 1: challenger 120/120, target 1/12` |
+| 10 restore | PASS | hp back to 12 / 120 |
+| 11 forced down | PASS | `down` on the host mid-duel: game over suppressed, revive, loss, restored to 12 |
+| 12 yield | PASS | `You yielded to Malak`, restored |
+| 13 area change | PASS | host walked into `danm14aa`: called off on both sides and restored before the load |
+| 14 faction reverts | PASS | `joined the friendly faction (partner_buffs)` after every round |
+| 16 back to back | PASS | rounds 1-4 in one session, clean each time |
+| 6 companion hits, 7 enemy_damage bypass, 15 menu cushion | NOT RUN | no companion in the save; scaling and menu cases left for the next pass |
+
+Fixed during the pass: the round now logs how it ended (health/max/down per side, a yield, or
+called off), which explained a round that seemed to end above 25% (the host had dipped to 1 hp
+between samples).
+

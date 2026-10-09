@@ -28,6 +28,10 @@ public interface IPvpSession
     /// player pinned.</summary>
     PvpView PvpState => PvpView.Idle;
 
+    /// <summary>Host: how the last round ended, both duellists' health/max/down as judged, for
+    /// the log. Empty on a client.</summary>
+    string PvpLastEnding => string.Empty;
+
     /// <summary>Asks the host for something (a challenge to <paramref name="target"/>, an
     /// answer, a yield, or opting out). Delivered with a short resend; the answer comes back as
     /// notices.</summary>
