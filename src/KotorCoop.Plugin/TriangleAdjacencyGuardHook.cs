@@ -19,10 +19,18 @@ namespace KotorCoop.Plugin;
 /// screens the plugin's own moves; this one covers the engine's own pathing, which a player's click
 /// on that door through the window reaches too.
 ///
-/// For a negative index the stub writes -1 to all three out-params and returns, which is exactly
-/// what the function itself writes for an edge with no neighbour (a wall), so the path test fails
-/// cleanly. Every other index runs the original code. Pure assembly, no managed code in the engine
-/// call; <see cref="Count"/> reports how often it fired.
+/// The crash line this guard records settled the cause (2026-10-09): "triangle 58 of 60, adjacency
+/// start readable, entry UNREADABLE". The function bounds the index by <c>face_count</c> (+0x58),
+/// but the adjacency array only has <c>adjacency_count</c> (+0x5C) entries: one per WALKABLE face,
+/// which the walkmesh format stores first. Asking about a non-walkable face reads past the array; on
+/// an ordinary heap that is the next block's bytes, under the rig's full page heap it faults. The
+/// same retail over-read class as <see cref="WaypointGuardHook"/>.
+///
+/// For a negative index, or one at or past <c>adjacency_count</c>, the stub writes -1 to all three
+/// out-params and returns: exactly what the function writes for an edge with no neighbour (a wall),
+/// which is what a non-walkable face is. A mesh with no adjacency at all, and every walkable face,
+/// runs the original code. Pure assembly, no managed code in the engine call; <see cref="Count"/>
+/// reports how often it fired.
 /// </summary>
 internal static unsafe class TriangleAdjacencyGuardHook
 {
@@ -35,9 +43,39 @@ internal static unsafe class TriangleAdjacencyGuardHook
     private static ReadOnlySpan<byte> Prologue => [0x8B, 0x44, 0x24, 0x08, 0x3B, 0x41, 0x58];
 
     private static uint* _count;
+    private static uint* _lastMesh;
+    private static uint* _lastIndex;
     private static bool _installed;
 
+    public const uint FunctionLow = 0x00580620;
+    public const uint FunctionHigh = 0x005806B5;
+
     public static uint Count => _count == null ? 0 : *_count;
+
+    /// <summary>The last call's mesh and index, with what the mesh says about itself, for a crash
+    /// line: a fault at 0x0058063B with a non-negative index means the adjacency array itself was
+    /// unreadable (2026-10-09: the host crashed there with this guard installed).</summary>
+    public static string LastCallSummary()
+    {
+        if (_lastMesh == null)
+        {
+            return "no call recorded";
+        }
+
+        nint mesh = (nint)(*_lastMesh);
+        int index = (int)*_lastIndex;
+        if (mesh == 0 || !NativeMethods.IsReadable(mesh + 0x58, 4) || !NativeMethods.IsReadable(mesh + 0x88, 4))
+        {
+            return $"mesh 0x{mesh:X} (unreadable), triangle {index}";
+        }
+
+        int count = *(int*)(mesh + 0x58);
+        nint adjacency = *(nint*)(mesh + 0x88);
+        bool entryReadable = index >= 0 && adjacency != 0 && NativeMethods.IsReadable(adjacency + index * 12, 12);
+        bool baseReadable = adjacency != 0 && NativeMethods.IsReadable(adjacency, 4);
+        return $"mesh 0x{mesh:X} vtable 0x{(NativeMethods.IsReadable(mesh, 4) ? *(uint*)mesh : 0):X}, triangle {index} of {count}, "
+            + $"adjacency 0x{adjacency:X} (start {(baseReadable ? "readable" : "UNREADABLE")}, entry {(entryReadable ? "readable" : "UNREADABLE")})";
+    }
 
     public static bool Install(out string diagnostic)
     {
@@ -57,7 +95,7 @@ internal static unsafe class TriangleAdjacencyGuardHook
             }
         }
 
-        nint stub = NativeMethods.VirtualAlloc(0, 128, MemCommitReserve, PageExecuteReadWrite);
+        nint stub = NativeMethods.VirtualAlloc(0, 192, MemCommitReserve, PageExecuteReadWrite);
         if (stub == 0)
         {
             diagnostic = "VirtualAlloc failed";
@@ -65,18 +103,29 @@ internal static unsafe class TriangleAdjacencyGuardHook
         }
 
         byte* s = (byte*)stub;
-        uint* count = (uint*)(stub + 120);
+        uint* count = (uint*)(stub + 160);
+        uint* lastMesh = (uint*)(stub + 164);
+        uint* lastIndex = (uint*)(stub + 168);
         *count = 0;
         int n = 0;
 
         s[n++] = 0x8B; s[n++] = 0x44; s[n++] = 0x24; s[n++] = 0x08;   // mov eax, [esp+8]
+        s[n++] = 0x89; s[n++] = 0x0D; *(uint*)(s + n) = (uint)(nint)lastMesh; n += 4;   // mov [lastMesh], ecx
+        s[n++] = 0xA3; *(uint*)(s + n) = (uint)(nint)lastIndex; n += 4;                 // mov [lastIndex], eax
         s[n++] = 0x85; s[n++] = 0xC0;                                   // test eax, eax
-        s[n++] = 0x7C; int toNegative = n++;                            // jl negative
-        s[n++] = 0x3B; s[n++] = 0x41; s[n++] = 0x58;                    // cmp eax, [ecx+0x58]
+        s[n++] = 0x7C; int toNegative = n++;                            // jl wall
+        s[n++] = 0x8B; s[n++] = 0x51; s[n++] = 0x5C;                    // mov edx, [ecx+0x5C]  adjacency_count
+        s[n++] = 0x85; s[n++] = 0xD2;                                   // test edx, edx
+        s[n++] = 0x74; int toOriginal = n++;                            // jz original (no adjacency: as before)
+        s[n++] = 0x3B; s[n++] = 0xC2;                                   // cmp eax, edx
+        s[n++] = 0x73; int toWall = n++;                                // jae wall (non-walkable triangle)
+        s[toOriginal] = (byte)(n - (toOriginal + 1));
+        s[n++] = 0x3B; s[n++] = 0x41; s[n++] = 0x58;                    // original: cmp eax, [ecx+0x58]
         s[n++] = 0xE9;                                                  // jmp 0x00580627 (the jge, flags live)
         *(int*)(s + n) = (int)(ResumeAtJge - (stub + n + 4));
         n += 4;
 
+        s[toWall] = (byte)(n - (toWall + 1));
         s[toNegative] = (byte)(n - (toNegative + 1));
         s[n++] = 0xF0; s[n++] = 0xFF; s[n++] = 0x05;                    // lock inc dword [count]
         *(uint*)(s + n) = (uint)(nint)count; n += 4;
@@ -101,8 +150,10 @@ internal static unsafe class TriangleAdjacencyGuardHook
         NativeMethods.VirtualProtect(Function, (nuint)Prologue.Length, old, out _);
 
         _count = count;
+        _lastMesh = lastMesh;
+        _lastIndex = lastIndex;
         _installed = true;
-        diagnostic = $"walkmesh triangle guard at 0x{Function:X} (stub 0x{stub:X})";
+        diagnostic = $"walkmesh adjacency guard at 0x{Function:X} (stub 0x{stub:X})";
         return true;
     }
 }
