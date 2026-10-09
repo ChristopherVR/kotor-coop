@@ -226,8 +226,8 @@ internal sealed class LivenessPump(IGameBridge bridge, ICoopSession session, Act
             List<uint> fresh = _localOnlyIds.Where(_localOnlyLogged.Add).ToList();
             if (fresh.Count > 0)
             {
-                log($"liveness: {fresh.Count} creature(s) exist only here, the host does not have them "
-                    + $"(a local script spawned them, or removed them on the host first): {string.Join(", ", fresh.Select(id => $"0x{id:X}"))} - removing");
+                log($"liveness: {fresh.Count} hostile(s) exist only here, the host never had them "
+                    + $"(a local script spawned them): {string.Join(", ", fresh.Select(id => $"0x{id:X}"))} - removing");
             }
         }
 
@@ -298,6 +298,19 @@ internal sealed class LivenessPump(IGameBridge bridge, ICoopSession session, Act
             }
 
             (newlyGone ??= []).Add(id);
+        }
+
+        // A creature a script destroyed here is gone the moment it leaves the scan, even if
+        // this scan never saw it alive: a scene that removes an NPC before the first pass in an
+        // area otherwise never tells the joiner, whose copy stands at 1 hp for good (2026-10-09,
+        // the Duros the Sith kill outside the Taris apartments).
+        foreach (uint id in bridge.ReadScriptDestroyedIds())
+        {
+            if (!seenThisPass.Contains(id) && !_livenessGoneSince.ContainsKey(id) && !_livenessKnown.ContainsKey(id))
+            {
+                _livenessKnown[id] = CreatureLivenessState.Gone;
+                (newlyGone ??= []).Add(id);
+            }
         }
 
         if (newlyGone is not null)
