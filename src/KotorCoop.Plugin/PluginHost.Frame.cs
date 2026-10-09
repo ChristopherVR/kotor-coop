@@ -496,10 +496,16 @@ internal static unsafe partial class PluginHost
             // it. STUNT followers require its announcement, not just correct load detection.
             // Only recover an announcement across an actual world edge: a request cancelled
             // while the same world remains readable must not send peers to its destination.
+            // The one exception is a request that queued a transition movie: the movie plays
+            // inside the load, so the main thread is gone from the next frame until the new
+            // world is up, and an announce made after that edge reached the peers 16 s late
+            // (2026-10-09, a joiner's Manaan dialogue to manm26ae with 23b: its agent pulled it
+            // back to the host before the host heard where it went).
             if (moduleMoveRequested && !_moveToModulePendingSeen
                 && _transitionAnnounceScriptedEnabled && !_doorTransitionAnnouncedThisEpoch
                 && !(_travel?.OwnWarpPending ?? false) && _view is { } missedAnnounceView
-                && (!Odyssey.TryGetWorldEpoch(out ulong requestedEpoch) || requestedEpoch != _epoch))
+                && (CinematicWatch.QueuedMovieCount > 0
+                    || !Odyssey.TryGetWorldEpoch(out ulong requestedEpoch) || requestedEpoch != _epoch))
             {
                 TransitionAnnounceWatch.OnScriptedTransitionBegan(missedAnnounceView);
             }
