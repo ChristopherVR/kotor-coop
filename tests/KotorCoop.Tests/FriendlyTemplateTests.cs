@@ -36,10 +36,10 @@ public sealed class FriendlyTemplateTests : IDisposable
     }
 
     [Fact]
-    public void TheModulesNonHostileFactionsAreFriendlyAndOverrideWins()
+    public void OnlyTheModulesFriendly1BlueprintsAreFriendlyAndOverrideWins()
     {
         IReadOnlyList<string> friendly = new FriendlyCreatureResolver(_game).FriendlyTemplates("sta_m45aa");
-        Assert.Equal(["sta_carth", "sta_friend2", "sta_neutral", "sta_override"], friendly);
+        Assert.Equal(["sta_carth", "sta_override"], friendly);
     }
 
     [Fact]
