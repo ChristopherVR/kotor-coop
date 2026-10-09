@@ -114,6 +114,15 @@ credits_mode = personal
 ;   personal  each of you finds your own copy of the loot.
 corpse_loot = shared
 
+; Duels between players. The host's choice applies.
+;   off   the default - players cannot hurt each other.
+;   duel  a player can challenge another with "duel <name>"; the other types "accept" or
+;         "decline" (no answer in 30 seconds counts as no). Either can type "yield" to stop,
+;         and "duel off" refuses every challenge. Both are kept at 1 hp minimum while it lasts,
+;         it ends at 25% health, and health and Force points are put back afterwards: nothing
+;         is won or lost, and you cannot save during a duel.
+pvp = off
+
 ; ------------------------------------------------------------------------------------------
 ; Screen
 ; ------------------------------------------------------------------------------------------
