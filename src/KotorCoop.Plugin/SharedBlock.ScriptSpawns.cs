@@ -36,5 +36,6 @@ internal partial struct SharedBlock
     public const int OffsetSpawnTemplateRecords = 0xC884;
 
     public const int SpawnTemplateCapacity = 24;
+
     public const int SpawnTemplateStride = 20;
 }

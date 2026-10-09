@@ -34,14 +34,14 @@ internal static unsafe partial class Odyssey
     /// (EndRound, k_def_combend01) matches the slot Odyssey.Combat.Attack.cs already proved.</summary>
     private const int CreatureScriptsOffset = 0x230;
     private const int CreatureScriptCount = 14;
-    private const int ObjectTagOffset = 0x18;
 
     /// <summary>
     /// Builds <paramref name="template"/> as a driven puppet: every script blanked before it
-    /// joins the area (a scene's OnSpawn or OnDeath must run on the host only), and tagged
-    /// <c>coop_phantom</c> so every census, liveness scan, save flush and ghost sweep treats it
-    /// like the other stand-ins. Returns the new local id or <see cref="ObjectInvalid"/>.
-    /// MAIN THREAD ONLY.
+    /// joins the area (a scene's OnSpawn or OnDeath must run on the host only). It keeps the
+    /// blueprint's own tag: a joiner's conversation with a scripted story NPC names its partner
+    /// by tag. The agent recognises the mirror's bodies by id instead
+    /// (SharedBlock.OffsetMaterialisedLocalIds). Returns the new local id or
+    /// <see cref="ObjectInvalid"/>. MAIN THREAD ONLY.
     /// </summary>
     public static uint SpawnPuppet(string template, Vec3 position, Vec3 facingUnitVector, out int failure)
     {
@@ -96,11 +96,6 @@ internal static unsafe partial class Odyssey
 
             *(uint*)(script + 4) = 0;
         }
-
-        byte* tag = stackalloc byte[] { (byte)'c', (byte)'o', (byte)'o', (byte)'p', (byte)'_', (byte)'p',
-            (byte)'h', (byte)'a', (byte)'n', (byte)'t', (byte)'o', (byte)'m', 0 };
-        CExoStringDtorFn((byte*)(creature + ObjectTagOffset));
-        CExoStringCtorFn((byte*)(creature + ObjectTagOffset), tag);
 
         EmptyPuppetBackpack(creature);
 

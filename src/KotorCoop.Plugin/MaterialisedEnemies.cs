@@ -400,6 +400,8 @@ internal static unsafe class MaterialisedEnemies
     /// </summary>
     public static ReadOnlySpan<uint> OwnerIdsSnapshot => OwnerIds;
 
+    public static ReadOnlySpan<uint> LocalIdsSnapshot => LocalIds;
+
     /// <summary>Records that the census still lists this owner id, keeping its entry (and
     /// body) alive. Called for every published slot every frame.</summary>
     public static void Seen(uint ownerId, double now)

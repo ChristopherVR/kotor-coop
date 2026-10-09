@@ -403,6 +403,7 @@ public sealed partial class KotorGameBridge
             out uint[] rosterObjectIds, out ushort availableMask, out ushort activePartyMask);
         string censusModule = TryReadCurrentModule(out string liveModule) ? liveModule : string.Empty;
 
+        HashSet<uint> mirrorBodies = ReadMaterialisedLocalIds();
         foreach (CreatureRef creature in EnumerateCreatures())
         {
             int rosterSlot = havePartyState ? Array.IndexOf(rosterObjectIds, creature.ObjectId) : -1;
@@ -429,7 +430,7 @@ public sealed partial class KotorGameBridge
             // Never anyone's NPC to report on: the co-op blueprint's tag names every body we
             // (or a mirroring peer) spawned ourselves, phantoms and materialised stand-ins
             // alike — see the identical exclusion in ReadEnemies.
-            if (creature.Tag == GameFiles.PhantomBlueprint.Tag)
+            if (creature.Tag == GameFiles.PhantomBlueprint.Tag || mirrorBodies.Contains(creature.ObjectId))
             {
                 continue;
             }
@@ -467,11 +468,12 @@ public sealed partial class KotorGameBridge
         List<uint> ids = [];
         HashSet<uint>? phantomIds = ReadPhantomObjectIds();
         HashSet<uint> partyRoster = ReadPartyRosterIds();
+        HashSet<uint> mirrorBodies = ReadMaterialisedLocalIds();
         foreach (CreatureRef creature in EnumerateCreatures())
         {
             if (PartyCensusRule.IsOwnParty(creature.ObjectId, creature.IsPlayer, creature.IsPartyMember, partyRoster)
                 || (phantomIds is not null && phantomIds.Contains(creature.ObjectId))
-                || creature.Tag == GameFiles.PhantomBlueprint.Tag)
+                || creature.Tag == GameFiles.PhantomBlueprint.Tag || mirrorBodies.Contains(creature.ObjectId))
             {
                 continue;
             }

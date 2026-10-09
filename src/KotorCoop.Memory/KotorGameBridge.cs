@@ -54,7 +54,7 @@ public sealed partial class KotorGameBridge : IGameBridge
     /// pass — EnemyCapacity 32 -> 128 and the five capacity-scaled enemy tables relocated to a
     /// new 0x6000..0x8600 region, docs/research/creature-liveness.md; 81: dialogue resource
     /// overrides at 0x8600/0x8614; 82: manual travel/load intent at 0x8630/0x8634;
-    /// 83: per-peer damage at 0x8710; 84: door native apply acknowledgements; 98: host spawns only, SharedBlock.ScriptSpawns.cs). The version is
+    /// 83: per-peer damage at 0x8710; 84: door native apply acknowledgements; 98: host spawns only, SharedBlock.ScriptSpawns.cs; 99: the mirror's local body ids). The version is
     /// part of the pattern deliberately: an agent must not attach to a plugin whose block
     /// layout it does not know, and a stale pair fails to find each other rather than reading
     /// the wrong offsets. ⚠ Bump this WITH PluginHost's `_block->Version` — they are one
@@ -67,7 +67,7 @@ public sealed partial class KotorGameBridge : IGameBridge
     /// enforced the warning above. ⚠ TransitionMovieTests.TheBlockVersionMovedInBothHalves
     /// (an existing test this split does not touch) also reads this constant straight out of
     /// THIS file's text, by its literal path — keep it declared here, not in a partial.</summary>
-    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 62 00 00 00 01 EE FF C0";
+    public const string PluginSignature = "4B 4F 43 4F 4F 50 30 31 63 00 00 00 01 EE FF C0";
 
     /// <summary>
     /// True when the in-process plugin is present. Changes the strategy completely: instead

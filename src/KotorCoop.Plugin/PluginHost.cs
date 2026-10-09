@@ -434,7 +434,7 @@ internal static unsafe partial class PluginHost
         //      docs/research/creature-liveness.md.
         // 89: verified companion occupant banks BC00/BD00, allocation BE00.
         // 97: host-start conversation relay mailboxes at 0x5C50..0x5CB0 (SharedBlock.HostConversation.cs).
-        _block->Version = 98;
+        _block->Version = 99;
         *(uint*)((byte*)_block + SharedBlock.OffsetDamageDealtIncarnation) = PhantomHitHook.Dealt.Incarnation;
 
         // A guard dword after the version. Magic plus version alone was not selective

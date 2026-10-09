@@ -696,4 +696,10 @@ internal partial struct SharedBlock
     public const int RemoteOneShotAnim = 0x00;
     public const int RemoteOneShotSerial = 0x04;
 
+    /// <summary>Plugin -> agent (v99): the LOCAL id of every body the enemy mirror built (stand-ins
+    /// and blueprint puppets), 128 dwords, 0 = empty slot. A blueprint puppet keeps its real tag
+    /// (a joiner's conversation with a scripted story NPC names the partner by tag), so the
+    /// agent's censuses recognise the mirror's own bodies by these ids as well as by the
+    /// coop_phantom tag.</summary>
+    public const int OffsetMaterialisedLocalIds = 0xCA80;
 }
