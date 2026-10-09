@@ -75,6 +75,10 @@ public interface IPluginChannelBridge
     /// </summary>
     List<uint> ReadLocalHostileCreatureIds() => [];
 
+    /// <summary>Targets of the script DestroyObject calls this world let through; the host's
+    /// liveness scan reports them gone even if it never saw them alive.</summary>
+    HashSet<uint> ReadScriptDestroyedIds() => [];
+
     /// <summary>Barks the plugin captured since the last look. See <see cref="BarkRecord"/>.</summary>
     List<BarkRecord> ReadBarks() => [];
 

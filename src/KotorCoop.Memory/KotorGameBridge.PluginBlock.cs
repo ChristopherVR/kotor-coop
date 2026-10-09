@@ -467,22 +467,12 @@ public sealed partial class KotorGameBridge
         List<uint> ids = [];
         HashSet<uint>? phantomIds = ReadPhantomObjectIds();
         HashSet<uint> partyRoster = ReadPartyRosterIds();
-        HashSet<uint> scriptDestroyed = ReadScriptDestroyRefusedIds();
         foreach (CreatureRef creature in EnumerateCreatures())
         {
             if (PartyCensusRule.IsOwnParty(creature.ObjectId, creature.IsPlayer, creature.IsPartyMember, partyRoster)
                 || (phantomIds is not null && phantomIds.Contains(creature.ObjectId))
                 || creature.Tag == GameFiles.PhantomBlueprint.Tag)
             {
-                continue;
-            }
-
-            // This world's own script already asked to remove it, and only the destroy guard
-            // kept it (the host had it at world-up). Whatever its faction, plot flag or pinned
-            // health, it is a candidate: the host's view decides (2026-10-09, a scene's Duros).
-            if (scriptDestroyed.Contains(creature.ObjectId))
-            {
-                ids.Add(creature.ObjectId);
                 continue;
             }
 
@@ -508,23 +498,23 @@ public sealed partial class KotorGameBridge
         return ids;
     }
 
-    private const int BlockScriptDestroyRefusedCount = 0xC460;
-    private const int BlockScriptDestroyRefusedIds = 0xC464;
-    private const int BlockScriptDestroyRefusedCapacity = 16;
+    private const int BlockScriptDestroyedCount = 0xC460;
+    private const int BlockScriptDestroyedIds = 0xC464;
+    private const int BlockScriptDestroyedCapacity = 64;
 
-    /// <summary>Ids whose script DestroyObject the plugin's guard refused in this world
+    /// <summary>Targets of the script DestroyObject calls this world let through
     /// (SharedBlock.ScriptDestroy.cs).</summary>
-    private HashSet<uint> ReadScriptDestroyRefusedIds()
+    public HashSet<uint> ReadScriptDestroyedIds()
     {
         HashSet<uint> ids = [];
-        if (_pluginBlock == 0 || !_memory.TryReadUInt32(_pluginBlock + BlockScriptDestroyRefusedCount, out uint count))
+        if (_pluginBlock == 0 || !_memory.TryReadUInt32(_pluginBlock + BlockScriptDestroyedCount, out uint count))
         {
             return ids;
         }
 
-        for (int i = 0; i < Math.Min(count, (uint)BlockScriptDestroyRefusedCapacity); i++)
+        for (int i = 0; i < Math.Min(count, (uint)BlockScriptDestroyedCapacity); i++)
         {
-            if (_memory.TryReadUInt32(_pluginBlock + BlockScriptDestroyRefusedIds + i * 4, out uint id) && id != 0)
+            if (_memory.TryReadUInt32(_pluginBlock + BlockScriptDestroyedIds + i * 4, out uint id) && id != 0)
             {
                 ids.Add(id);
             }

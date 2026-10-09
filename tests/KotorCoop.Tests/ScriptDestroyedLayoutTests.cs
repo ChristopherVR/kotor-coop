@@ -2,10 +2,10 @@ using System.Text.RegularExpressions;
 using Xunit;
 
 namespace KotorCoop.Tests;
-
-/// <summary>The refused-script-destroy ring (SharedBlock.ScriptDestroy.cs): written by the
-/// plugin's guard, read by the agent's local-only check, so both sides must name the same bytes.</summary>
-public sealed class ScriptDestroyRefusedLayoutTests
+/// <summary>The script-destroyed ring (SharedBlock.ScriptDestroy.cs): written by the plugin,
+/// <summary>The script-destroyed ring (SharedBlock.ScriptDestroy.cs): written by the
+/// read by the host agent, so both sides must name the same bytes.</summary>
+public sealed class ScriptDestroyedLayoutTests
 {
     private static string Source(string relative)
     {
@@ -28,15 +28,15 @@ public sealed class ScriptDestroyRefusedLayoutTests
         string block = Source("src/KotorCoop.Plugin/SharedBlock.cs");
         string bridge = Source("src/KotorCoop.Memory/KotorGameBridge.PluginBlock.cs");
 
-        int count = Constant(plugin, "OffsetScriptDestroyRefusedCount");
-        int ids = Constant(plugin, "OffsetScriptDestroyRefusedIds");
-        int capacity = Constant(plugin, "ScriptDestroyRefusedCapacity");
+        int count = Constant(plugin, "OffsetScriptDestroyedCount");
+        int ids = Constant(plugin, "OffsetScriptDestroyedIds");
+        int capacity = Constant(plugin, "ScriptDestroyedCapacity");
 
         Assert.True(count >= Constant(effects, "OffsetEnemyEffectSourceLocalLoad") + 4);
         Assert.Equal(count + 4, ids);
         Assert.True(ids + capacity * 4 <= Constant(block, "TotalSize"));
-        Assert.Equal(count, Constant(bridge, "BlockScriptDestroyRefusedCount"));
-        Assert.Equal(ids, Constant(bridge, "BlockScriptDestroyRefusedIds"));
-        Assert.Equal(capacity, Constant(bridge, "BlockScriptDestroyRefusedCapacity"));
+        Assert.Equal(count, Constant(bridge, "BlockScriptDestroyedCount"));
+        Assert.Equal(ids, Constant(bridge, "BlockScriptDestroyedIds"));
+        Assert.Equal(capacity, Constant(bridge, "BlockScriptDestroyedCapacity"));
     }
 }

@@ -74,6 +74,10 @@ public class CreatureLivenessPumpTests
 
         public List<CreatureLivenessEntry> ReadCreatureLiveness() => Scan;
 
+        public HashSet<uint> ScriptDestroyed { get; set; } = [];
+
+        public HashSet<uint> ReadScriptDestroyedIds() => ScriptDestroyed;
+
         public bool TryWriteCreatureLiveness(IReadOnlyList<CreatureLivenessEntry> entries)
         {
             LastWritten = [.. entries];
@@ -280,6 +284,33 @@ public class CreatureLivenessPumpTests
         (string module, IReadOnlyList<CreatureLivenessEntry> entries) = session.Published[^1];
         Assert.Equal(Module, module);
         Assert.Contains(entries, e => e.ObjectId == 0x35 && e.State == CreatureLivenessState.Gone);
+    }
+
+    [Fact]
+    public void ACreatureAScriptDestroyedBeforeTheFirstScanIsGoneOnThatPass()
+    {
+        // 2026-10-09, tar_m02aa: the Sith scene removed a Duros on the host before the host's
+        // first scan of the area, so no pass ever saw it and the joiner's copy stood at 1 hp.
+        (CoopAgent agent, LivenessBridge bridge, LivenessSession session) = Build(authority: true);
+        bridge.Scan = [new CreatureLivenessEntry(0x14, CreatureLivenessState.Alive)];
+        bridge.ScriptDestroyed = [0x17];
+
+        agent.PumpOnce();
+
+        Assert.Contains(session.Published[^1].Entries, e => e.ObjectId == 0x17 && e.State == CreatureLivenessState.Gone);
+    }
+
+    [Fact]
+    public void AScriptDestroyStillPendingIsNotGoneYet()
+    {
+        // DestroyObject posts a delayed event: until the body really leaves the scan it is alive.
+        (CoopAgent agent, LivenessBridge bridge, LivenessSession session) = Build(authority: true);
+        bridge.Scan = [new CreatureLivenessEntry(0x17, CreatureLivenessState.Alive)];
+        bridge.ScriptDestroyed = [0x17];
+
+        agent.PumpOnce();
+
+        Assert.DoesNotContain(session.Published[^1].Entries, e => e.ObjectId == 0x17 && e.State == CreatureLivenessState.Gone);
     }
 
     [Fact]

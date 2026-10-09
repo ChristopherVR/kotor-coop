@@ -106,7 +106,7 @@ internal static unsafe class ScriptDestroyGuardHook
     public static unsafe void OnWorldUp(bool hostsWorld, byte* block)
     {
         _block = block;
-        *(uint*)(block + SharedBlock.OffsetScriptDestroyRefusedCount) = 0;
+        *(uint*)(block + SharedBlock.OffsetScriptDestroyedCount) = 0;
         Snapshot.Clear();
         _snapshotUntilMs = 0;
         if (!hostsWorld)
@@ -132,18 +132,19 @@ internal static unsafe class ScriptDestroyGuardHook
         PluginHost.Log($"script destroy guard: protecting {Snapshot.Count} creature(s) of the host's world until the census arrives");
     }
 
-    /// <summary>Hands a refused id to the agent (see SharedBlock.ScriptDestroy.cs): if the host
-    /// turns out not to have it either, the agent's local-only check removes it.</summary>
-    private static void RecordRefusal(uint id)
+    /// <summary>Hands the target of a script DestroyObject that went through to the agent (see
+    /// SharedBlock.ScriptDestroy.cs): on the host, the liveness scan reports it gone the moment
+    /// it leaves the world, even if the scan never saw it alive.</summary>
+    private static void RecordScriptDestroy(uint id)
     {
         if (_block == null)
         {
             return;
         }
 
-        uint* count = (uint*)(_block + SharedBlock.OffsetScriptDestroyRefusedCount);
-        uint* ids = (uint*)(_block + SharedBlock.OffsetScriptDestroyRefusedIds);
-        for (int i = 0; i < Math.Min(*count, (uint)SharedBlock.ScriptDestroyRefusedCapacity); i++)
+        uint* count = (uint*)(_block + SharedBlock.OffsetScriptDestroyedCount);
+        uint* ids = (uint*)(_block + SharedBlock.OffsetScriptDestroyedIds);
+        for (int i = 0; i < Math.Min(*count, (uint)SharedBlock.ScriptDestroyedCapacity); i++)
         {
             if (ids[i] == id)
             {
@@ -151,7 +152,7 @@ internal static unsafe class ScriptDestroyGuardHook
             }
         }
 
-        ids[*count % SharedBlock.ScriptDestroyRefusedCapacity] = id;
+        ids[*count % SharedBlock.ScriptDestroyedCapacity] = id;
         *count += 1;
     }
 
@@ -195,7 +196,6 @@ internal static unsafe class ScriptDestroyGuardHook
         if (!Bypass && eventId == *(uint*)DestroyEventIdAddress && IsProtected(target))
         {
             Refused++;
-            RecordRefusal(target);
             if (_logged < 20)
             {
                 _logged++;
@@ -204,6 +204,16 @@ internal static unsafe class ScriptDestroyGuardHook
             }
 
             return;
+        }
+
+        if (!Bypass && eventId == *(uint*)DestroyEventIdAddress)
+        {
+            // Creatures only: an item or placeable destroy is not the liveness channel's business.
+            nint body = Odyssey.ResolveServerObject(target);
+            if (body != 0 && NativeMethods.IsReadable(body, 4) && *(nint*)body == CreatureFinder.CreatureVtable)
+            {
+                RecordScriptDestroy(target);
+            }
         }
 
         ((delegate* unmanaged[Thiscall]<nint, uint, uint, uint, uint, uint, uint, void>)AddEventDeltaTime)(
