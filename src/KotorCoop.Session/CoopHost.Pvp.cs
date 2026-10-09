@@ -179,6 +179,17 @@ public sealed partial class CoopHost
     }
 
     /// <summary>Judges the round and sends it. Runs every tick from the broadcast pass.</summary>
+    public string PvpLastEnding
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _pvp.LastEnding;
+            }
+        }
+    }
+
     private void BroadcastPvp(long now, List<PeerConnection> recipients)
     {
         PvpStatePacket packet;

@@ -37,7 +37,7 @@ internal sealed class PvpPump(IGameBridge bridge, ICoopSession session, Action<s
         if (!_everWritten ? phase != 0 : next != _written)
         {
             log(phase == 0
-                ? "duel: over - releasing the pin"
+                ? $"duel: over - releasing the pin{(session.PvpLastEnding.Length > 0 ? $" ({session.PvpLastEnding})" : string.Empty)}"
                 : $"duel: round {round} is {(phase == 2 ? "live" : "counting down")} against peer {opponent}");
         }
 
