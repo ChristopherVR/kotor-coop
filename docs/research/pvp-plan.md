@@ -192,3 +192,96 @@ Fixed during the pass: the round now logs how it ended (health/max/down per side
 called off), which explained a round that seemed to end above 25% (the host had dipped to 1 hp
 between samples).
 
+
+## In-game surface: the duel panel (2026-10-09, Built, NEEDS-LIVE)
+
+Players start a duel without typing: F10 opens a list of the players in the area, Up/Down or 1-9
+pick, Enter challenges; a challenge shows "F11 accept / F12 decline"; F12 yields during a fight.
+Built as a keyboard panel on the queued-text overlay, not a clickable button. Why:
+
+**(a) A clickable in-game button was not built.** The mod's "Co-op" button on the main menu is not
+a button the mod creates. It is `BTN_WARP`, a control the retail main-menu constructor builds and
+then deliberately hides one instruction later; the mod only sets the visible bit back, relabels it
+and rebinds its click (`menu-button-runtime.md`; the "shelved" note in the history is that feature's
+first attempt, which crashed because BTN_WARP is embedded in the menu object, not a pointer
+off it, and was fixed the same day). Nothing like that exists on the in-game HUD: every HUD control
+is a real one with a job (the pause hourglass already has its click detoured, `PauseButtonHook`).
+A new HUD button would mean constructing and laying out `CSWGui*` controls at runtime, or shipping a
+`.gui` override that replaces a retail HUD layout (a mod-compat hazard for any player with a HUD
+mod), and the engine's panel constructors take `CExoArrayList` arguments whose ABI the repo has
+never driven (`server-browser.md` crash-risk register). That is a poor trade for a feature that
+must never crash a fight. The shelved-menu blocker (a wrong-address write) does not apply, but the
+dormant-control trick does not exist in-game either.
+
+**(b) Built: the keyboard panel.** It is the same technique the in-world server browser (F9) already
+ships: `PostTextLine` rows re-posted every frame, key edges from `IsKeyDownHere`, nothing that calls
+into the engine. `PvpMenuController` (SwapBuffers hook, in-world only) draws it; `PvpMenuRule` holds
+every decision (mode, key mapping, selection, text) and is unit-tested (`PvpMenuRuleTests`).
+
+**(c) A main-menu entry was not built.** Duels need two players in one area, so a main-menu entry
+would have nothing to do; the Co-op button opens the server browser, and that stays as it is.
+
+How it works:
+
+| State (agent-written) | What is drawn | Keys that act |
+| --- | --- | --- |
+| Duels off on the host | nothing at all | none (every key ignored) |
+| Duels on, nothing under way, someone in the area | one faint line "F10: challenge a player to a duel" | F10 opens the list |
+| List open | "=== DUEL ===", one row per player in the area (busy ones marked), footer | Up/Down or 1-9 move the highlight; Enter challenges; Esc or F10 closes |
+| Challenged | "Aria challenges you to a duel." and "F11 accept   F12 decline   No answer in 30 seconds counts as no." | F11 accept, F12 decline |
+| Waiting on an answer | "You challenged Aria to a duel. Waiting for an answer." | none |
+| Countdown or fight | "Duel with Aria.   F12 yield (stops it, nothing is lost)" | F12 yield |
+
+- **Visibility.** The agent writes a flag word every pump (`SharedBlock.OffsetPvpUi` 0xCC8C, with the
+  other player's peer id at 0xCC90): bit 0 "the host allows duels" (the host's `pvp`, adopted by a
+  client like every behaviour flag), bit 1 "challenged", bit 2 "waiting". Zero (duels off, no
+  session) hides the panel entirely. Block version 101; both fields are zeroed on disconnect.
+- **No new intent field.** A key press publishes the same console line a player would type
+  (`duel Aria`, `accept`, `decline`, `yield`) through the console mailbox, so the agent runs the
+  code the typed command runs.
+- **Never without a key.** A command goes out only on a key press edge (a key already held when the
+  panel appears is not a press). Number keys only move the highlight; Enter is the only thing that
+  challenges, and it does nothing with the list closed. A challenge is answered only by F11/F12.
+  Silence is still a no, host-side.
+- **Who is listed.** The players with a live stand-in in this world, which is exactly "same area"
+  (the agent clears a slot when a peer is in another area). Levels are not shown: the remote slot does
+  not carry them; the host's own refusal lines still cover "too hurt" and "busy".
+- **Keyboard conflicts handled.** The panel is inert while the console, a conversation, a full-screen
+  panel or a password prompt is up, and the list closes if one opens. While the list is open the
+  Enter-to-chat prompt is held off so Enter confirms a pick and does not also open the console.
+
+Known limits, honestly: the arrow keys also reach the game while the list is open (the character
+can turn or walk), Esc also opens the game menu (which closes the list), and the key choice (F10 to
+F12) is not configurable. F12 is Steam's default screenshot key on a Steam install.
+
+### NEEDS-LIVE checklist (duel panel)
+
+Two instances, same area, `pvp = duel` on the host. Capture the plugin log (`duel panel: ...` lines)
+and a screenshot of each state.
+
+1. **Hidden when off.** With `pvp = off` on the host, no hint line appears, F10/F11/F12 do nothing,
+   and the log has no `duel panel: Idle`. Turn it on: the hint appears on the joiner too (a client
+   adopts the host's value).
+2. **Hint and list.** With the partner in the area the faint "F10: challenge a player..." line shows
+   below the connection indicator and clears neither the minimap nor the chat overlay (800x600 and a
+   wide resolution). F10 opens the list with the partner's name; with nobody else in the area the
+   list says so. Leaving the area closes it.
+3. **Pick and challenge.** Up/Down and 1-9 move the highlight; Enter sends `duel <name>` (log
+   `duel panel: sent 'duel Aria'`); the challenger's screen shows the waiting line and the target
+   gets the prompt. A name with a space and a name that is a prefix of another both pick the right
+   player. Enter does NOT open the console chat prompt while the list is open or on the confirming
+   press.
+4. **Answer by key.** F11 starts the countdown; F12 declines ("said no. Nothing happened."). Doing
+   nothing for 30 s clears the prompt and nothing is sent. F11/F12 pressed when nothing is pending do
+   nothing. Both directions (host and joiner).
+5. **Yield by key.** During the countdown and during the fight F12 ends the duel (`YouYielded` line,
+   hit points restored); a single press is enough; no other key (Enter, Esc, F11, 1-9) yields.
+6. **No stray fire.** Hold F12 through a challenge appearing: nothing is sent until a fresh press.
+   Open the console (~) and type 1-9, F10, F11, F12: the panel does nothing. Open the inventory or a
+   conversation with the list open: the list closes.
+7. **Keyboard side effects.** Record what the arrow keys do to the character while the list is open
+   (turn/walk), and whether F10, F11 or F12 trigger anything in the retail game (quicksave, screenshot,
+   Steam overlay). If any does, the keys need moving.
+8. **Block v101.** A plugin and agent from this build attach (no "plugin shared block not found");
+   `0xCC8C` reads 1 with duels on and idle, 3 on the target while challenged, 5 on the challenger
+   while waiting; all zero after `disconnect`.

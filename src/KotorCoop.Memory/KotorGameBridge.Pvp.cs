@@ -7,6 +7,23 @@ public sealed partial class KotorGameBridge
     private const int BlockPvpOpponentPeer = 0xCC84;
     private const int BlockPvpRound = 0xCC88;
 
+    // ⚠ KEEP IN SYNC with SharedBlock.OffsetPvpUi/OffsetPvpUiPeer.
+    private const int BlockPvpUi = 0xCC8C;
+    private const int BlockPvpUiPeer = 0xCC90;
+
+    /// <inheritdoc />
+    public void SetPvpUi(uint flags, uint peer)
+    {
+        if (_pluginBlock == 0)
+        {
+            return;
+        }
+
+        // Peer first, flags last: a reader that sees the incoming bit must see its challenger.
+        _memory.TryWrite(_pluginBlock + BlockPvpUiPeer, flags == 0 ? 0u : peer);
+        _memory.TryWrite(_pluginBlock + BlockPvpUi, flags);
+    }
+
     /// <inheritdoc />
     public void SetPvpState(uint phase, uint opponentPeer, uint round)
     {

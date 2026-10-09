@@ -29,7 +29,8 @@ internal sealed unsafe class ChatInputController
     {
         bool down = NativeMethods.IsKeyDownHere(NativeMethods.VkReturn);
         if (!_latch.ShouldOpen(down, Odyssey.IsConsoleOpen, Odyssey.IsInGame,
-            Odyssey.IsConversationActive, Odyssey.IsFullScreenGuiUp || PasswordEntryModal.IsAnyOpen))
+            Odyssey.IsConversationActive, Odyssey.IsFullScreenGuiUp || PasswordEntryModal.IsAnyOpen
+            || PvpMenuController.ListOpen))
         {
             return;
         }

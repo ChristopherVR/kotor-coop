@@ -211,6 +211,7 @@ internal static unsafe partial class PluginHost
         _connectMenu?.Invalidate();
         _death?.Invalidate();
         _pvpDuel?.Invalidate();
+        _pvpMenu?.Invalidate();
         _spectate?.Invalidate();
         _soloSegment?.Invalidate();
         _soloSegmentSpectate?.Invalidate();
