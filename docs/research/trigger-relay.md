@@ -777,6 +777,6 @@ What ships, for scripts in the generated `HostileSpawnTriggers.cs`:
   stand-ins.
 
 A script outside the list, such as a mod's own trigger, keeps the ordinary relay. The joiner-side
-`LocalOnlyHostileTracker` (20 s, never a hostile in combat) catches spawns from other paths.
+`LocalOnlyHostileTracker` (first complete host view 4.5 s after the miss, never a hostile in combat; 20 s until 2026-10-09) catches spawns from other paths.
 Regenerate after a game-data change with `python tools/hostile_spawn_triggers.py`; `--check` fails when the
 file is stale.
