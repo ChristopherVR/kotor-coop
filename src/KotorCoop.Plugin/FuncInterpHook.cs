@@ -127,6 +127,10 @@ internal static unsafe class FuncInterpHook
         // addendum), registered the same way. Does not shadow a retail verb.
         "startdialog",
 
+        // Duels (docs/research/pvp-plan.md): the words a player types to challenge and answer.
+        // None shadows a retail console verb.
+        "duel", "accept", "decline", "yield",
+
         // A fourth live-test primitive (2026-08-28, docs/research/star-forge-finale.md §11):
         // registered here, unlike "recruit"/"skipline"/etc above, because the live plan for the
         // solo-segment detector's script-agnostic trigger needs it typed directly at the

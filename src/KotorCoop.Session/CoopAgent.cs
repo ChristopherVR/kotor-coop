@@ -89,6 +89,7 @@ public sealed partial class CoopAgent
     private readonly SpawnTemplatePump _spawnTemplatePump;
     private readonly PausePump _pausePump;
     private readonly DeathPump _deathPump;
+    private readonly PvpPump _pvpPump;
     private readonly WorldStatePump _worldStatePump;
     private readonly LocalVarPump _localVarPump;
     private readonly ScriptItemGrantPump _scriptItemGrantPump;
@@ -196,6 +197,7 @@ public sealed partial class CoopAgent
         _spawnTemplatePump = new SpawnTemplatePump(bridge, session);
         _pausePump = new PausePump(bridge, settings, _log);
         _deathPump = new DeathPump(bridge, session, _log);
+        _pvpPump = new PvpPump(bridge, session, _log);
         _worldStatePump = new WorldStatePump(bridge, session, settings, _recentlySyncedItems);
         _localVarPump = new LocalVarPump(bridge, session, _log);
         _scriptItemGrantPump = new ScriptItemGrantPump(bridge, session, settings, _recentlySyncedItems, _log);
@@ -504,7 +506,9 @@ public sealed partial class CoopAgent
     /// </summary>
     private PlayerState ApplyMenuGuard(PlayerState local)
     {
-        if (!_settings.MenuGuardSyncEnabled || _bridge is not KotorGameBridge bridge)
+        // A duellist gets no "cannot be hit while a menu is open" cushion: in a duel it is an
+        // exploit (docs/research/pvp-product.md section 1).
+        if (!_settings.MenuGuardSyncEnabled || _pvpPump.Fighting || _bridge is not KotorGameBridge bridge)
         {
             return local;
         }
@@ -627,6 +631,7 @@ public sealed partial class CoopAgent
             if (hostLost)
             {
                 _bridge.ClearCoopState();
+                _pvpPump.Reset();
                 if (_session.HostAway)
                 {
                     // Same release, truthful wording: the link is fine, the host is parked at
@@ -828,6 +833,9 @@ public sealed partial class CoopAgent
         // module, so a peer one module away is absent rather than standing - and "everyone is
         // down" then becomes true while they are alive and on their way. Two players hid this
         // because the client follows the host's module; three do not.
+        // Duels first: the plugin must know this player is pinned before death is arbitrated, and
+        // the wipe vote reads the same round (a duel defeat is never a campaign wipe).
+        _pvpPump.Pump();
         _deathPump.PumpDeath(local, peers);
 
         // Client-only, every tick: keep the player's input locked to their own PC (a cheap id

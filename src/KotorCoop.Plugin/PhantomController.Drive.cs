@@ -268,7 +268,7 @@ internal sealed unsafe partial class PhantomController
             bool menuGuarded = _menuGuardSync && remote.MenuGuarded;
             PhantomHitHook.SetMenuGuarded(i, menuGuarded);
 
-            ApplyTargetable(i, phantom, alive: !remote.Downed, stealthed: remote.Stealthed, menuGuarded: menuGuarded);
+            ApplyTargetable(i, phantom, alive: !remote.Downed, stealthed: remote.Stealthed, menuGuarded: menuGuarded, peerId: remote.PeerId);
             ApplyStealthVisual(i, phantom, remote.Stealthed);
             ApplyVitals(i, phantom, remote);
 
@@ -644,6 +644,10 @@ internal sealed unsafe partial class PhantomController
     private readonly bool[] _hostileToLocals = new bool[SharedBlock.SlotCapacity];
     private readonly bool[] _factionKnown = new bool[SharedBlock.SlotCapacity];
 
+    /// <summary>Per slot: is the body currently the hostile opponent of a live duel. Part of the
+    /// same latch as <c>_hostileToLocals</c> (a duel flips the faction without changing "want").</summary>
+    private readonly bool[] _pvpHostile = new bool[SharedBlock.SlotCapacity];
+
     /// <summary>Per slot: the stealth mode last written to the body by
     /// <see cref="ApplyStealthVisual"/>, tri-state via <c>_stealthVisualKnown</c> the same way
     /// the faction pair above is. Cleared with the slot.</summary>
@@ -707,7 +711,7 @@ internal sealed unsafe partial class PhantomController
     /// releases attackers immediately rather than at the next round boundary — belt and
     /// braces against the one failure this design must never reproduce.
     /// </summary>
-    private void ApplyTargetable(int slot, nint phantom, bool alive, bool stealthed, bool menuGuarded)
+    private void ApplyTargetable(int slot, nint phantom, bool alive, bool stealthed, bool menuGuarded, uint peerId)
     {
         // ⚠ THE AUTHORITY SPLIT ONLY HOLDS IF EACH INSTANCE'S ENEMIES FIGHT ITS OWN PLAYER,
         // AND NOTHING IN THE ENGINE ENFORCES THAT.
@@ -756,7 +760,18 @@ internal sealed unsafe partial class PhantomController
         bool menuGuardHold = PhantomTargetRule.IsMenuGuardHold(
             _targetable, alive, holdNeutral, menuGuardSync: true, menuGuarded);
 
-        if (_factionKnown[slot] && _hostileToLocals[slot] == want)
+        // A duel (docs/research/pvp-plan.md): while the local player is in a LIVE duel, the stand-in
+        // of their opponent, and only that one, is hostile whatever the holds above say. It is part
+        // of the same edge-latched flip, so a duel that ends releases the body through the same
+        // path a stealth hold does.
+        bool pvpHostile = PhantomTargetRule.WantsPvpHostile(
+            pvpLive: block.PvpPhase == SharedBlock.PvpPhaseLive,
+            isOpponent: peerId != 0 && peerId == block.PvpOpponentPeer,
+            alive: alive,
+            stealthSync: _stealthSync,
+            stealthed: stealthed);
+
+        if (_factionKnown[slot] && _hostileToLocals[slot] == want && _pvpHostile[slot] == pvpHostile)
         {
             return;
         }
@@ -771,11 +786,12 @@ internal sealed unsafe partial class PhantomController
         // Player so the engine's GetIsFriend (reputation >= 90) holds for the local caster — see
         // PhantomTargetRule.FactionFor and docs/research/partner-buffs.md. The latch below stays
         // keyed on `want`: the key is read once at construction, so the pair never disagrees.
-        PhantomTargetRule.Kind kind = PhantomTargetRule.FactionFor(want, _partnerBuffs);
+        PhantomTargetRule.Kind kind = PhantomTargetRule.FactionFor(want, _partnerBuffs, pvpHostile);
         int factionId = kind switch
         {
             PhantomTargetRule.Kind.Friendly => Odyssey.FactionFriendly1,
             PhantomTargetRule.Kind.Player => Odyssey.FactionPlayer,
+            PhantomTargetRule.Kind.PvpHostile => Odyssey.FactionHostile1,
             _ => Odyssey.FactionNeutralId,
         };
 
@@ -784,16 +800,22 @@ internal sealed unsafe partial class PhantomController
             return; // try again next pass rather than latching a state we did not achieve
         }
 
-        if (!want)
+        // Pacify on the way out of anything hostile: the neutral flip, and the end of a duel (back
+        // to Friendly_1, where the local player and their companions must let go of the body).
+        bool wasPvpHostile = _pvpHostile[slot];
+        if (!want || (wasPvpHostile && !pvpHostile))
         {
             Odyssey.PacifyPhantom(phantom);
         }
 
+        _pvpHostile[slot] = pvpHostile;
         _hostileToLocals[slot] = want;
         _factionKnown[slot] = true;
 
         PluginHost.Log(want
-            ? kind == PhantomTargetRule.Kind.Friendly
+            ? kind == PhantomTargetRule.Kind.PvpHostile
+                ? $"phantom 0x{objectId:X}: joined the hostile faction (duel); the local player can attack it"
+                : kind == PhantomTargetRule.Kind.Friendly
                 ? $"phantom 0x{objectId:X}: joined the friendly faction (partner_buffs); local enemies can fight it and a friend-sphere cast reaches it"
                 : $"phantom 0x{objectId:X}: joined the player faction; local enemies can fight it"
             : stealthHold

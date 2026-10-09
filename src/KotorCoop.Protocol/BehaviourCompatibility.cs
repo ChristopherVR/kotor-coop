@@ -100,6 +100,7 @@ public static class BehaviourCompatibility
         CompareFlag(BehaviourFlags.InventoryPersonal, "inventory_mode", hostAuthoritative: true);
         CompareFlag(BehaviourFlags.CreditsPersonal, "credits_mode", hostAuthoritative: true);
         CompareFlag(BehaviourFlags.CorpseLootPersonal, "corpse_loot", hostAuthoritative: true);
+        CompareFlag(BehaviourFlags.Pvp, "pvp", hostAuthoritative: true);
 
         if (host.InterpolationMs != peer.InterpolationMs)
         {

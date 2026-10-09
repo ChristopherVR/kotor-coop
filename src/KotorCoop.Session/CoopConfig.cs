@@ -348,6 +348,11 @@ public sealed record CoopConfig
     /// Host-authoritative. See CorpseLootPump.</summary>
     public bool CorpseLootPersonal { get; init; }
 
+    /// <summary>coop.ini <c>pvp</c> (`off`/`duel`). True ("duel") lets players challenge each
+    /// other to a consensual duel; false ("off", the default) refuses every challenge.
+    /// Host-authoritative. See PvpDuelRound and docs/research/pvp-plan.md.</summary>
+    public bool Pvp { get; init; }
+
     /// <summary>coop.ini <c>class_grant_sync</c> — relay a script's <c>AddMultiClass</c> (the
     /// Jedi class from Dorak's path choice) to every other player's character. OFF by default,
     /// NEEDS-LIVE; must match the plugin's own <c>PluginConfig.ReadBool("class_grant_sync",
@@ -888,7 +893,7 @@ public sealed record CoopConfig
         "mode", "host", "port", "password", "name", "server_name", "join_mode",
         "auto_adopt_world", "menu_button", "follow_lead", "dialogue_auto_join",
         "dialogue_auto_join_range", "spectate_on_down", "control_return",
-        "inventory_mode", "credits_mode", "corpse_loot",
+        "inventory_mode", "credits_mode", "corpse_loot", "pvp",
         "enemy_health", "enemy_damage", "xp_rate", "store_stock", "store_prices",
         "hide_party_portraits", "status_toasts", "status_indicator", "chat_overlay",
         "chat_overlay_opacity", "chat_overlay_anchor", "chat_overlay_lines",
@@ -1108,6 +1113,7 @@ public sealed record CoopConfig
             CreditsPersonal = creditsPersonal,
             CorpseLootPersonal = string.Equals(
                 kv.GetValueOrDefault("corpse_loot"), "personal", StringComparison.OrdinalIgnoreCase),
+            Pvp = string.Equals(kv.GetValueOrDefault("pvp"), "duel", StringComparison.OrdinalIgnoreCase),
             ClassGrantSync = !kv.ContainsKey("class_grant_sync") || IsTruthy(kv.GetValueOrDefault("class_grant_sync")),
             FirstSaberColorSync = !kv.ContainsKey("first_saber_color_sync") || IsTruthy(kv.GetValueOrDefault("first_saber_color_sync")),
             DialogueFastJoin = !kv.ContainsKey("dialogue_fast_join")

@@ -167,6 +167,25 @@ internal static unsafe partial class Odyssey
     }
 
     /// <summary>
+    /// Writes CURRENT Force points (the same short at stats+0x122 that <c>LevelUp</c> increments).
+    /// A plain field write: nothing derived hangs off it that the engine does not recompute from
+    /// the field itself on its next read, and the value is clamped to [0, max] by the caller. Used
+    /// only to put a duellist's Force points back as they were (docs/research/pvp-plan.md,
+    /// NEEDS-LIVE: that the Force bar follows). MAIN THREAD ONLY.
+    /// </summary>
+    public static bool SetCurrentForcePoints(nint creature, short forcePoints)
+    {
+        nint stats = Deref(creature + CreStats);
+        if (stats == 0 || !NativeMethods.IsReadable(stats + StatsForcePoints, 2))
+        {
+            return false;
+        }
+
+        *(short*)(stats + StatsForcePoints) = forcePoints;
+        return true;
+    }
+
+    /// <summary>
     /// The engine's own computed max Force points for <paramref name="creature"/>, through
     /// <c>CSWSCreature::GetMaxForcePoints</c> - never a formula this codebase reimplements.
     /// Returns 0 (rather than a possibly-stale guess) when the handler's own bytes no longer

@@ -478,6 +478,13 @@ public sealed partial class KotorGameBridge
     internal static readonly (string Name, int Offset)[] SessionScopedBlockLevels =
     [
         ("local session role", BlockLocalSessionRole),
+
+        // A duel left up would keep the local player pinned at 1 hp and their opponent's stand-in
+        // hostile for a fight the host no longer holds (docs/research/pvp-plan.md). Zero is "no
+        // duel", which is what the plugin's own release pass restores from.
+        ("duel phase", BlockPvpPhase),
+        ("duel opponent", BlockPvpOpponentPeer),
+        ("duel round", BlockPvpRound),
         ("remote peers", BlockRemoteCount),
         ("enemy census", BlockEnemyCount),
         ("enemy presence", BlockEnemyPresenceCount),

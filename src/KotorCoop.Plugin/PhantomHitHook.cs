@@ -378,6 +378,17 @@ internal static unsafe class PhantomHitHook
     /// can recognise a hit landing on it without an engine call. MAIN THREAD, once a frame.</summary>
     public static void WatchLocalPlayer(uint playerId) => _localPlayerId = playerId;
 
+    /// <summary>True while the local player is in a LIVE duel (docs/research/pvp-plan.md). Then a
+    /// hit on a peer's stand-in counts only if the local player's own character dealt it
+    /// (<see cref="PvpHitRule"/>) and is never scaled by <c>enemy_damage</c>.</summary>
+    private static bool _pvpLive;
+
+    /// <summary>MAIN THREAD, from <c>PvpDuelController</c>.</summary>
+    public static void SetPvpLive(bool live) => _pvpLive = live;
+
+    /// <summary>Hits dropped because a companion, trap or script dealt them during a duel.</summary>
+    public static uint PvpHitsDropped { get; private set; }
+
     /// <summary>Starts (or stops, with id 0) watching the phantom in a slot. Counters are
     /// kept across a re-register of the same id so a respawned body does not replay damage
     /// the peer has already taken.</summary>
@@ -892,9 +903,30 @@ internal static unsafe class PhantomHitHook
                 return;
             }
 
+            // Duels: companions are benched for v1 (docs/research/pvp-product.md section 5), but
+            // their AI still swings at a hostile body, so the hits they land on the opponent's
+            // stand-in are dropped here, as are a trap's or a script's. Only the player's own
+            // character fights.
+            if (slot >= 0 && _pvpLive)
+            {
+                uint creator = *(uint*)(effect + EffectCreator);
+                if (!PvpHitRule.CountsInDuel(creator, _localPlayerId))
+                {
+                    if (PvpHitsDropped++ < 6)
+                    {
+                        PluginHost.Log($"duel: dropped a hit on stand-in 0x{targetId:X} from 0x{creator:X} (only your own character fights)");
+                    }
+
+                    return;
+                }
+            }
+
             // enemy_damage: rewrite a hostile hit on a player body BEFORE anything below reads
-            // the amounts, so the engine's apply and every ledger see the same number.
-            if (_damagePercent != EnemyScalingRule.Vanilla && !SuppressDealt
+            // the amounts, so the engine's apply and every ledger see the same number. A player's
+            // hit on a player is not an enemy's: during a live duel nothing here is scaled (the
+            // attacker is the local player, which ScaleHostileDamage already skips; this keeps it
+            // true if that ever changes).
+            if (_damagePercent != EnemyScalingRule.Vanilla && !SuppressDealt && !(_pvpLive && slot >= 0)
                 && (slot >= 0 || companionSlot >= 0 || IsDamageScaleTarget(targetId)))
             {
                 ScaleHostileDamage(effect);

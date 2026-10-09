@@ -879,6 +879,10 @@ internal static unsafe partial class PluginHost
                 // pending revive applied) before the phantom/combat passes read the same creature.
                 _death?.OnFrame();
 
+                // Right after death: the duel pin has to be up (or taken off again) before the combat
+                // passes below read or write this player's hit points.
+                _pvpDuel?.OnFrame();
+
                 // Read-only, no ordering dependency on anything else here: the local per-frame
                 // minigame read (swoop/turret), logged on its own edges. The agent reads the same
                 // pointer chain independently for the wire flag (see MinigameController's remarks).
