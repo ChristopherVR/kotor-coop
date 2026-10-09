@@ -55,6 +55,15 @@ public sealed partial class CoopHost : ICoopSession
         /// <summary>Absorbs a GIT baseline artifact once this peer's save identity has agreed
         /// with the host's — see <see cref="ModuleGitLineage"/>.</summary>
         public readonly ModuleGitLineage GitLineage = new();
+
+        /// <summary>Until when this peer counts as knowing about duels: its build says so every
+        /// two seconds (<see cref="PvpOp.Aware"/>), so an older build never gets there.</summary>
+        public long PvpAwareUntilMs;
+
+        /// <summary>The last duel request serial acted on, so the repeats of one request do
+        /// nothing. Wrap-safe compare; see <c>HandlePvpIntent</c>.</summary>
+        public uint PvpLastSerial;
+        public bool PvpSerialKnown;
     }
 
     /// <summary>
@@ -269,6 +278,7 @@ public sealed partial class CoopHost : ICoopSession
             [PacketType.PartySelectRequest] = HandlePartySelectRequest,
             [PacketType.HostConversationRequest] = HandleHostConversationRequest,
             [PacketType.CorpseTakes] = HandleCorpseTakes,
+            [PacketType.PvpIntent] = HandlePvpIntent,
             [PacketType.None] = HandleNone,
         };
     }
@@ -497,6 +507,7 @@ public sealed partial class CoopHost : ICoopSession
         BroadcastSpawnTemplates(now, recipients);
         BroadcastCorpseTakes(now, recipients);
         BroadcastHostBodyBags(now, recipients);
+        BroadcastPvp(now, recipients);
         BroadcastTriggerRelay(recipients);
         BroadcastParty(now, recipients);
         BroadcastPartyRoster(now, recipients);

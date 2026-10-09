@@ -99,6 +99,10 @@ internal static unsafe partial class PluginHost
     private static ServerBrowserController? _browser;
     private static NativeBrowserController? _nativeBrowser;
     private static DeathController? _death;
+
+    /// <summary>The local player's half of a duel: the 1 hp pin and the restore afterwards
+    /// (docs/research/pvp-plan.md).</summary>
+    private static PvpDuelController? _pvpDuel;
     private static SpectateController? _spectate;
     private static ChatOverlayController? _chatOverlay;
     private static ChatMessagesScreenController? _chatMessagesScreen;
@@ -434,7 +438,8 @@ internal static unsafe partial class PluginHost
         //      docs/research/creature-liveness.md.
         // 89: verified companion occupant banks BC00/BD00, allocation BE00.
         // 97: host-start conversation relay mailboxes at 0x5C50..0x5CB0 (SharedBlock.HostConversation.cs).
-        _block->Version = 99;
+        // 100: duel phase/opponent/round levels at 0xCC80 (SharedBlock.Pvp.cs, docs/research/pvp-plan.md).
+        _block->Version = 100;
         *(uint*)((byte*)_block + SharedBlock.OffsetDamageDealtIncarnation) = PhantomHitHook.Dealt.Incarnation;
 
         // A guard dword after the version. Magic plus version alone was not selective

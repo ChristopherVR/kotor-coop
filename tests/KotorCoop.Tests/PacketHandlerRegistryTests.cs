@@ -62,6 +62,8 @@ public class PacketHandlerRegistryTests
         PacketType.HostConversationRequest,
         // Shared corpse loot: a client's body-bag takes reach the host.
         PacketType.CorpseTakes,
+        // Duels: a client's request (challenge, accept, decline, yield, opt out, aware).
+        PacketType.PvpIntent,
         PacketType.None,
     ];
 
@@ -86,6 +88,8 @@ public class PacketHandlerRegistryTests
         PacketType.SpawnTemplates,
         // Shared corpse loot: every other player's takes, relayed by the host, and the host's bags.
         PacketType.CorpseTakes, PacketType.HostBodyBag,
+        // Duels: the host's round and its messages.
+        PacketType.PvpState,
         PacketType.PartyPoolOp, PacketType.PartyPoolAck,
         PacketType.StoreOp, PacketType.StoreAck,
         // v2 (host-authoritative absolute snapshot + client intents, docs/research/

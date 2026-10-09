@@ -1603,6 +1603,11 @@ public sealed partial class CoopCommandDispatcher
     /// </summary>
     private void SaveGameCommand(string? name)
     {
+        if (RefuseSaveDuringDuel())
+        {
+            return;
+        }
+
         if (string.IsNullOrEmpty(name))
         {
             SendCheat(new CheatRequest(CheatKinds.QuickSave));

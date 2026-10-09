@@ -16,6 +16,8 @@ internal static unsafe partial class PluginHost
 
     private static readonly SaveFlushRule _saveFlush = new();
 
+    private static int _pvpSavesRefused;
+
     /// <summary>The held request's arguments, replaced by a coalesced one (the latest wins).</summary>
     private static SaveFlushHook.Capture _heldSave;
 
@@ -84,6 +86,21 @@ internal static unsafe partial class PluginHost
         if (!SaveFlushHook.Installed)
         {
             return true;
+        }
+
+        // A duel pins the player at 1 hp minimum, and that pin is a persistent creature field that
+        // rides a save (docs/research/min-one-hitpoint.md). Checked BEFORE the epoch test below on
+        // purpose: the module-enter autosave of an area change mid-duel is exactly the save that
+        // would bake it in. The request is swallowed, not held - there is nothing to re-issue, and
+        // a save the player wants can be made after the duel.
+        if (_pvpDuel is { Holding: true })
+        {
+            if (_pvpSavesRefused++ < 5)
+            {
+                Log($"duel: refused a save request (slot {number}) while the duel pin is up");
+            }
+
+            return false;
         }
 
         if (_epoch == 0 || !Odyssey.TryGetWorldEpoch(out ulong live) || live != _epoch)

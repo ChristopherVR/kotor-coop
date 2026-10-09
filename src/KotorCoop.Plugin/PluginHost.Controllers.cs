@@ -48,6 +48,7 @@ internal static unsafe partial class PluginHost
         _browser = new ServerBrowserController(_view);
         _nativeBrowser = new NativeBrowserController(_view);
         _death = new DeathController(_view);
+        _pvpDuel = new PvpDuelController(_view);
         _spectate = new SpectateController(_view);
         _chatOverlay = new ChatOverlayController(_view);
         _chatMessagesScreen = new ChatMessagesScreenController(_view);

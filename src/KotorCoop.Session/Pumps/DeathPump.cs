@@ -57,6 +57,11 @@ internal sealed class DeathPump(IGameBridge bridge, ICoopSession session, Action
         // Counting it as a standing player is how a full party wipe became impossible: an
         // unpublished avatar is all zeroes, all zeroes is finite, finite is "plausible", and
         // a plausible undowned peer holds the game-over suppression on forever.
+        // A duel defeat is not a wipe (docs/research/pvp-plan.md): a duellist who is down has lost
+        // a fight, and neither they nor the opponent may count toward the vote that lifts the
+        // game-over screen. The 1 hp pin means nobody should be down at all; this is the net
+        // under it.
+        PvpView duel = session.PvpState;
         bool everyPeerWiped = true;
         int participants = 0;
 
@@ -69,6 +74,12 @@ internal sealed class DeathPump(IGameBridge bridge, ICoopSession session, Action
 
             participants++;
 
+            if (!PvpPumpRule.CountsTowardWipe(duel, peers[i].PeerId))
+            {
+                everyPeerWiped = false;
+                break;
+            }
+
             if (!peers[i].State.IsPartyWiped)
             {
                 everyPeerWiped = false;
@@ -78,7 +89,7 @@ internal sealed class DeathPump(IGameBridge bridge, ICoopSession session, Action
 
         // Wiped implies downed, but the bridge can latch the wipe a tick before it reads the
         // downed level (same plugin frame, serial written first) — insist on both.
-        bool allDown = local.IsDowned && local.IsPartyWiped && participants > 0 && everyPeerWiped;
+        bool allDown = PvpPumpRule.LocalMayWipe(duel, session.LocalPeerId) && local.IsDowned && local.IsPartyWiped && participants > 0 && everyPeerWiped;
 
         // Hold the game-over unless the session really is wiped; always hold the control
         // swap (it fights the control lock and hands a client the host's companions).

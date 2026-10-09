@@ -170,6 +170,7 @@ public sealed partial class CoopCommandDispatcher(
                     AnnounceHostSaveAvailability();
                     AnnouncePublicAddress();
                     AnnounceRejectedJoins();
+                    AnnouncePvp();
 
                     // After AnnouncePublicAddress, deliberately: the connect string a friend
                     // joins should carry the public endpoint STUN found, and this is the tick
@@ -469,6 +470,10 @@ public sealed partial class CoopCommandDispatcher(
         [CoopCommandKind.SetGold] = c => SendCheat(new CheatRequest(CheatKinds.SetGold, Amount: c.Amount)),
         [CoopCommandKind.AddClass] = c => SendCheat(new CheatRequest(CheatKinds.AddClass, Amount: c.Amount)),
         [CoopCommandKind.JediChoice] = _ => SendCheat(new CheatRequest(CheatKinds.JediChoice)),
+        [CoopCommandKind.Duel] = DuelCommand,
+        [CoopCommandKind.DuelAccept] = _ => DuelAnswerCommand(PvpOp.Accept),
+        [CoopCommandKind.DuelDecline] = _ => DuelAnswerCommand(PvpOp.Decline),
+        [CoopCommandKind.DuelYield] = _ => DuelAnswerCommand(PvpOp.Yield),
         [CoopCommandKind.Cast] = CastSpell,
         [CoopCommandKind.GrantPower] = c => SendCheat(new CheatRequest(
             CheatKinds.GrantPower, Amount: c.Amount, Charges: c.EffectMagnitude)),

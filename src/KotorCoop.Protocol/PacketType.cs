@@ -816,4 +816,17 @@ public enum PacketType : byte
     /// take channel (<see cref="CorpseTakes"/>) keeps the two in step.
     /// </summary>
     HostBodyBag = 110,
+
+    /// <summary>
+    /// client -&gt; host, resent for two seconds: one duel request from a player (challenge,
+    /// accept, decline, yield, opt out) - <see cref="PvpIntentPacket"/>. The host acts once per
+    /// serial, so the repeats only repair a lost datagram.
+    /// </summary>
+    PvpIntent = 111,
+
+    /// <summary>
+    /// host -&gt; all, unreliable level (twice a second and on change): the duel round the host
+    /// holds, plus its last few messages for players - <see cref="PvpStatePacket"/>.
+    /// </summary>
+    PvpState = 112,
 }

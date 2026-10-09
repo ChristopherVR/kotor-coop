@@ -24,6 +24,12 @@ internal static unsafe partial class Odyssey
     /// under coop.ini <c>partner_buffs</c> (docs/research/partner-buffs.md).</summary>
     public const int FactionFriendly1 = 2;
 
+    /// <summary>Hostile_1, row/column 1 of repute.2da (docs/research/combat-participation.md):
+    /// 0 from the Player row, so the player and their party attack a body in it, and the same
+    /// faction as the mainstream enemies, so they ignore it. Used only for a duel opponent's
+    /// stand-in, for the length of the round (docs/research/pvp-plan.md).</summary>
+    public const int FactionHostile1 = 1;
+
     /// <summary>
     /// Moves a creature into a faction through the engine's own membership call.
     ///

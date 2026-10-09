@@ -160,6 +160,14 @@ public enum BehaviourFlags : uint
     /// player loots their own copy. HOST-AUTHORITATIVE: both sides must agree whether takes
     /// travel, or one side's bag empties while the other keeps the items.</summary>
     CorpseLootPersonal = 1 << 21,
+
+    /// <summary>coop.ini <c>pvp</c> (off/duel; docs/research/pvp-plan.md). Set when the host
+    /// allows consensual duels between players. HOST-AUTHORITATIVE: the host holds the round
+    /// (challenge, countdown, who won), so a client that did not agree would either never see
+    /// a challenge or refuse to flip its opponent's body hostile for a fight the host is
+    /// already running. Off by default (bit clear), so an older build, which cannot set the
+    /// bit, reads as "duels off" everywhere.</summary>
+    Pvp = 1 << 22,
 }
 
 /// <summary>
@@ -287,7 +295,8 @@ public readonly record struct BehaviourDigest(
         bool localVarSync = true,
         bool inventoryPersonal = true,
         bool creditsPersonal = true,
-        bool corpseLootPersonal = false)
+        bool corpseLootPersonal = false,
+        bool pvp = false)
     {
         uint flags = 0;
         void Set(bool on, BehaviourFlags bit)
@@ -320,6 +329,7 @@ public readonly record struct BehaviourDigest(
         Set(inventoryPersonal, BehaviourFlags.InventoryPersonal);
         Set(creditsPersonal, BehaviourFlags.CreditsPersonal);
         Set(corpseLootPersonal, BehaviourFlags.CorpseLootPersonal);
+        Set(pvp, BehaviourFlags.Pvp);
 
         return FromFields(flags, interpolationMs, followLead, enemyHealth, enemyDamage, xpRate, storeStock, storePrices);
     }
