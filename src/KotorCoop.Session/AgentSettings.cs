@@ -187,6 +187,10 @@ public sealed record AgentSettings
     /// challenge. HOST-AUTHORITATIVE: the host holds the round.</summary>
     public bool Pvp { get; init; }
 
+    /// <summary>coop.ini <c>pvp = arena</c>: also allows <c>arena &lt;name&gt;</c> fights in the
+    /// generated arena module. Implies <see cref="Pvp"/>. HOST-AUTHORITATIVE.</summary>
+    public bool PvpArena { get; init; }
+
     /// <summary>
     /// Relay a class a script adds to one player's character (Dorak's Jedi path choice,
     /// <c>AddMultiClass</c>) to every other player's character through the same engine

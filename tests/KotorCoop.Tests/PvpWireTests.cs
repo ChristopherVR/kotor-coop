@@ -26,7 +26,8 @@ public class PvpWireTests
     [InlineData("duel", true)]
     [InlineData("DUEL", true)]
     [InlineData("off", false)]
-    [InlineData("arena", false)]   // a later phase; anything unknown stays off
+    [InlineData("arena", true)]    // arena implies duels
+    [InlineData("nonsense", false)] // anything unknown stays off
     [InlineData("", false)]
     public void TheIniValueIsReadTheSameWayEverywhere(string value, bool expected)
     {
@@ -138,7 +139,7 @@ public class PvpWireTests
         byte[] buffer = new byte[ProtocolConstants.MaxPacketSize];
         int length = PacketCodec.Write(
             buffer, new PvpStatePacket(1, PvpPhase.Idle, 0, 0, 0, [new PvpNotice(1, 2, PvpNoticeCode.Won, 3)]));
-        buffer[length - 5] = 200; // the code byte sits just before the 4-byte "other"
+        buffer[length - 6] = 200; // the code byte sits before the 4-byte "other" and the arena flag
 
         Assert.Null(PacketCodec.ReadPvpState(buffer.AsSpan(0, length)));
     }

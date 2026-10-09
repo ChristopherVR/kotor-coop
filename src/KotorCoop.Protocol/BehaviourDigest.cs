@@ -168,6 +168,13 @@ public enum BehaviourFlags : uint
     /// already running. Off by default (bit clear), so an older build, which cannot set the
     /// bit, reads as "duels off" everywhere.</summary>
     Pvp = 1 << 22,
+
+    /// <summary>coop.ini <c>pvp = arena</c> (docs/research/pvp-plan.md, phases 3 and 4). Set when
+    /// the host also allows fights in the arena module; implies <see cref="Pvp"/>. HOST-
+    /// AUTHORITATIVE for the same reason: the host takes the party to the arena and back, and a
+    /// client that did not agree would not know the round was an arena round. An older build
+    /// cannot set the bit, so it reads as "duels only".</summary>
+    PvpArena = 1 << 23,
 }
 
 /// <summary>
@@ -296,7 +303,8 @@ public readonly record struct BehaviourDigest(
         bool inventoryPersonal = true,
         bool creditsPersonal = true,
         bool corpseLootPersonal = false,
-        bool pvp = false)
+        bool pvp = false,
+        bool pvpArena = false)
     {
         uint flags = 0;
         void Set(bool on, BehaviourFlags bit)
@@ -330,6 +338,7 @@ public readonly record struct BehaviourDigest(
         Set(creditsPersonal, BehaviourFlags.CreditsPersonal);
         Set(corpseLootPersonal, BehaviourFlags.CorpseLootPersonal);
         Set(pvp, BehaviourFlags.Pvp);
+        Set(pvpArena, BehaviourFlags.PvpArena);
 
         return FromFields(flags, interpolationMs, followLead, enemyHealth, enemyDamage, xpRate, storeStock, storePrices);
     }

@@ -204,6 +204,7 @@ internal static class ConsoleVerbCatalog
         // Duels - docs/research/pvp-plan.md. Plain words a player types in answer to a challenge. None
         // shadows a retail console verb (the engine registers no accept/decline/yield/duel).
         ("duel", "duel <name>  (challenge a player; they type accept or decline); duel off / duel on  (refuse / allow challenges)"),
+        ("arena", "arena <name>  (challenge a player to a duel in the arena; the host takes everyone there and back)"),
         ("accept", "accept  (say yes to a duel challenge)"),
         ("decline", "decline  (say no to a duel challenge)"),
         ("yield", "yield  (give up a duel)"),

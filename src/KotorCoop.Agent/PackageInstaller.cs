@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 using KotorCoop.Memory;
+using KotorCoop.Memory.GameFiles;
 using Microsoft.Win32;
 
 namespace KotorCoop.Agent;
@@ -20,6 +21,8 @@ namespace KotorCoop.Agent;
 ///   KotorCoop.*                 the agent
 ///   coop.ini                    config template (never overwrites an existing one)
 ///   Override\k_coop_*           override assets (never anything else)
+///   modules\k_coop_arena.mod    the PvP arena, GENERATED at install time from the player's own
+///                               tar_m02ae files; the package carries none of BioWare's bytes
 ///   chain-loader\dinput8.dll    the wrapper used in chain mode (see below)
 ///
 /// CHAIN MODE. Only one file can be called dinput8.dll. When another mod already owns the
@@ -221,6 +224,11 @@ public static partial class PackageInstaller
         if (Directory.Exists(overrides))
         {
             files = files.Concat(Directory.EnumerateFiles(overrides, "k_coop_*"));
+        }
+
+        if (ArenaModuleInstaller.InstalledPath(game) is { } arenaModule)
+        {
+            files = files.Append(arenaModule);
         }
 
         foreach (string file in files.Where(File.Exists))
@@ -507,6 +515,8 @@ public static partial class PackageInstaller
             log($"installed override assets -> {overrideTarget} ({assets} files)");
         }
 
+        InstallArena(game, log);
+
         // coop.ini is the player's own config once it exists; never clobber it.
         string iniSource = Path.Combine(package, "coop.ini");
         string iniTarget = Path.Combine(game, "coop.ini");
@@ -531,6 +541,31 @@ public static partial class PackageInstaller
         log(string.Empty);
         log("checking the install...");
         return Check(game, log);
+    }
+
+    /// <summary>
+    /// Generates <c>modules\k_coop_arena.mod</c> from the game's own Taris cantina files
+    /// (docs/research/pvp-arenas.md). Never fails the install: a game without the cantina module,
+    /// or one whose copy is not what we expect, just has no arena fights (duels still work), and
+    /// the reason is logged. Identical bytes on every machine with the same game files.
+    /// </summary>
+    private static void InstallArena(string game, Action<string> log)
+    {
+        try
+        {
+            ArenaInstallResult result = ArenaModuleInstaller.Install(game);
+            log(result.Outcome switch
+            {
+                ArenaInstallOutcome.Installed => $"installed arena module -> {result.Path}",
+                ArenaInstallOutcome.Refreshed => $"refreshed arena module -> {result.Path}",
+                ArenaInstallOutcome.UpToDate => $"arena module already current -> {result.Path}",
+                _ => $"arena module not installed ({result.Message}); arena fights will not be available, duels still work",
+            });
+        }
+        catch (IOException ex)
+        {
+            log($"arena module not installed ({ex.Message}); arena fights will not be available, duels still work");
+        }
     }
 
     public const string ModProfileManifestName = "kotorcoop-installed.txt";
@@ -714,6 +749,25 @@ public static partial class PackageInstaller
         string iniPath = Path.Combine(game, "coop.ini");
         Report(File.Exists(iniPath), File.Exists(iniPath) ? $"{iniPath} exists" : $"{iniPath} is MISSING");
 
+        // The PvP arena is a NOTE when it is not there, never a FAIL: the install is complete
+        // without it (duels do not need it), and a game with no Taris cantina cannot have one.
+        switch (ArenaModuleInstaller.Check(game, out string arenaPath))
+        {
+            case ArenaStatus.Current:
+                Report(true, $"{arenaPath} is present (arena fights available)");
+                break;
+            case ArenaStatus.Stale:
+                log($"NOTE: {arenaPath} differs from what this game's files generate - run setup again to refresh it");
+                break;
+            case ArenaStatus.Missing:
+                log("NOTE: the arena module (modules\\k_coop_arena.mod) is not installed - run setup again to make it; "
+                    + "duels work without it, arena fights do not");
+                break;
+            default:
+                log("NOTE: no arena module: this game has no Taris cantina module to make one from; arena fights are not available");
+                break;
+        }
+
         // A NOTE, never a FAIL: the install is complete without it, and a LAN-only host whose
         // partner sits on the same network never needs it — see WindowsFirewall.Report.
         if (FirewallEnabled)
@@ -863,6 +917,11 @@ public static partial class PackageInstaller
                 File.Delete(ours);
                 log($"removed override {ours}");
             }
+        }
+
+        if (ArenaModuleInstaller.Uninstall(game, out string removedArena))
+        {
+            log($"removed arena module {removedArena}");
         }
 
         RemoveModProfiles(game, log);
