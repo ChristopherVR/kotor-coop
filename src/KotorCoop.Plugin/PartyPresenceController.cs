@@ -505,7 +505,9 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
             // would call Forget, reset smoothing, and spam a false "mirroring 0" transition.
             if (!block.TryGetPartyPresence(i, out PartyPresenceView member))
             {
-                if (_trackedId[i] != 0 && !_released[i])
+                // Carry the slot's last verdict: deriving it from the tracking state still logged
+                // a false "mirroring 0" about three times a second (2026-10-09: 34k lines).
+                if (_drivenLastPass[i])
                 {
                     driven++;
                 }
@@ -513,9 +515,10 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
                 continue;
             }
 
-            if (DriveOne(
-                    i, member, now, player, localFightActive,
-                    _localEnemyPosition, _localEnemyObjectId, localEnemyCount))
+            _drivenLastPass[i] = DriveOne(
+                i, member, now, player, localFightActive,
+                _localEnemyPosition, _localEnemyObjectId, localEnemyCount);
+            if (_drivenLastPass[i])
             {
                 driven++;
             }
@@ -540,6 +543,9 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
             PluginHost.Log($"party drive: mirroring {driven} of the host's companions{why}");
         }
     }
+
+    /// <summary>Whether each slot was driven on the last pass that could read it.</summary>
+    private readonly bool[] _drivenLastPass = new bool[SharedBlock.PartyPresenceCapacity];
 
     /// <summary>Why <see cref="DriveOne"/> last declined each slot, for the "mirroring N" line.</summary>
     private readonly string[] _dropReason = new string[SharedBlock.PartyPresenceCapacity];
@@ -1018,6 +1024,7 @@ internal sealed unsafe class PartyPresenceController(SharedBlockView block)
         _oneShotPrimed[slot] = false;
         _factionKnown[slot] = false;
         _released[slot] = false;
+        _drivenLastPass[slot] = false;
         // The body this slot's watch named may be gone (module change, disconnect) — stop
         // watching it, the same "no dangling id" rule the phantom/dealt tables already follow
         // on their own Invalidate.
