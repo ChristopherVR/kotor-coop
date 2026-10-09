@@ -852,7 +852,10 @@ class Referee:
                 self.since.pop(key, None)
         self.persist("module", host["module"] != joiner["module"],
                      f"host in {host['module']}, joiner in {joiner['module']}", states, now)
-        self.persist("disconnected", not host["remote_count"] or not joiner["remote_count"],
+        # A load is not a disconnect: each side reports nobody while either world loads, and two
+        # quick area changes in a row (Dantooine 2026-10-09) kept that up past the window.
+        loading = host.get("loading") or joiner.get("loading")
+        self.persist("disconnected", not loading and (not host["remote_count"] or not joiner["remote_count"]),
                      f"remote counts host {host['remote_count']} joiner {joiner['remote_count']}", states, now)
         for role, me in (("host", host), ("joiner", joiner)):
             tag = self.join_wanted.get(role)
