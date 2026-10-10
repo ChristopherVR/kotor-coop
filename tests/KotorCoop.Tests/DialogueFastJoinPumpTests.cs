@@ -99,7 +99,7 @@ public sealed class DialogueFastJoinPumpTests
 
         public GroundItemStore Items { get; } = new();
 
-        public bool IsEnemyAuthority => false;
+        public bool IsEnemyAuthority => true; // the host claims at once (see DialogueClaimGrace)
 
         public IReadOnlyList<RemotePeer> GetRemotePeers() => [];
 
