@@ -62,7 +62,7 @@ class Game:
         buf, length = C.create_unicode_buffer(32768), C.c_uint32(32768)
         if not self.k.QueryFullProcessImageNameW(self.handle, 0, buf, C.byref(length)):
             raise MemoryError("Cannot identify game executable")
-        if Path(buf.value).name.lower() != "swkotor.exe":
+        if not Path(buf.value).name.lower().startswith("swkotor") or not buf.value.lower().endswith(".exe"):
             raise MemoryError("Target is not swkotor.exe")
         return Path(buf.value)
 
@@ -143,6 +143,7 @@ class Game:
         before, native = self.u32(self.block + 0xA58), self.u32(self.block + 0x3328)
         if verb in {"input", "screenshot"}:
             # These local input/capture requests also work before an agent finishes attaching.
+            command = self.scale_click(command)
             text = command.split(" ", 1)[1].encode("ascii")
             if len(text) > 31 or self.u32(self.block + 0x3364) != native:
                 return {"applied": False, "reply": "Native mailbox busy or argument too long"}
@@ -166,6 +167,41 @@ class Game:
                 return {"applied": None, "reply": self.string(self.block + 0xA5C, 96)}
             time.sleep(0.05)
         return {"applied": False, "reply": "TIMEOUT: no matching native acknowledgement"}
+
+    def resolution(self):
+        """(width, height) from the install's swkotor.ini [Graphics Options], default 800x600."""
+        if not hasattr(self, "_resolution"):
+            w, h = 800, 600
+            try:
+                for line in (self.game_dir / "swkotor.ini").read_text(errors="ignore").splitlines():
+                    key, _, value = line.partition("=")
+                    if key.strip().lower() == "width" and value.strip().isdigit():
+                        w = int(value)
+                    elif key.strip().lower() == "height" and value.strip().isdigit():
+                        h = int(value)
+            except OSError:
+                pass
+            self._resolution = (w, h)
+        return self._resolution
+
+    def scale_click(self, command):
+        """The harness's click positions are measured at 800x600. At another resolution (a widescreen
+        mod build, HR Menus) map them by anchor: the HUD's top-row icons sit at the top right, the
+        portraits at the bottom left, and popups and panels stay centred."""
+        parts = command.split()
+        if len(parts) < 4 or parts[1] != "click" or not parts[2].isdigit() or not parts[3].isdigit():
+            return command
+        w, h = self.resolution()
+        if (w, h) == (800, 600):
+            return command
+        x, y = int(parts[2]), int(parts[3])
+        if y < 60:
+            nx, ny = (w - (800 - x), y) if x > 400 else (x, y)
+        elif y > 540:
+            nx, ny = (x, h - (600 - y)) if x < 400 else (w - (800 - x), h - (600 - y))
+        else:
+            nx, ny = w // 2 + (x - 400), h // 2 + (y - 300)
+        return " ".join(parts[:2] + [str(nx), str(ny)] + parts[4:])
 
     def snapshot(self):
         self.check_block()
