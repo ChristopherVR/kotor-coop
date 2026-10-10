@@ -122,6 +122,28 @@ public sealed class ArenaFlow
 
     /// <summary>The spawn this player takes in a round: the challenger on team A, the target on
     /// team B, anyone else (the host looking on, a third player) at the spectator mark.</summary>
+    /// <summary>
+    /// The Teleport cheat's facing word for a spot in the ring: face the ring's centre (between
+    /// the two fighters' marks), so the two fighters look at each other instead of standing back
+    /// to back (live 2026-10-10: the host faced the wall). Encoded as 1 + milliradians of
+    /// (angle + pi); 0 means "keep the facing" to every other Teleport caller.
+    /// </summary>
+    public static int FacingTowardCentre(Vector3f at)
+    {
+        ArenaSpawn a = ArenaModule.SpawnFor(0, 0);
+        ArenaSpawn b = ArenaModule.SpawnFor(1, 0);
+        float cx = (a.X + b.X) / 2f;
+        float cy = (a.Y + b.Y) / 2f;
+        float dx = cx - at.X;
+        float dy = cy - at.Y;
+        if ((dx * dx) + (dy * dy) < 0.01f)
+        {
+            return 0;
+        }
+
+        return 1 + (int)MathF.Round((MathF.Atan2(dy, dx) + MathF.PI) * 1000f);
+    }
+
     public static (float X, float Y, float Z) SpawnOf(in PvpView view, uint localPeerId)
     {
         if (localPeerId == view.Challenger)

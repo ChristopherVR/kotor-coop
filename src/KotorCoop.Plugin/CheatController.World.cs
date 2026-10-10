@@ -287,6 +287,14 @@ internal sealed unsafe partial class CheatController
             return;
         }
 
+        // An optional facing rides in the amount (ArenaFlow.FacingTowardCentre): 1 + milliradians
+        // of (angle + pi); 0 keeps the current facing.
+        int facing = block.CheatAmount;
+        if (facing > 0)
+        {
+            Odyssey.SetFacing(player, ((facing - 1) / 1000f) - MathF.PI);
+        }
+
         Vec3 landed = Odyssey.GetPosition(player);
         Answer(
             SharedBlock.CheatStatusApplied,

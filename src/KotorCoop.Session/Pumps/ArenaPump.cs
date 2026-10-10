@@ -49,7 +49,8 @@ internal sealed class ArenaPump(IGameBridge bridge, ICoopSession session, Action
             case ArenaStepKind.Teleport:
             {
                 bool accepted = bridge.TryRequestCheat(
-                    new CheatRequest(CheatKinds.Teleport, X: step.Position.X, Y: step.Position.Y, Z: step.Position.Z),
+                    new CheatRequest(CheatKinds.Teleport, Amount: ArenaFlow.FacingTowardCentre(step.Position),
+                        X: step.Position.X, Y: step.Position.Y, Z: step.Position.Z),
                     out _);
                 log($"arena: {step.Purpose} - moving to ({step.Position.X:F1}, {step.Position.Y:F1}) ({(accepted ? "asked" : "NOT accepted")})");
                 _flow.Confirm(step, accepted, now);

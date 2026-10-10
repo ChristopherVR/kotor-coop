@@ -320,7 +320,14 @@ internal static unsafe partial class Odyssey
     /// panels: CGuiInGame+0x54 is that panel, CGuiInGame+0x38 the manager, whose active list is a
     /// CExoArrayList at +0x88/+0x8C (the same read tools/laya_playtest.py's panel list makes).
     /// Unreadable reads as active, so a caller waiting on it stays safe.</summary>
-    public static bool IsContainerPanelActive()
+    public static bool IsContainerPanelActive() => IsInGameGuiPanelActive(0x54);
+
+    /// <summary>True while a full-screen menu (Esc options, equipment, journal...) has taken the
+    /// HUD off the GUI manager's active list: CGuiInGame+0x90 is the HUD panel (the same rule
+    /// tools/laya_playtest.py's menu_open uses). Unreadable reads as hidden.</summary>
+    public static bool IsHudHidden() => !IsInGameGuiPanelActive(0x90);
+
+    private static bool IsInGameGuiPanelActive(int panelOffset)
     {
         nint gui = GetInGameGui();
         if (gui == 0 || !NativeMethods.IsReadable(gui + 0x38, 0x20))
@@ -328,7 +335,7 @@ internal static unsafe partial class Odyssey
             return true;
         }
 
-        nint panel = *(nint*)(gui + 0x54);
+        nint panel = *(nint*)(gui + panelOffset);
         nint manager = *(nint*)(gui + 0x38);
         if (manager == 0 || !NativeMethods.IsReadable(manager + 0x88, 8))
         {
