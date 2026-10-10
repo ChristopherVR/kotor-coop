@@ -257,6 +257,11 @@ internal sealed class CombatController(SharedBlockView block)
         else
         {
             mapped = MaterialisedEnemies.ToLocal(objectId);
+            if (mapped == 0)
+            {
+                // The host's creature is this game's own story actor (MaterialisedEnemies.TryMaterialise).
+                mapped = MaterialisedEnemies.StoryAliasFor(objectId);
+            }
         }
 
         for (int i = 0; i < _killedCount; i++)

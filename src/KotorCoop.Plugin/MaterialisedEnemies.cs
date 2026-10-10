@@ -122,6 +122,12 @@ internal static unsafe class MaterialisedEnemies
 
     /// <summary>The local id standing in for an owner id, or 0 when the owner's id is
     /// expected to resolve directly (the ordinary GIT-identity case).</summary>
+    private static readonly Dictionary<uint, uint> StoryAliases = [];
+
+    /// <summary>The joiner's own story actor that stands for the host's <paramref name="ownerId"/>,
+    /// or 0 (see <see cref="TryMaterialise"/>).</summary>
+    public static uint StoryAliasFor(uint ownerId) => StoryAliases.TryGetValue(ownerId, out uint local) ? local : 0;
+
     public static uint ToLocal(uint ownerId)
     {
         uint retained = RetainedBodies.ToLocal(ownerId, Odyssey.GetPartyRosterObjectId);
@@ -551,6 +557,22 @@ internal static unsafe class MaterialisedEnemies
             }
         }
 
+        // A friendly story actor this game already built itself from the same blueprint is the
+        // host's creature here; a second body beside it doubled the scene (the Star Forge's
+        // Carth and Bastila, 2026-10-10: the joiner's own pair kept their scene, and the host's
+        // pair was stood next to them once its fight put them in the census). Alias it instead:
+        // no spawn, and the host's verdicts on the creature land on this game's actor.
+        if (hasTemplate && ScriptCreateObjectHook.TryGetLocalStoryActor(hostTemplate, out uint storyActor))
+        {
+            if (StoryAliases.TryAdd(enemy.ObjectId, storyActor) && _logged < 20)
+            {
+                _logged++;
+                PluginHost.Log($"materialise: owner 0x{enemy.ObjectId:X} ('{hostTemplate}') is this game's own story actor 0x{storyActor:X}; no second body");
+            }
+
+            return;
+        }
+
         if (hasTemplate)
         {
             localId = Odyssey.SpawnPuppet(hostTemplate, enemy.Position, facing, out failure);
@@ -864,6 +886,7 @@ internal static unsafe class MaterialisedEnemies
     /// a new module may succeed where the last one failed.</summary>
     public static void Invalidate()
     {
+        StoryAliases.Clear();
         RejectedOwners.Clear();
         FirstSeenWithoutTemplate.Clear();
         RetainedBodies.Clear();

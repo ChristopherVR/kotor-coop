@@ -161,6 +161,7 @@ internal static unsafe partial class PluginHost
     private static void InvalidateAll(string reason)
     {
         Log($"epoch: {reason}; clearing phantom, item, combat and door state");
+        ScriptCreateObjectHook.ForgetLocalStoryActors();
         if (FloatyTextNodeGuardHook.CreatesSkipped != 0 || FloatyTextNodeGuardHook.UpdatesSkipped != 0)
         {
             // The floaty guard's running totals, printed where a live session will look for
