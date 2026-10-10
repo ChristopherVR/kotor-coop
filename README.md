@@ -56,7 +56,7 @@ players, and it is the page to read before you plan a long session.
 
 ## Install
 
-Download the **Windows zip** from [v0.1 beta](https://github.com/ChristopherVR/kotor-coop/releases/tag/v0.1.0-beta.1).
+Download the **Windows zip** from [v0.1 beta 2](https://github.com/ChristopherVR/kotor-coop/releases/tag/v0.1.0-beta.2).
 This is a fixed experimental prerelease. Automatic checks do not certify a complete
 campaign; read the beta limitations and back up your saves before testing.
 
