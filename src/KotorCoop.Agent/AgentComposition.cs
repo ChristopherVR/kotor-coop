@@ -61,6 +61,11 @@ internal static class AgentComposition
         // missing, counted as ready from the next start (the game read its tables at launch).
         bool bossReady = EnsureBoss(TryResolveInstallDirectory(memory.ProcessId), out int bossRow) && arenaReady;
 
+        // The stand-in's sideways copies of the player's dialogue stunt tracks, so a partner is
+        // drawn beside the player in a stunt-driven scene. Before the digest, which counts
+        // override: both players make the same copies from the same game files.
+        EnsureStuntStandIns(TryResolveInstallDirectory(memory.ProcessId));
+
         // Fingerprint this install so a mod mismatch with the peer is caught at join time.
         // Best-effort: a digest that could not be computed compares as "unchecked" and
         // never blocks a session.
@@ -548,6 +553,30 @@ internal static class AgentComposition
         }
 
         return false;
+    }
+
+    /// <summary>Writes the stand-in's copies of every player stunt track the install's dialogues
+    /// use (StuntStandInModels), when missing or stale. Never throws; a copy written now is seen
+    /// from the next launch, since the game reads its override folder at start.</summary>
+    private static void EnsureStuntStandIns(string? installDirectory)
+    {
+        if (installDirectory is null)
+        {
+            return;
+        }
+
+        try
+        {
+            int written = StuntStandInModels.Install(installDirectory, out int stunts);
+            if (written > 0)
+            {
+                Console.WriteLine($"scene stunts: wrote {written} stand-in track file(s) for {stunts} player stunt(s) - seen from the next launch");
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Console.WriteLine($"scene stunts: stand-in tracks not written ({ex.Message})");
+        }
     }
 
     /// <summary>Whether the arena module was already in the install's modules folder, writing it

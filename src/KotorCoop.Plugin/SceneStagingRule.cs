@@ -36,6 +36,11 @@ internal static class SceneStagingRule
 
     public static int CandidateCount => Candidates.Length;
 
+    /// <summary>The candidates a stunt-driven scene uses: straight to the anchor's left, then
+    /// its right (see PhantomController.MirrorStunt).</summary>
+    public const int StuntLeft = 2;
+    public const int StuntRight = 3;
+
     /// <summary>
     /// True when the stand-in should be staged: a conversation or cutscene is running here and
     /// the peer is on (or next to) the local player's mark.

@@ -944,6 +944,12 @@ public static partial class PackageInstaller
 
         log($"arena boss: {ChungusInstaller.Uninstall(game)}");
 
+        int stuntCopies = StuntStandInModels.Uninstall(game);
+        if (stuntCopies > 0)
+        {
+            log($"removed {stuntCopies} stand-in stunt track file(s) from override");
+        }
+
         RemoveModProfiles(game, log);
         RestoreEnableCheats(game, log);
 

@@ -1103,8 +1103,9 @@ internal sealed unsafe partial class PhantomController
             }
 
             (target, facing) = SceneStagingRule.Spot(mine, orientation, _stagedSide[slot] - 1);
+            MirrorStunt(slot, phantom, player);
         }
-        else if (StopStaging(slot) && apartSquared < MinSeparation * MinSeparation)
+        else if (StopStaging(slot, phantom) && apartSquared < MinSeparation * MinSeparation)
         {
             float apart = MathF.Sqrt(apartSquared);
             if (apart > 0.01f)
@@ -1207,7 +1208,8 @@ internal sealed unsafe partial class PhantomController
         // estimate is the steadier signal while simply following.
         float gaitSpeed = MathF.Max(_peerSpeed[slot], chaseSpeed);
 
-        Odyssey.DrivePhantom(phantom, shown, facing, gaitSpeed, moving);
+        Odyssey.DrivePhantom(phantom, shown, facing, gaitSpeed, moving,
+            _stuntBody[slot] == phantom ? Odyssey.DriveSkipTwinGait | Odyssey.BisectBitDriveAnimation : 0);
         _lastGoal[slot] = remote.Position;
     }
 
@@ -1252,6 +1254,57 @@ internal sealed unsafe partial class PhantomController
     /// <summary>The first candidate spot (SceneStagingRule) that is on the walkmesh and clear of
     /// every other creature in the area, or 0 when none is. Runs once per mark, not per frame:
     /// it walks the object table and asks the engine about walkability.</summary>
+    private static readonly HashSet<string> MissingCopiesLogged = new(StringComparer.OrdinalIgnoreCase);
+
+    private static readonly Dictionary<string, bool> OverrideModels = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Whether override holds <paramref name="resref"/>.mdl; asked once per name.</summary>
+    private static bool HasOverrideModel(string resref)
+    {
+        if (OverrideModels.TryGetValue(resref, out bool known))
+        {
+            return known;
+        }
+
+        bool present = false;
+        try
+        {
+            if (PluginConfig.Directory is string directory)
+            {
+                string? overrides = System.IO.Directory.EnumerateDirectories(directory)
+                    .FirstOrDefault(d => string.Equals(System.IO.Path.GetFileName(d), "override", StringComparison.OrdinalIgnoreCase));
+                present = overrides is not null && System.IO.File.Exists(System.IO.Path.Combine(overrides, resref + ".mdl"));
+            }
+        }
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+        {
+        }
+
+        OverrideModels[resref] = present;
+        return present;
+    }
+
+    /// <summary>The player's left for a stunt, or the right when the left is not clear.</summary>
+    private static int ChooseStuntSide(nint player, nint phantom)
+    {
+        Vec3 at = Odyssey.GetPosition(player);
+        Vec3 orientation = Odyssey.GetOrientation(player);
+        nint* bodies = stackalloc nint[256];
+        int count = Odyssey.CollectCreaturesByObjectTable(bodies, 256);
+        Span<Vec3> others = stackalloc Vec3[256];
+        int n = 0;
+        for (int i = 0; i < count; i++)
+        {
+            if (bodies[i] != phantom && bodies[i] != player)
+            {
+                others[n++] = Odyssey.GetPosition(bodies[i]);
+            }
+        }
+
+        Vec3 left = SceneStagingRule.Spot(at, orientation, SceneStagingRule.StuntLeft).Position;
+        return SceneStagingRule.IsClear(left, others[..n]) ? SceneStagingRule.StuntLeft : SceneStagingRule.StuntRight;
+    }
+
     private static int ChooseStagingSpot(nint player, nint phantom, Vec3 anchorAt, Vec3 orientation)
     {
         nint* bodies = stackalloc nint[256];
@@ -1281,9 +1334,119 @@ internal sealed unsafe partial class PhantomController
 
     /// <summary>Forgets a slot's staging once its scene is over. Always true, so it can lead the
     /// overlap test's condition.</summary>
-    private bool StopStaging(int slot)
+    private bool StopStaging(int slot, nint phantom)
     {
         _stagedSide[slot] = 0;
+        if (_stuntBody[slot] != 0)
+        {
+            // Only the body the stunt was loaded on: a respawned stand-in never had it.
+            if (_stuntBody[slot] == phantom)
+            {
+                Odyssey.UnloadStuntModel(phantom);
+                PluginHost.Log($"scene stunt: peer slot {slot} stand-in released from the scene's stunt");
+            }
+
+            _stuntBody[slot] = 0;
+            _stuntAnimation[slot] = 0;
+        }
+
         return true;
+    }
+
+    /// <summary>The body each slot's stunt was loaded on (0 = none) and the stunt animation id it
+    /// was last given.</summary>
+    private readonly nint[] _stuntBody = new nint[SharedBlock.SlotCapacity];
+    private readonly ushort[] _stuntAnimation = new ushort[SharedBlock.SlotCapacity];
+    private readonly long[] _stuntMovedAt = new long[SharedBlock.SlotCapacity];
+
+    /// <summary>How long a stand-in stands at its stunt spot before the track goes on.</summary>
+    private const long StuntSettleMs = 1000;
+    private int _stuntPlaysLogged;
+
+    /// <summary>
+    /// A cutscene conversation that plays the local player through a dialogue stunt model
+    /// (STUNT_55a's ceremony, STUNT_57's beach) moves the player's body along a canned path
+    /// while its object stays put, so a stand-in staged beside the object stood alone off-camera.
+    /// Give the stand-in the player's stunt track and play the same stunt animation ids on it:
+    /// the track is relative to the body, so it walks the same path at the staged offset.
+    /// Loaded once per scene, animation mirrored only when the player's id changes.
+    /// </summary>
+    private void MirrorStunt(int slot, nint phantom, nint player)
+    {
+        if (_stuntBody[slot] != phantom)
+        {
+            byte* resref = stackalloc byte[24];
+            if (Odyssey.ReadStuntModelFor(player, resref, 24) <= 0)
+            {
+                return;
+            }
+
+            if (!Odyssey.HasClientTwin(phantom))
+            {
+                return; // a stand-in rebuilt on arrival gets its body a few frames later
+            }
+
+            // The track carries the body along a path relative to its own object, so the stand-in
+            // is drawn wherever the player is drawn, shifted by the gap between the two objects.
+            // Staged behind the player it was drawn inside them (STUNT_55a, 2026-10-10): stand it
+            // to the side instead, snapped there with no walk, before the track goes on. Moving
+            // it afterwards resets its body to idle and drops the track, so it stays put.
+            int side = _stagedSide[slot] - 1;
+            if (side != SceneStagingRule.StuntLeft && side != SceneStagingRule.StuntRight)
+            {
+                _stagedSide[slot] = ChooseStuntSide(player, phantom) + 1;
+                _smoothing[slot] = false;
+                _stuntMovedAt[slot] = Environment.TickCount64;
+                PluginHost.Log($"scene stunt: peer slot {slot} stand-in moved to spot {_stagedSide[slot] - 1} beside the player for the stunt");
+                return;
+            }
+
+            // A body that has just been moved is still settling: a track loaded in the same
+            // breath played its first id and then fell back to idle for the rest of the scene.
+            if (Environment.TickCount64 - _stuntMovedAt[slot] < StuntSettleMs)
+            {
+                return;
+            }
+
+            _stuntBody[slot] = phantom;
+            _stuntAnimation[slot] = 0;
+
+            // The player's track draws a body exactly where the player is drawn; the stand-in gets
+            // the sideways copy the agent wrote into override (StuntStandInModels), one per peer
+            // slot. Without one there is nothing to show it beside the player with, so it stays
+            // where it stands rather than being drawn inside them.
+            string stunt = new string((sbyte*)resref);
+            string copy = StuntStandInName.For(stunt, slot % 2);
+            if (!HasOverrideModel(copy))
+            {
+                if (MissingCopiesLogged.Add(copy))
+                    PluginHost.Log($"scene stunt: no stand-in copy '{copy}' of '{stunt}' in override (written at agent start, seen from the next launch)");
+                return;
+            }
+
+            for (int i = 0; i < copy.Length; i++)
+            {
+                resref[i] = (byte)copy[i];
+            }
+
+            resref[copy.Length] = 0;
+            bool loaded = Odyssey.LoadStuntModel(phantom, resref, out string detail);
+            PluginHost.Log($"scene stunt: peer slot {slot} stand-in given the player's stunt track "
+                + $"'{new string((sbyte*)resref)}'" + (loaded ? string.Empty : " (the body would not take it)")
+                + $" - {detail}| player: {Odyssey.DescribeStuntSlots(player)}");
+        }
+
+        ushort animation = Odyssey.GetBodyAnimation(player);
+        if (Odyssey.IsStuntAnimation(animation) && animation != _stuntAnimation[slot])
+        {
+            _stuntAnimation[slot] = animation;
+            Odyssey.PlayStuntAnimation(phantom, animation);
+            if (_stuntPlaysLogged < 20)
+            {
+                _stuntPlaysLogged++;
+                PluginHost.Log($"scene stunt: peer slot {slot} stand-in plays 0x{animation:X} with the player "
+                    + $"(stand-in body now 0x{Odyssey.GetBodyAnimation(phantom):X})");
+            }
+        }
     }
 }

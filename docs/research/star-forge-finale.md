@@ -1555,3 +1555,19 @@ copy of the player's track with the root moved sideways, written at runtime the 
 module is) or the stand-in's object moved by the offset that track would add. Compatibility: the
 mod's module is an ordinary cutscene module the joiner follows like STUNT_55a; its dark-side
 Carth branch was not reached in the live pass.
+
+**Solved (2026-10-10, live on the K1 Full build): the partner in stunt shots.** Two findings
+decided it. A stand-in given the player's own track and animation ids does play it, but only
+while its object stands still: any move (a staging change, a walk) resets its body to idle and
+drops the track, so the stand-in is staged to the player's side, left to settle for a second, and
+only then given the track. And the track draws the body in the scene's own frame, wherever the
+object stands: staged behind the player and then beside them, the stand-in was drawn inside the
+player both times. Each animation places the body through one node, `cutscenedummy`, so the
+stand-in gets a copy of the track with that node's position keys moved 1.2 m along the track's X
+axis (-1.2 m for a second peer), the way Dark Sacrifice gives Carth his own track.
+`StuntStandInModels` (agent start) finds every stunt model a dialogue's StuntList hands "PLAYER"
+(modules and loose dlg files; 9 on the K1 Full build), writes the copies into override as
+`kcs<variant>_<fnv32 of the resref>` (seen from the next launch, since override is read at start),
+and the plugin loads the copy named by `StuntStandInName.For`. Live: on STUNT_55a's balcony the
+host's stand-in stands between the joiner's player and Bastila through the ceremony, in the wide
+shot and the close-up. Uninstall (both installers) removes the copies.

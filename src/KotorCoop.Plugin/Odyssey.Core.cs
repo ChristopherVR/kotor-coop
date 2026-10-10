@@ -408,6 +408,11 @@ internal static unsafe partial class Odyssey
     public const uint BisectBitDriveTwin = 1u << 9;
     public const uint BisectBitClearPositionDirty = 1u << 10;
 
+    /// <summary>Not a bisection bit: skips DriveBody's twin gait writes (looping-animation hold,
+    /// sync calls, playback rate) while a dialogue stunt animation plays on the body, so the
+    /// engine's idle reassertion cannot cancel it. Position and facing still drive.</summary>
+    public const uint DriveSkipTwinGait = 1u << 16;
+
     /// <summary>All eleven DriveOne bisection bits, for "disable everything but census
     /// membership" (run 0 of the bisection protocol).</summary>
     public const uint BisectAllOps =

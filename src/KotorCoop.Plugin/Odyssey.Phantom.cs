@@ -55,11 +55,11 @@ internal static unsafe partial class Odyssey
     /// a wrong one: the engine only pushes an animation to the render side ON CHANGE, so a
     /// value that alternates run/idle several times a second mostly arrives as idle — which
     /// is exactly the body gliding along with no run cycle.</param>
-    public static void DrivePhantom(nint creature, Vec3 position, float facing, float speed, bool moving)
+    public static void DrivePhantom(nint creature, Vec3 position, float facing, float speed, bool moving, uint driveMask = 0)
     {
         (bool wasRunning, float belowIdleSeconds) = AdvanceGaitHysteresis(creature, speed);
         int want = GaitRule.SelectAnimation(speed, moving, wasRunning, belowIdleSeconds);
-        DriveBody(creature, position, facing, speed, moving, want, GaitRule.IsRun(speed, wasRunning));
+        DriveBody(creature, position, facing, speed, moving, want, GaitRule.IsRun(speed, wasRunning), driveMask);
     }
 
     /// <summary>
@@ -207,6 +207,14 @@ internal static unsafe partial class Odyssey
                 // 0f is the correct "still moving, not a new blend" budget, matching
                 // TwinDesiredPositionBudget's own use, and is deliberately not the same as
                 // ObjAnimationBudget (unrelated to what TwinAnimationSyncSlot passes below).
+                if ((bisectMask & DriveSkipTwinGait) != 0)
+                {
+                    // A dialogue stunt is playing on this body: the stunt sets its own animation
+                    // ids and plays at its authored rate (Odyssey.Stunts.cs).
+                    *(float*)(twin + TwinAnimationSpeedFactor) = 1.0f;
+                    return;
+                }
+
                 *(ushort*)(twin + TwinLoopingAnimation) = (ushort)want;
 
                 // TwinPositionSyncSlot (ClientServerSyncHandler_Position, +0x12C) is invoked
