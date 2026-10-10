@@ -3,8 +3,13 @@
 Each animation is a function of time that says how far each part is moved and turned from
 its rest pose. The names are the ones the game looks for on a single-model creature
 (checked against c_gizka, c_rancor and c_gammorean), so the engine plays them by itself
-for standing, walking, attacking, being hit and dying; the gauntlet powers ride on the
-creature slots the engine has for taunts, casting and powering up.
+for standing, walking, attacking, being hit and dying.
+
+The gauntlet powers ride on the one-shot animations the engine can be asked to play on a
+creature model. That list is short and fixed (the creature branch of the engine's own id
+conversion at 0x0069FCBB, docs/research/chungus-boss.md): ctaunt, cvictory, the two head
+turns, usecomp and the looping "disabled" are the ones free for his powers, so the pirouette
+and the power-up are stored under the head-turn names and the blast under "disabled".
 """
 from __future__ import annotations
 
@@ -434,12 +439,8 @@ def powerup(t):
     return _charged(t, kf(t, (0, 0), (1.2, 1)))
 
 
-def powered(t):
-    return _charged(t, 1.0)
 
 
-def powerdown(t):
-    return _charged(t, kf(t, (0, 1), (1.0, 0)))
 
 
 def tlknorm(t):
@@ -452,14 +453,8 @@ def tlknorm(t):
     })
 
 
-def chturnl(t):
-    turn = kf(t, (0, 0), (0.35, 40), (0.65, 40), (1.0, 0))
-    return {"neck": {"rot": (0, 0, turn)}, "rootdummy": {"rot": (0, 0, turn * 0.2)}, "stones": {"glow": GLOW_IDLE}}
 
 
-def chturnr(t):
-    turn = kf(t, (0, 0), (0.35, -40), (0.65, -40), (1.0, 0))
-    return {"neck": {"rot": (0, 0, turn)}, "rootdummy": {"rot": (0, 0, turn * 0.2)}, "stones": {"glow": GLOW_IDLE}}
 
 
 def choke(t):
@@ -565,17 +560,14 @@ ANIMATIONS = {
     "ckdbck": (ckdbck, 1.3, [(0.47, "snd_hitground")]),
     "ckdbcklp": (ckdbcklp, 0.7, []),
     "cgustandb": (cgustandb, 1.0, [(0.85, "snd_footstep")]),
-    "ctaunt": (ctaunt, 2.4, []),
-    "cvictory": (cvictory, 2.5, []),
-    "castout1": (castout1, 1.6, []),
-    "castout2": (castout2, 1.8, [(0.9, "snd_hitground")]),
-    "castout3": (castout3, 2.0, []),
-    "powerup": (powerup, 1.2, []),
-    "powered": (powered, 1.0, []),
-    "powerdown": (powerdown, 1.0, []),
+    # The powers, each under an animation name the engine can play on a creature by id.
+    "ctaunt": (ctaunt, 2.4, []),                                   # the snap
+    "cvictory": (cvictory, 2.5, []),                               # the laugh
+    "disabled": (castout1, 1.6, []),                               # the power stone's blast (held 1.6 s)
+    "usecomp": (castout2, 1.8, [(0.9, "snd_hitground")]),          # the ground slam
+    "chturnl": (castout3, 2.0, []),                                # the pirouette
+    "chturnr": (powerup, 1.2, []),                                 # the charge
     "tlknorm": (tlknorm, 2.0, []),
-    "chturnl": (chturnl, 1.0, []),
-    "chturnr": (chturnr, 1.0, []),
     "choke": (choke, 1.5, []),
     "horror": (horror, 1.6, []),
     "sleep": (sleep, 3.0, []),
@@ -609,9 +601,10 @@ def build(root: kmdl.Node):
                 rows = []
                 for t, p in zip(times, parts):
                     dx, dy, dz = p.get("pos", (0, 0, 0))
-                    # Poses are written with the gauntlet on +X; the built nodes are already mirrored.
-                    rows.append((t, node.position[0] + sign * dx * model.SCALE,
-                                 node.position[1] + dy * model.SCALE, node.position[2] + dz * model.SCALE))
+                    # A position key is how far the node is moved FROM its rest position (the game
+                    # adds the two; an orientation key replaces the rest orientation outright).
+                    # Poses are written with the gauntlet on +X; the built nodes are mirrored.
+                    rows.append((t, sign * dx * model.SCALE, dy * model.SCALE, dz * model.SCALE))
                 track["position"] = rows
             if any("rot" in p or "quat" in p for p in parts):
                 rows = []

@@ -42,6 +42,8 @@ public sealed partial class CoopClient
 
     public bool BossReady => _settings.BossReady;
 
+    public int BossAppearanceRow => _settings.BossAppearanceRow;
+
     public PvpView PvpState
     {
         get

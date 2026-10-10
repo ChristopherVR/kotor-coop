@@ -261,7 +261,11 @@ internal sealed unsafe class PvpMenuController(SharedBlockView block)
                 break;
 
             case PvpMenuMode.Fighting:
-                Post(PvpMenuRule.FightingLine(PvpMenuRule.NameOf(block.PvpOpponentPeer, _entries)), HintRow);
+                Post(
+                    block.PvpOpponentPeer == 0
+                        ? PvpMenuRule.BossFightLine
+                        : PvpMenuRule.FightingLine(PvpMenuRule.NameOf(block.PvpOpponentPeer, _entries)),
+                    HintRow);
                 break;
         }
 

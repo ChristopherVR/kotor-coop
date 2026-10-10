@@ -59,7 +59,7 @@ internal static class AgentComposition
         // The arena boss needs a row in the game's appearance table and a blueprint naming it,
         // both made from this install's own table. Same rule as the arena: written now when
         // missing, counted as ready from the next start (the game read its tables at launch).
-        bool bossReady = EnsureBoss(TryResolveInstallDirectory(memory.ProcessId)) && arenaReady;
+        bool bossReady = EnsureBoss(TryResolveInstallDirectory(memory.ProcessId), out int bossRow) && arenaReady;
 
         // Fingerprint this install so a mod mismatch with the peer is caught at join time.
         // Best-effort: a digest that could not be computed compares as "unchecked" and
@@ -297,6 +297,7 @@ internal static class AgentComposition
             PeerIdentity = peerIdentity,
             PvpArenaReady = arenaReady,
             BossReady = bossReady,
+            BossAppearanceRow = bossRow,
             ItemContinuationPath = installDirectory is null ? null : Path.Combine(installDirectory, "coop.items.json"),
             ConnectTimeoutMs = config is { ConnectTimeoutMs: > 0 }
                 ? config.ConnectTimeoutMs
@@ -524,14 +525,16 @@ internal static class AgentComposition
     /// </summary>
     /// <summary>Whether the arena boss was already installed (his appearance row and blueprint),
     /// installing him when he was not. Never throws.</summary>
-    private static bool EnsureBoss(string? installDirectory)
+    private static bool EnsureBoss(string? installDirectory, out int appearanceRow)
     {
+        appearanceRow = 0;
         if (installDirectory is null)
         {
             return false;
         }
 
         ChungusInstallResult result = ChungusInstaller.Install(installDirectory);
+        appearanceRow = Math.Max(result.AppearanceRow, 0);
         switch (result.Outcome)
         {
             case ChungusInstallOutcome.UpToDate:

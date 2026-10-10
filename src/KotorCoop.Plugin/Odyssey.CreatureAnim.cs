@@ -200,6 +200,10 @@ internal static unsafe partial class Odyssey
     /// renders — or false when the body has no twin yet. Diagnostic only: the server row
     /// (<c>creature + 0xA60</c>) and this one disagreeing IS the wrong-look bug, so a log line
     /// that carries only one of them cannot tell them apart. MAIN THREAD ONLY.</summary>
+    /// <summary>The appearance.2da row the server creature wears (<see cref="CreServerAppearanceRow"/>).</summary>
+    public static ushort GetServerAppearanceRow(nint creature) =>
+        creature == 0 ? (ushort)0 : *(ushort*)(creature + CreServerAppearanceRow);
+
     public static bool TryGetTwinAppearanceRow(nint creature, out ushort row)
     {
         row = 0;

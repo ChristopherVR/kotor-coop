@@ -73,8 +73,11 @@ class Animation:
     length: float
     transition: float = 0.25
     events: list = field(default_factory=list)          # [(time, name)]
-    # node name -> {"position": [(t, x, y, z)], "orientation": [(t, w, x, y, z)],
+    # node name -> {"position": [(t, dx, dy, dz)], "orientation": [(t, w, x, y, z)],
     #               "scale": [(t, s)], "selfillum": [(t, r, g, b)]}
+    # A position key is an OFFSET from the node's rest position (the game adds them: in the
+    # stock c_gammorean the root dummy rests at z 1.203 and its keys read z -0.19). An
+    # orientation key is the node's whole local orientation.
     tracks: dict = field(default_factory=dict)
 
 
