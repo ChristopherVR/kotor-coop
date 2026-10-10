@@ -13,6 +13,9 @@
 param(
     [string]$Game1 = 'C:\GOG Games\Star Wars KOTOR (GOG)',
     [string]$Game2 = 'D:\Games\swkotor-gog-p2',
+    # The game executable's file name in both installs. A copy under another name (for example
+    # swkotor_np.exe) runs without a per-image debug setting such as the rig's full page heap.
+    [string]$ExeName = 'swkotor.exe',
     [int]$Port = 27140,
     [string]$Name1 = 'Lanik',
     [string]$Name2 = 'Malak',
@@ -57,6 +60,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
+$procName = [IO.Path]::GetFileNameWithoutExtension($ExeName)
 $agent = $AgentPath ? $AgentPath : (Join-Path $repo 'src\KotorCoop.Agent\bin\Debug\net10.0-windows\KotorCoop.Agent.exe')
 
 # The two placements below (main-menu client parked at instance-2's slot, and the final
@@ -109,7 +113,7 @@ function Set-CoopIniKey {
 
 if ($Stop) {
     Get-Process KotorCoop.Agent -ErrorAction SilentlyContinue | Stop-Process -Force
-    Get-Process swkotor -ErrorAction SilentlyContinue | Stop-Process -Force
+    Get-Process $procName -ErrorAction SilentlyContinue | Stop-Process -Force
 
     # Undo the rig's auto_start_agent=0 (written below so the rig's own visible agents are
     # the only ones attached). Leaving it off is what made a rig-touched install lose the
@@ -213,7 +217,7 @@ if ($clientAtMenu) {
 }
 
 if (-not $SkipLaunch) {
-    if (Get-Process swkotor -ErrorAction SilentlyContinue) {
+    if (Get-Process $procName -ErrorAction SilentlyContinue) {
         throw 'swkotor is already running; use -Stop first, or -SkipLaunch to attach to what is up'
     }
 
@@ -226,20 +230,20 @@ if (-not $SkipLaunch) {
     # a window has been moved. Minimising is safe - a minimised instance still runs at
     # full frame rate (measured).
     "launching instance 1 and loading save $Save ..."
-    & $agent launch --load-save $Save --game-path (Join-Path $Game1 'swkotor.exe')
+    & $agent launch --load-save $Save --game-path (Join-Path $Game1 $ExeName)
     if ($LASTEXITCODE -ne 0) { throw 'instance 1 failed to launch or load' }
 
-    $first = @(Get-Process swkotor)[0]
+    $first = @(Get-Process $procName)[0]
     & (Join-Path $PSScriptRoot 'movewin.ps1') -ProcId $first.Id -Minimize
 
     'launching instance 2 (renamed mutex) ...'
-    & $agent launch --instance 2 --game-path (Join-Path $Game2 'swkotor.exe')
+    & $agent launch --instance 2 --game-path (Join-Path $Game2 $ExeName)
     if ($LASTEXITCODE -ne 0) { throw 'instance 2 failed to launch' }
 
     # Load as a separate step, after the menu has had time to settle. Folding it into the
     # launch above is what used to fail; 14s is what has been observed to work.
     Start-Sleep -Seconds 14
-    $second = @(Get-Process swkotor | Sort-Object StartTime)[1]
+    $second = @(Get-Process $procName | Sort-Object StartTime)[1]
 
     if ($clientAtMenu) {
         # ⚠ THE POINT OF THE SWITCH: instance 2 gets NO save. Loading one here would give it
@@ -286,7 +290,7 @@ if (-not $SkipLaunch) {
     } # end of the load block (skipped by -ClientNewCharacter / -ClientAutoCharacter)
 }
 
-$procs = @(Get-Process swkotor | Sort-Object StartTime)
+$procs = @(Get-Process $procName | Sort-Object StartTime)
 if ($procs.Count -lt 2) { throw "expected 2 swkotor processes, found $($procs.Count)" }
 $pid1 = $procs[0].Id
 $pid2 = $procs[1].Id
