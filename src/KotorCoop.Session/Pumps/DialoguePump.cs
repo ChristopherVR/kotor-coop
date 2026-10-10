@@ -22,6 +22,11 @@ internal sealed class DialoguePump(IGameBridge bridge, ICoopSession session, Age
     private long _dialogueLastActiveMs;
 
     private readonly DialogueClaimGrace _claimGrace = new();
+
+    /// <summary>This tick's own conversation is being held back by <see cref="DialogueClaimGrace"/>:
+    /// the interaction lock on its partner must wait too (WorldStatePump), or the host's claim on
+    /// the same scene is refused by the lock rule the grace exists to beat.</summary>
+    public bool IsHoldingNewClaim { get; private set; }
     private string _dialogueHeldPartnerTag = string.Empty;
 
     /// <summary>The last node the local conversation was really on, held across the engine's
@@ -239,9 +244,11 @@ internal sealed class DialoguePump(IGameBridge bridge, ICoopSession session, Age
 
         // A joiner holds a brand-new conversation's claim for a moment, so a world scene the
         // host's game started too goes to the host (see DialogueClaimGrace).
+        bool wantsToClaim = active;
         active = _claimGrace.AllowClaim(
             session.IsEnemyAuthority, active, token.Active && token.OwnerPeerId == session.LocalPeerId, nowMs,
             _dialogueHeldForced);
+        IsHoldingNewClaim = wantsToClaim && !active;
 
         // Never publish as active while this instance sits in a stunt module — see the gate
         // above. The linger window still exists for an ordinary conversation caught mid-line

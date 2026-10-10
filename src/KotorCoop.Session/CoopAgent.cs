@@ -952,7 +952,7 @@ public sealed partial class CoopAgent
                 _dialoguePump.PumpDialogue(local, caps);
             }
 
-            _worldStatePump.PumpInteractionLocks(local);
+            _worldStatePump.PumpInteractionLocks(local, _dialoguePump.IsHoldingNewClaim);
             _barkPump.PumpBarks(local);
             _transitionPump.PumpMidModuleMovies(local);
 

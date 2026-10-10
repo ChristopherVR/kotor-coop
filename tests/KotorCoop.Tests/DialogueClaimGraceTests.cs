@@ -34,12 +34,13 @@ public sealed class DialogueClaimGraceTests
     public void ANewConversationStartsANewGrace()
     {
         DialogueClaimGrace grace = new();
+        long g = DialogueClaimGrace.GraceMs;
         Assert.False(grace.AllowClaim(false, true, false, 0));
-        Assert.True(grace.AllowClaim(false, true, false, 2000));
+        Assert.True(grace.AllowClaim(false, true, false, g));
 
-        Assert.False(grace.AllowClaim(false, false, false, 3000)); // it ended
-        Assert.False(grace.AllowClaim(false, true, false, 4000));  // the next one waits again
-        Assert.True(grace.AllowClaim(false, true, false, 5000));
+        Assert.False(grace.AllowClaim(false, false, false, g + 1000));     // it ended
+        Assert.False(grace.AllowClaim(false, true, false, g + 2000));      // the next one waits again
+        Assert.True(grace.AllowClaim(false, true, false, (2 * g) + 2000));
     }
 
     [Fact]
