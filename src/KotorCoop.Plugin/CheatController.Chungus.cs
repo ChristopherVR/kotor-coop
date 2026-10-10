@@ -8,6 +8,9 @@ internal sealed unsafe partial class CheatController
     /// <summary>The boss this game's own engine spawned (host only), or 0.</summary>
     private static uint _chungusId;
 
+    /// <summary>The joiner's copy that was last given his name, so it is written once.</summary>
+    private static uint _chungusNamedCopy;
+
     private void Chungus(nint player, uint playerId)
     {
         uint word = block.CheatTarget;
@@ -21,14 +24,27 @@ internal sealed unsafe partial class CheatController
 
             case ChungusRule.OpWindUp:
             {
-                nint boss = ResolveChungus(out uint bossId);
-                ushort animation = ChungusRule.WindUpAnimation(power);
-                bool played = boss != 0 && animation != 0 && Odyssey.PlayOneShotAnimation(boss, animation);
+                nint boss = ResolveChungus(block.CheatItemCharges, out uint bossId);
+                string animated = "no animation";
+                if (boss != 0 && (word & ChungusRule.FlagHost) != 0)
+                {
+                    // The host owns him: the script command drops his attack and plays it.
+                    (int script, float seconds) = ChungusRule.WindUpScriptAnimation(power);
+                    int failure = 0;
+                    bool played = script != 0 && Odyssey.PlayAnimationNow(bossId, script, seconds, out failure);
+                    animated = $"script animation {script} {(played ? "played" : $"not played ({failure})")}";
+                }
+                else if (boss != 0)
+                {
+                    ushort animation = ChungusRule.WindUpAnimation(power);
+                    bool played = animation != 0 && Odyssey.PlayOneShotAnimation(boss, animation);
+                    animated = $"animation {animation} {(played ? "played" : "not played")}";
+                }
+
                 bool heard = Odyssey.PlaySound(ChungusRule.WindUpSound(power));
                 Answer(
                     SharedBlock.CheatStatusApplied,
-                    $"chungus: power {power} begins (boss 0x{bossId:X}, animation {animation} {(played ? "played" : "not played")}, "
-                    + $"sound {(heard ? "played" : "none")})");
+                    $"chungus: power {power} begins (boss 0x{bossId:X}, {animated}, sound {(heard ? "played" : "none")})");
                 break;
             }
 
@@ -47,12 +63,17 @@ internal sealed unsafe partial class CheatController
 
             case ChungusRule.OpAnimation:
             {
-                // Staging: play any animation id on him, to see what a row of animations.2da does.
-                nint boss = ResolveChungus(out uint bossId);
-                bool played = boss != 0 && Odyssey.PlayOneShotAnimation(boss, (ushort)word);
+                // Staging: play any animation on him. A number below 1000 is a script constant
+                // (through the script command, as the host plays his powers; a looping one is
+                // held for two seconds); anything else is an engine id, as a joiner replays one.
+                nint boss = ResolveChungus(0, out uint bossId);
+                int failure = 0;
+                bool played = boss != 0 && (word < 1000
+                    ? Odyssey.PlayAnimationNow(bossId, (int)word, word < 100 ? 2f : 0f, out failure)
+                    : Odyssey.PlayOneShotAnimation(boss, (ushort)word));
                 Answer(
                     played ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusRefused,
-                    $"chungus: animation {word} on 0x{bossId:X} {(played ? "played" : "not played")}");
+                    $"chungus: animation {word} on 0x{bossId:X} {(played ? "played" : $"not played ({failure})")}");
                 break;
             }
 
@@ -134,7 +155,7 @@ internal sealed unsafe partial class CheatController
 
         if (power == ChungusRule.Drain && (word & ChungusRule.FlagHost) != 0)
         {
-            nint boss = ResolveChungus(out uint bossId);
+            nint boss = ResolveChungus(block.CheatItemCharges, out uint bossId);
             if (boss != 0 && !Odyssey.IsCreatureDead(boss))
             {
                 int heal = ChungusRule.DrainHeal(Odyssey.GetEffectiveMaxHitPoints(boss));
@@ -148,9 +169,12 @@ internal sealed unsafe partial class CheatController
 
     /// <summary>
     /// This game's copy of the boss: the one it spawned (host), or the stand-in built for the
-    /// host's creature whose blueprint is his (joiner).
+    /// host's creature (joiner). A joiner's copy is known by the host having named his blueprint
+    /// for it, or failing that by wearing <paramref name="appearanceRow"/>, the row of this
+    /// install's appearance table that is his and nobody else's (seen live: the copy was built
+    /// before the blueprint's name arrived, so the name alone found nothing).
     /// </summary>
-    private static nint ResolveChungus(out uint objectId)
+    private static nint ResolveChungus(uint appearanceRow, out uint objectId)
     {
         objectId = _chungusId;
         if (objectId != 0)
@@ -166,22 +190,48 @@ internal sealed unsafe partial class CheatController
         ReadOnlySpan<uint> locals = MaterialisedEnemies.LocalIdsSnapshot;
         for (int i = 0; i < owners.Length && i < locals.Length; i++)
         {
-            if (owners[i] == 0 || locals[i] == 0
-                || !ScriptCreateObjectHook.TryGetHostTemplate(owners[i], out string template)
-                || !template.Equals(ChungusRule.Template, StringComparison.OrdinalIgnoreCase))
+            if (owners[i] == 0 || locals[i] == 0)
             {
                 continue;
             }
 
             nint copy = Odyssey.ResolveServerObject(locals[i]);
-            if (copy != 0)
+            if (copy == 0)
             {
-                objectId = locals[i];
-                return copy;
+                continue;
             }
+
+            bool byTemplate = ScriptCreateObjectHook.TryGetHostTemplate(owners[i], out string template)
+                && template.Equals(ChungusRule.Template, StringComparison.OrdinalIgnoreCase);
+            bool byRow = appearanceRow is > 0 and <= ushort.MaxValue
+                && Odyssey.GetServerAppearanceRow(copy) == appearanceRow;
+            if (!byTemplate && !byRow)
+            {
+                continue;
+            }
+
+            objectId = locals[i];
+            NameChungusCopy(copy, objectId);
+            return copy;
         }
 
         objectId = 0;
         return 0;
+    }
+
+    /// <summary>A stand-in built without his blueprint has no name over its head; give it his.</summary>
+    private static void NameChungusCopy(nint copy, uint objectId)
+    {
+        if (_chungusNamedCopy == objectId)
+        {
+            return;
+        }
+
+        _chungusNamedCopy = objectId;
+        ReadOnlySpan<byte> name = "Chungus"u8;
+        fixed (byte* text = name)
+        {
+            Odyssey.SetCreatureFirstName(copy, text, name.Length);
+        }
     }
 }

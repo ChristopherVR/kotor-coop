@@ -1,8 +1,8 @@
 """A small software renderer, so the model and its animations can be looked at without the game.
 
 It reads the same node tree and keyframes the model file is written from, poses them the way
-the engine does (each keyframe is the node's whole local position / orientation) and draws
-textured, lit triangles into an image.
+the engine does (a position key is added to the node's rest position, an orientation key
+replaces its rest orientation) and draws textured, lit triangles into an image.
 """
 from __future__ import annotations
 
@@ -35,7 +35,10 @@ def posed_triangles(root: kmdl.Node, animation: kmdl.Animation | None = None, t:
 
     def walk(node, matrix, offset):
         tracks = animation.tracks.get(node.name, {}) if animation else {}
-        position = _track_value(tracks["position"], t, False) if tracks.get("position") else node.position
+        position = node.position
+        if tracks.get("position"):
+            # As the engine does: a position key is an offset from the rest position.
+            position = tuple(a + b for a, b in zip(node.position, _track_value(tracks["position"], t, False)))
         orientation = _track_value(tracks["orientation"], t, True) if tracks.get("orientation") else node.orientation
         scale = _track_value(tracks["scale"], t, False)[0] if tracks.get("scale") else 1.0
         glow = _track_value(tracks["selfillum"], t, False) if tracks.get("selfillum") else (0.0, 0.0, 0.0)

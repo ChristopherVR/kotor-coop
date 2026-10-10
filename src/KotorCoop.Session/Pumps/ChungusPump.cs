@@ -68,12 +68,16 @@ internal sealed class ChungusPump(IGameBridge bridge, ICoopSession session, Acti
                 continue;
             }
 
+            // The row this install's copy of him wears rides along, so a joiner's game can pick
+            // him out of the creatures it mirrors.
             uint word = ChungusCheat.Word(cue, cue.Hits(session.LocalPeerId), isHost);
-            _queue.Add((now, new CheatRequest(CheatKinds.Chungus, Target: word, Amount: ChungusCheat.OpWindUp), false));
+            uint row = (uint)Math.Clamp(session.BossAppearanceRow, 0, ushort.MaxValue);
+            _queue.Add((now,
+                new CheatRequest(CheatKinds.Chungus, Target: word, Amount: ChungusCheat.OpWindUp, Charges: row), false));
             if (cue.Power != BossPower.Defeat)
             {
                 _queue.Add((now + BossPowers.LandDelayMs(cue.Power),
-                    new CheatRequest(CheatKinds.Chungus, Target: word, Amount: ChungusCheat.OpLand), false));
+                    new CheatRequest(CheatKinds.Chungus, Target: word, Amount: ChungusCheat.OpLand, Charges: row), false));
             }
 
             log($"chungus: {cue.Power}{(cue.TargetPeer != 0 ? $" at peer {cue.TargetPeer}" : string.Empty)}");

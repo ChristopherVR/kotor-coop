@@ -493,18 +493,30 @@ public sealed class ChungusBossTests : IDisposable
             .Select(path => Path.GetFileNameWithoutExtension(path))];
         HashSet<string> animations = [.. ReadAnimationNames(File.ReadAllBytes(FindShipped("k_coop_chungus.mdl")))];
 
-        // The engine's creature rows of animations.2da (10000 + row), by the name it then looks for.
+        // The engine's animation ids for a creature model, by the animation name each one plays
+        // (the creature branch of CSWCAnimBase::ServerToClientAnimation; chungus-boss.md).
         Dictionary<ushort, string> rows = new()
         {
-            [10260] = "cvictory", [10263] = "ctaunt", [10293] = "castout1", [10294] = "castout2",
-            [10295] = "castout3", [10296] = "powerup",
+            [ChungusRule.AnimVictory] = "cvictory", [ChungusRule.AnimTaunt] = "ctaunt",
+            [ChungusRule.AnimBlast] = "disabled", [ChungusRule.AnimSlam] = "usecomp",
+            [ChungusRule.AnimSpin] = "chturnl", [ChungusRule.AnimCharge] = "chturnr",
         };
+        Assert.Equal(6, rows.Keys.Distinct().Count());
 
         for (int power = ChungusRule.Snap; power <= ChungusRule.Slow; power++)
         {
+            // The joiner's replay id (none for the blast, which is looping), and the script
+            // constant the host plays: every power has the second.
             ushort animation = ChungusRule.WindUpAnimation(power);
-            Assert.True(rows.TryGetValue(animation, out string? name), $"power {power} has no animation");
-            Assert.Contains(name, animations);
+            if (animation != 0)
+            {
+                Assert.True(rows.TryGetValue(animation, out string? name), $"power {power}: unknown animation id");
+                Assert.Contains(name, animations);
+            }
+
+            (int script, float seconds) = ChungusRule.WindUpScriptAnimation(power);
+            Assert.True(script is > 0 and <= 0x78, $"power {power} has no script animation");
+            Assert.Equal(script < 100, seconds > 0f);   // a looping constant needs a length
 
             BossLanding landing = ChungusRule.Landing(power, BossPowers.Strength((BossPower)power), 100, 200);
             Assert.True(landing.Damage > 0 || landing.Effect != 0, $"power {power} does nothing");
@@ -700,7 +712,7 @@ public sealed class ChungusBossTests : IDisposable
     [
         "cpause1", "cpause2", "creadyr", "cwalk", "crun", "cwalkinj", "g0a1", "g0a2", "cdodgeg", "cdamages",
         "cdie", "cdead", "ctaunt", "cvictory", "tlknorm", "chturnl", "chturnr",
-        "castout1", "castout2", "castout3", "powerup", "choke", "horror", "sleep", "paralyzed", "whirlwind",
+        "disabled", "usecomp", "choke", "horror", "sleep", "paralyzed", "whirlwind",
         "ckdbck", "ckdbcklp", "cgustandb", "cspasm",
     ];
 

@@ -58,23 +58,58 @@ internal static class ChungusRule
     private const uint EffectWhirlwind = 9;
     private const uint EffectDisguise = 16;
 
-    // The creature rows of animations.2da, as the 10000-based ids the engine's animation calls take.
-    private const ushort AnimVictory = 10260;
-    private const ushort AnimTaunt = 10263;
-    private const ushort AnimCast1 = 10293;
-    private const ushort AnimCast2 = 10294;
-    private const ushort AnimCast3 = 10295;
-    private const ushort AnimPowerUp = 10296;
+    // The engine's animation ids for a creature model, and the animation each one plays there.
+    // They are NOT rows of animations.2da: CSWCAnimBase::ServerToClientAnimation (0x0069F650)
+    // turns an id into a row, and for a model whose animbase is not humanoid it takes the
+    // branch at 0x0069FCBB, whose jump tables give exactly these (decoded from the binary and
+    // then played live on him; docs/research/chungus-boss.md has the whole table). The names
+    // in the comments are the animations in his model.
+    public const ushort AnimTaunt = 10028;     // -> row 263 ctaunt: the snap
+    public const ushort AnimVictory = 10044;   // -> row 260 cvictory: the laugh
+    public const ushort AnimBlast = 10118;     // -> row 270 disabled (looping): the power stone's blast
+    public const ushort AnimSlam = 10125;      // -> row 43 usecomp: the ground slam
+    public const ushort AnimSpin = 10053;      // -> row 258 chturnl: the pirouette
+    public const ushort AnimCharge = 10054;    // -> row 259 chturnr: the charge
 
-    /// <summary>The animation the boss plays as he starts a power (0 for none).</summary>
+    // The same six as the script constants NWScript's PlayAnimation takes (the handler's own
+    // table at 0x00540C44 turns each into the id above): ANIMATION_FIREFORGET_TAUNT, _VICTORY1,
+    // ANIMATION_LOOPING_DEACTIVATE, ANIMATION_FIREFORGET_USE_COMPUTER, _HEAD_TURN_LEFT, _RIGHT.
+    // The host plays these, because the script command interrupts a creature that is fighting
+    // and a client-side one-shot by id does not (seen live: accepted, but he kept his stance).
+    public const int ScriptTaunt = 107;
+    public const int ScriptVictory = 108;
+    public const int ScriptBlast = 19;
+    public const int ScriptSlam = 113;
+    public const int ScriptSpin = 100;
+    public const int ScriptCharge = 101;
+
+    /// <summary>How long the blast, the one looping animation, is held.</summary>
+    public const float BlastSeconds = 1.6f;
+
+    /// <summary>The script constant for a power's wind-up (0 for none), and how long to hold
+    /// it when it is a looping animation (0 for a one-shot).</summary>
+    public static (int Animation, float Seconds) WindUpScriptAnimation(int power) => power switch
+    {
+        Snap => (ScriptTaunt, 0f),
+        Blast => (ScriptBlast, BlastSeconds),
+        Lift or Slow => (ScriptSpin, 0f),
+        Gizka => (ScriptSlam, 0f),
+        Fright or Entrance => (ScriptVictory, 0f),
+        Drain => (ScriptCharge, 0f),
+        _ => (0, 0f),
+    };
+
+    /// <summary>The animation the boss plays as he starts a power, as the engine id a joiner
+    /// replays on its copy of him (0 for none; the blast is looping and reaches a joiner with
+    /// the rest of his looping state).</summary>
     public static ushort WindUpAnimation(int power) => power switch
     {
         Snap => AnimTaunt,
-        Blast => AnimCast1,
-        Lift or Slow => AnimCast3,
-        Gizka => AnimCast2,
+        Blast => 0,
+        Lift or Slow => AnimSpin,
+        Gizka => AnimSlam,
         Fright or Entrance => AnimVictory,
-        Drain => AnimPowerUp,
+        Drain => AnimCharge,
         _ => 0,
     };
 

@@ -52,6 +52,9 @@ public interface IPvpSession
     /// be taken to the boss fight.</summary>
     bool BossReady => false;
 
+    /// <summary>The row of THIS install's appearance table the arena boss wears, 0 when unknown.</summary>
+    int BossAppearanceRow => 0;
+
     /// <summary>The round, as this player's game should act on it. A client that has not heard
     /// from the host for a few seconds reads this as idle, so a lost host never strands a
     /// player pinned.</summary>

@@ -196,6 +196,10 @@ internal static class PvpMenuRule
 
     public static string FightingLine(string name) => $"Duel with {name}.   F12 yield (stops it, nothing is lost)";
 
+    /// <summary>The same line for the boss fight, where the player is pinned but has no
+    /// opponent among the players (the opponent peer is 0).</summary>
+    public const string BossFightLine = "Fight with Chungus.   F12 yield (calls it off for everyone, nothing is lost)";
+
     /// <summary>The name a peer id stands for, "Someone" when they are not in this area.</summary>
     public static string NameOf(uint peerId, IReadOnlyList<PvpMenuEntry> entries)
     {

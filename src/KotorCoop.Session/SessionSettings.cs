@@ -18,6 +18,10 @@ public sealed record SessionSettings
     /// Said to the host with the same handshake, so nobody is taken to a fight they cannot draw.</summary>
     public bool BossReady { get; init; }
 
+    /// <summary>The row of this install's appearance table the arena boss wears (0 when he is not
+    /// installed). A joiner's game finds its own copy of him by it.</summary>
+    public int BossAppearanceRow { get; init; }
+
     public string PlayerName { get; init; } = "player";
 
     /// <summary>
