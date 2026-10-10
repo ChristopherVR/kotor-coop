@@ -613,6 +613,51 @@ public sealed class DialogueFollowMachineTests
         Assert.Equal(DialogueFollowAction.None, machine.Step(Quiet(64)).Action);
     }
 
+    /// <summary>Star Forge, 2026-10-11: the joiner's copy of Carth's last lines stayed open after
+    /// the host's ended, and the joiner never followed the host to the next module.</summary>
+    [Fact]
+    public void AnOwnersEndThatDidNotCloseOursIsChasedShut()
+    {
+        DialogueFollowMachine machine = new(Timings);
+        machine.Step(SameConversation(0));
+        machine.Step(SameConversation(16));
+        Assert.Equal(DialogueFollowAction.CloseConversation, machine.Step(Quiet(32)).Action);
+
+        DialogueFollowInputs stillOpen = Quiet(48) with { LocalConversation = true, EngineConversationOpen = true };
+        Assert.Equal(DialogueFollowAction.None, machine.Step(stillOpen).Action);
+
+        long at = 32 + Timings.YieldCloseRetryMs;
+        List<DialogueFollowAction> actions = [];
+        for (int i = 0; i < Timings.YieldClearActionsAttempts + 1; i++, at += Timings.YieldCloseRetryMs)
+        {
+            actions.Add(machine.Step(stillOpen with { NowMs = at }).Action);
+        }
+
+        Assert.Contains(DialogueFollowAction.ForceCloseUi, actions);
+        Assert.Equal(DialogueFollowAction.ForceCloseUiAndClearActions, actions[^1]);
+    }
+
+    [Fact]
+    public void TheChaseStopsOnceOursIsClosedOrTheWindowPasses()
+    {
+        DialogueFollowMachine machine = new(Timings);
+        machine.Step(SameConversation(0));
+        machine.Step(SameConversation(16));
+        machine.Step(Quiet(32));
+
+        // Closed: a conversation the player starts afterwards is left alone.
+        machine.Step(Quiet(40));
+        DialogueFollowInputs later = Quiet(32 + (2 * Timings.YieldCloseRetryMs)) with { LocalConversation = true, EngineConversationOpen = true };
+        Assert.Equal(DialogueFollowAction.None, machine.Step(later).Action);
+
+        DialogueFollowMachine other = new(Timings);
+        other.Step(SameConversation(0));
+        other.Step(SameConversation(16));
+        other.Step(Quiet(32));
+        DialogueFollowInputs pastWindow = Quiet(32 + DialogueFollowMachine.OwnerEndedCloseWindowMs + 1) with { LocalConversation = true, EngineConversationOpen = true };
+        Assert.Equal(DialogueFollowAction.None, other.Step(pastWindow).Action);
+    }
+
     [Fact]
     public void NothingIsClosedWhenAPeerConversationEndsAndWeWereNotFollowing()
     {
