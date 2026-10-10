@@ -152,6 +152,54 @@ public sealed class GameFiles : IDisposable
         return false;
     }
 
+    /// <summary>
+    /// Resolves a resource the way the engine does for an area that belongs to
+    /// <paramref name="moduleName"/>: a loose file in override first, then the module (its
+    /// <c>.mod</c> when there is one, which replaces the module's rims outright, otherwise
+    /// <c>&lt;name&gt;.rim</c> then <c>&lt;name&gt;_s.rim</c>), then the base archives. A mod build
+    /// that ships <c>modules\tar_m02ae.mod</c> changes what the game loads for the Taris duel
+    /// ring, and the arena generator has to read that copy, not the stock rims.
+    /// </summary>
+    public bool TryReadAreaResource(string moduleName, string resref, string extension, out byte[] data)
+    {
+        if (OverridePath(resref, extension) is not null && TryReadResource(resref, extension, out data))
+        {
+            return true;
+        }
+
+        if (_modulesDirectory is not null)
+        {
+            string[] archives = FindFile(_modulesDirectory, moduleName + ".mod") is not null
+                ? [moduleName + ".mod"]
+                : [moduleName + ".rim", moduleName + "_s.rim"];
+            foreach (string name in archives)
+            {
+                string? path = FindFile(_modulesDirectory, name);
+                if (path is null)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    GameArchive archive = name.EndsWith(".mod", StringComparison.OrdinalIgnoreCase)
+                        ? ErfArchive.Open(path)
+                        : RimArchive.Open(path);
+                    if (archive.TryRead(resref, extension, out data))
+                    {
+                        return true;
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+                {
+                    // A locked or damaged archive reads as "not there", as above.
+                }
+            }
+        }
+
+        return TryReadResource(resref, extension, out data);
+    }
+
     // -- censuses ----------------------------------------------------------------
 
     /// <summary>Every loose file in override\ as (lowercase name, size), sorted by name.
