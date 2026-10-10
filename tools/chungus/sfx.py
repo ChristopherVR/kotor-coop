@@ -1,4 +1,4 @@
-"""The boss's sound effects, synthesised from scratch (no samples): plain 16-bit mono WAV files."""
+"""The one sound of his that the game has nothing like, synthesised from scratch: the snap."""
 from __future__ import annotations
 
 import io
@@ -98,89 +98,40 @@ def snap():
     return _echo(out, 0.11, 0.3, 2)
 
 
-def charge():
-    """Stones lighting up: a rising, trembling hum."""
-    t = _t(1.1)
-    rise = _sweep(1.1, 110, 880, 1.6) + 0.5 * _sweep(1.1, 165, 1320, 1.6) + 0.3 * _sweep(1.1, 220, 1760, 1.6, "saw")
-    tremolo = 0.7 + 0.3 * np.sin(2 * np.pi * (8 + 22 * t / 1.1) * t)
-    return _fade(rise * tremolo * (t / 1.1) ** 1.2, 0.02, 0.05)
-
-
-def blast():
-    """The power stone firing: a falling shriek with a thump under it."""
-    zap = _sweep(0.7, 1900, 90, 0.45, "saw") * _decay(0.7, 4.0)
-    ring = _sweep(0.7, 2600, 200, 0.4) * _decay(0.7, 6.0) * 0.6
-    burst = _noise(0.35, 400, 6000, seed=4) * _decay(0.35, 12.0)
-    thump = _sweep(0.5, 120, 40) * _decay(0.5, 7.0) * 1.4
-    return _echo(_mix(0.95, (0, zap), (0, ring), (0, burst), (0.02, thump)), 0.09, 0.25, 2)
-
-
-def slam():
-    """A very heavy rabbit landing fist first."""
-    thud = _sweep(1.0, 95, 28, 0.4) * _decay(1.0, 3.5) * 1.6
-    crunch = _noise(0.45, 150, 2600, seed=5) * _decay(0.45, 9.0)
-    debris = _noise(0.9, 900, 5000, seed=6) * _decay(0.9, 4.0) * 0.25
-    return _mix(1.1, (0, thud), (0, crunch), (0.08, debris))
-
-
-def warp():
-    """The space stone: the air folds and unfolds."""
-    t = _t(0.75)
-    wobble = np.sin(2 * np.pi * np.cumsum(300 + 900 * np.sin(np.pi * t / 0.75) ** 2 + 60 * np.sin(2 * np.pi * 17 * t)) / RATE)
-    air = _noise(0.75, 1200, 6000, seed=8) * np.sin(np.pi * t / 0.75) ** 2 * 0.35
-    return _fade(wobble * np.sin(np.pi * t / 0.75) ** 0.6 + air, 0.01, 0.06)
-
-
-def laugh():
-    """A deep, pleased 'hoh hoh hoh hoh'."""
-    layers = []
-    start = 0.0
-    for k, (length, pitch) in enumerate([(0.2, 150), (0.18, 138), (0.18, 128), (0.3, 112)]):
-        ho = _voice(length, pitch, pitch * 0.78, OH) * np.sin(np.pi * _t(length) / length) ** 0.7
-        layers.append((start, ho))
-        start += length + 0.07
-    return _fade(_mix(start + 0.05, *layers), 0.005, 0.04)
-
-
-def hurt():
-    """A short surprised 'oof'."""
-    t = _t(0.3)
-    return _fade(_voice(0.3, 190, 105, UH) * np.sin(np.pi * t / 0.3) ** 0.5, 0.004, 0.05)
-
-
-def intro():
-    """His entrance: two drum hits and a low brass chord swelling up."""
-    layers = []
-    for start in (0.0, 0.45):
-        layers.append((start, _sweep(0.6, 110, 45, 0.5) * _decay(0.6, 6.0) * 1.5))
-        layers.append((start, _noise(0.2, 200, 1800, seed=9) * _decay(0.2, 18.0) * 0.5))
-    t = _t(2.0)
-    chord = sum(_sweep(2.0, f, f, shape="saw") * g for f, g in ((73.4, 1.0), (110.0, 0.8), (146.8, 0.7), (174.6, 0.6), (220.0, 0.4)))
-    sos = signal.butter(2, 900, btype="low", fs=RATE, output="sos")
-    chord = signal.sosfilt(sos, chord) * np.minimum(t / 0.6, 1.0) * np.exp(-np.maximum(t - 1.3, 0) * 3.0) * 0.5
-    layers.append((0.9, chord))
-    return _fade(_mix(3.0, *layers), 0.002, 0.1)
-
-
-def die():
-    """A long falling whistle, a groan, and the landing."""
-    whistle = _sweep(1.2, 1500, 260, 0.8) * (0.8 + 0.2 * np.sin(2 * np.pi * 9 * _t(1.2))) * 0.6
-    groan = _voice(1.0, 140, 70, AH) * np.sin(np.pi * _t(1.0) / 1.0) ** 0.6 * 0.8
-    thud = _sweep(0.8, 90, 30, 0.4) * _decay(0.8, 4.0) * 1.6
-    crunch = _noise(0.3, 150, 2000, seed=10) * _decay(0.3, 10.0)
-    return _mix(2.2, (0.0, _fade(whistle, 0.02, 0.05)), (0.25, groan), (1.25, thud), (1.25, crunch))
+# His grunts and his powers use the game's own sounds (the Hutt's voice set, the Force powers'
+# effects). Made here are the two the game has nothing like: the snap, and what he says after it.
+def line():
+    """'Perfectly balanced, as all things should be.' The words come from a text-to-speech voice
+    (tools/chungus/voice_raw.wav, made once with voice.ps1); here they are slowed and dropped in
+    pitch until they sound like something his size, doubled an octave down, and put in a hall."""
+    import os
+    with wave.open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "voice_raw.wav"), "rb") as src:
+        assert src.getframerate() == RATE and src.getnchannels() == 1 and src.getsampwidth() == 2
+        raw = np.frombuffer(src.readframes(src.getnframes()), dtype="<i2").astype(float) / 32768.0
+    # Lower and slower together, the way a slowed tape is: it is the size of him that sells it.
+    deep = signal.resample_poly(raw, 100, 76)
+    # An octave below, quietly, for chest.
+    t = np.arange(len(deep)) / RATE
+    hilbert = signal.hilbert(deep)
+    phase = np.unwrap(np.angle(hilbert))
+    under = np.abs(hilbert) * np.cos(phase / 2.0)
+    under = signal.sosfilt(signal.butter(2, 500, btype="low", fs=RATE, output="sos"), under)
+    voice = deep + 0.55 * under
+    voice = signal.sosfilt(signal.butter(1, 3800, btype="low", fs=RATE, output="sos"), voice)
+    # The hall: a second and a half of decaying noise, low-passed so the tail is dark.
+    rng = np.random.default_rng(42)
+    tail = rng.normal(0.0, 1.0, int(RATE * 1.5)) * np.exp(-np.arange(int(RATE * 1.5)) / RATE * 4.2)
+    tail = signal.sosfilt(signal.butter(2, 2600, btype="low", fs=RATE, output="sos"), tail)
+    wet = signal.fftconvolve(np.concatenate([voice, np.zeros(len(tail))]), tail)[:len(voice) + len(tail)]
+    wet /= max(np.max(np.abs(wet)), 1e-9)
+    dry = np.concatenate([voice, np.zeros(len(tail))])
+    dry /= max(np.max(np.abs(dry)), 1e-9)
+    return _fade(dry + 0.32 * wet, 0.01, 0.2)
 
 
 SOUNDS = {
     "k_coop_chsnap": snap,
-    "k_coop_chcharge": charge,
-    "k_coop_chblast": blast,
-    "k_coop_chslam": slam,
-    "k_coop_chwarp": warp,
-    "k_coop_chlaugh": laugh,
-    "k_coop_chhurt": hurt,
-    "k_coop_chintro": intro,
-    "k_coop_chdie": die,
+    "k_coop_chline": line,
 }
 
 

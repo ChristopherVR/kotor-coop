@@ -832,4 +832,136 @@ internal static unsafe class OdysseyEffects
 
         return true;
     }
+
+    // ---- visual effects (docs/research/chungus-boss.md) ---------------------------------------
+
+    /// <summary>
+    /// <c>ExecuteCommandEffectVisualEffect</c> at 0x005346B0, a dedicated constructor (one
+    /// registration, so <see cref="FindRoutine"/> is safe). Read: it pops one int (the
+    /// visualeffects.2da id, the number in that table's first column, e.g. 3001 for
+    /// VFX_FNF_FORCE_WAVE), and a second (the miss flag) only when it was called with two
+    /// arguments (<c>cmp [esp+0x24], 2</c>). Called here with one, which makes it the same
+    /// shape as Heal: <see cref="ApplyOneIntParamEffect"/>.
+    /// </summary>
+    private const nint ExpectedEffectVisualEffect = 0x005346B0;
+
+    /// <summary>
+    /// <c>ExecuteCommandEffectBeam</c> at 0x00531260, also dedicated. Read: it pops an int (the
+    /// beam's visualeffects.2da id), an object (who the beam comes from), an int (which body
+    /// node it leaves from) and an int (the miss flag), in that order, and ends <c>ret 8</c>.
+    /// </summary>
+    private const nint ExpectedEffectBeam = 0x00531260;
+
+    private static int _routineVisualEffect = -1;
+    private static int _routineBeam = -1;
+
+    /// <summary>BODY_NODE_HAND_LEFT: the beam leaves from the model's <c>lhand</c> node.</summary>
+    public const int BodyNodeHandLeft = 3;
+
+    /// <summary>
+    /// Plays one of the game's own visual effects on an object: instantly for a fire-and-forget
+    /// one (<paramref name="durationMs"/> 0), or for a while for one that lasts. Visual only;
+    /// it does nothing to the object. Failure codes as <see cref="ApplyOneIntParamEffect"/>.
+    /// MAIN THREAD ONLY.
+    /// </summary>
+    public static bool ApplyVisualEffect(uint objectId, uint visualEffect, uint durationMs, out int failure) =>
+        ApplyOneIntParamEffect(
+            objectId, ExpectedEffectVisualEffect, ref _routineVisualEffect, durationMs, visualEffect,
+            minMagnitude: 1, maxMagnitude: 99_999, defaultMagnitude: 1, instant: durationMs == 0, out failure);
+
+    /// <summary>
+    /// Draws one of the game's beam effects from <paramref name="fromObjectId"/>'s hand to
+    /// <paramref name="objectId"/> for <paramref name="durationMs"/>. Visual only.
+    ///
+    /// Failure: 1 no VM, 2 no table, 3 a routine not found, 4 a script is running, 5 or 6 a
+    /// push failed, 7 the constructor refused, 8 a push failed, 9 the apply refused, 10 the
+    /// stack came back uneven (the call still happened). MAIN THREAD ONLY.
+    /// </summary>
+    public static bool ApplyBeam(uint objectId, uint beamEffect, uint fromObjectId, uint durationMs, out int failure)
+    {
+        failure = 0;
+
+        nint implementer = GetImplementer(out nint vm, out nint internalVm);
+        if (implementer == 0)
+        {
+            failure = 1;
+            return false;
+        }
+
+        nint table = Deref(implementer + CommandsTableOffset);
+        if (table == 0)
+        {
+            failure = 2;
+            return false;
+        }
+
+        if (_routineBeam < 0)
+        {
+            _routineBeam = FindRoutine(table, ExpectedEffectBeam);
+        }
+
+        if (_routineApplyEffect < 0)
+        {
+            _routineApplyEffect = FindRoutine(table, ExpectedApplyEffectToObject);
+        }
+
+        if (_routineBeam < 0 || _routineApplyEffect < 0)
+        {
+            failure = 3;
+            return false;
+        }
+
+        if (*(int*)(internalVm + CallStackSizeOffset) != 0)
+        {
+            failure = 4;
+            return false;
+        }
+
+        int stackPointer = *(int*)(internalVm + StackPointerOffset);
+
+        // ApplyEffectToObject's own last two arguments first (duration, target) ...
+        if (StackPushFloat(vm, Math.Max(durationMs, 100u) / 1000f) == 0 || StackPushObject(vm, objectId) == 0)
+        {
+            failure = 5;
+            return false;
+        }
+
+        // ... then EffectBeam(int nBeamVisualEffect, object oEffector, int nBodyPart, int bMissEffect),
+        // last-declared first.
+        if (StackPushInteger(vm, 0) == 0
+            || StackPushInteger(vm, BodyNodeHandLeft) == 0
+            || StackPushObject(vm, fromObjectId) == 0
+            || StackPushInteger(vm, (int)beamEffect) == 0)
+        {
+            failure = 6;
+            return false;
+        }
+
+        var beam = (delegate* unmanaged[Thiscall]<nint, int, int, int>)ExpectedEffectBeam;
+        if (beam(implementer, _routineBeam, 4) != 0)
+        {
+            failure = 7;
+            return false;
+        }
+
+        if (StackPushInteger(vm, DurationTypeTemporary) == 0)
+        {
+            failure = 8;
+            return false;
+        }
+
+        var applyEffect = (delegate* unmanaged[Thiscall]<nint, int, int, int>)ExpectedApplyEffectToObject;
+        if (applyEffect(implementer, _routineApplyEffect, 4) != 0)
+        {
+            failure = 9;
+            return false;
+        }
+
+        if (*(int*)(internalVm + StackPointerOffset) != stackPointer)
+        {
+            failure = 10;
+        }
+
+        return true;
+    }
 }

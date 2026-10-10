@@ -42,9 +42,12 @@ internal sealed unsafe partial class CheatController
                 }
 
                 bool heard = Odyssey.PlaySound(ChungusRule.WindUpSound(power));
+                uint gathering = ChungusRule.WindUpEffect(power);
+                bool seen = boss != 0 && gathering != 0 && OdysseyEffects.ApplyVisualEffect(bossId, gathering, 0, out _);
                 Answer(
                     SharedBlock.CheatStatusApplied,
-                    $"chungus: power {power} begins (boss 0x{bossId:X}, {animated}, sound {(heard ? "played" : "none")})");
+                    $"chungus: power {power} begins (boss 0x{bossId:X}, {animated}, sound {(heard ? "played" : "none")}, "
+                    + $"effect {gathering} {(seen ? "shown" : "none")})");
                 break;
             }
 
@@ -84,6 +87,24 @@ internal sealed unsafe partial class CheatController
                 Answer(
                     heard ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusRefused,
                     $"chungus: sound '{name}' {(heard ? "played" : "not played")}");
+                break;
+            }
+
+            case ChungusRule.OpBlink:
+            {
+                // Host: he is somewhere else, all at once. The move is the walkmesh-guarded snap,
+                // so a spot that is not floor leaves him where he was.
+                nint boss = ResolveChungus(block.CheatItemCharges, out uint bossId);
+                Vec3 to = block.CheatPosition;
+                bool moved = boss != 0 && !Odyssey.IsCreatureDead(boss) && Odyssey.SnapTo(boss, to);
+                if (moved)
+                {
+                    OdysseyEffects.ApplyVisualEffect(bossId, ChungusRule.BlinkEffect, 0, out _);
+                }
+
+                Answer(
+                    moved ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusRefused,
+                    $"chungus: blink to ({to.X:F1}, {to.Y:F1}, {to.Z:F1}) {(moved ? "done" : "refused")} (boss 0x{bossId:X})");
                 break;
             }
 
@@ -133,8 +154,23 @@ internal sealed unsafe partial class CheatController
         int strength = ChungusRule.StrengthOf(word);
         string result = "not aimed at this player";
 
+        // What is seen: the game's own effects, on this game's copy of him and on its own player.
+        nint source = ResolveChungus(block.CheatItemCharges, out uint sourceId);
+        uint burst = ChungusRule.LandEffectOnBoss(power);
+        if (source != 0 && burst != 0)
+        {
+            OdysseyEffects.ApplyVisualEffect(sourceId, burst, 0, out _);
+        }
+
         if ((word & ChungusRule.FlagHitsLocalPlayer) != 0 && player != 0 && !Odyssey.IsCreatureDead(player))
         {
+            BossSight sight = ChungusRule.Sight(power);
+            int shown = 0;
+            if (sight.Impact != 0 && OdysseyEffects.ApplyVisualEffect(playerId, sight.Impact, 0, out _)) shown++;
+            if (sight.Shake && OdysseyEffects.ApplyVisualEffect(playerId, ChungusRule.VfxScreenShake, 0, out _)) shown++;
+            if (sight.Lasting != 0 && OdysseyEffects.ApplyVisualEffect(playerId, sight.Lasting, sight.LastingMs, out _)) shown++;
+            if (sight.Beam != 0 && source != 0 && OdysseyEffects.ApplyBeam(playerId, sight.Beam, sourceId, sight.BeamMs, out _)) shown++;
+
             BossLanding landing = ChungusRule.Landing(
                 power, strength, Odyssey.GetCurrentHitPoints(player), Odyssey.GetEffectiveMaxHitPoints(player));
 
@@ -148,7 +184,7 @@ internal sealed unsafe partial class CheatController
                 && OdysseyEffects.ApplyEffect(
                     playerId, landing.SecondEffect, landing.SecondDurationMs, landing.SecondMagnitude, out secondFailure);
 
-            result = $"damage {landing.Damage} {(hurt ? "applied" : $"not applied ({damageFailure})")}, "
+            result = $"{shown} effect(s) shown, damage {landing.Damage} {(hurt ? "applied" : $"not applied ({damageFailure})")}, "
                 + $"effect {landing.Effect} {(applied ? "applied" : $"not applied ({effectFailure})")}"
                 + (landing.SecondEffect != 0 ? $", effect {landing.SecondEffect} {(second ? "applied" : $"not applied ({secondFailure})")}" : string.Empty);
         }

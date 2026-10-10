@@ -1,247 +1,228 @@
-"""The boss's body: a fat grey-and-white rabbit holding a jewelled golden gauntlet.
+"""Puts the boss together: the skinned body, the rigid pieces, the skeleton and the two textures.
 
-Every part is rigid and hangs off a pivot, so the model needs no skinning: the belly, head,
-ears, arms, gauntlet, fingers and feet are separate meshes that the animations swing about.
+sculpt.py says what shape he is and which bones carry it, texture.py what colour every point
+is, bake.py lays the surfaces out on the textures, and kmdl.py writes the file. This module
+turns those into the node tree the game loads:
+
+    k_coop_chungus
+      skin_head, skin_torso, skin_armr, skin_armg, skin_legs   skinned meshes (16 bones each at most)
+      cutscenedummy
+        rootdummy ... the bones, each an empty node at its joint
+          ... eyes, lids, teeth, the gauntlet's plates and the stones ride on single bones
 """
 from __future__ import annotations
 
 import numpy as np
 
-import geom
+import bake
 import kmdl
+import sculpt
+import sdf
 import texture
-from geom import ball, merge, tube
 
 NAME = "k_coop_chungus"
 TEXTURE = "k_coop_chungus"
+GAUNTLET_TEXTURE = "k_coop_chungusg"
 
-# Overall size. 1.0 puts the top of the head about 2.6 m up and the ear tips at about 3.4 m.
+# The gauntlet's texture mirrors the room the way the game's droids and armour do: the engine
+# reads this beside the texture and blends its stock metal reflection in where the alpha is low.
+GAUNTLET_TXI = "envmaptexture CM_Baremetal\r\n"
+
 SCALE = 1.0
 
-# The parts are laid out with the gauntlet on +X and flipped left-to-right when the nodes are
-# built, so he wears it on his left hand.
-MIRROR = True
+# A little light of his own, so a dark room (the arena is one) does not turn grey fur into a
+# silhouette.
+BODY_GLOW = (0.20, 0.20, 0.21)
 
-BODY_CENTRE = (0.0, 0.0, 1.05)
-NECK = (0.0, 0.05, 0.75)                 # from the body centre
-HEAD = (0.0, 0.05, 0.28)                 # head ball's centre, from the neck
-EAR_L = (-0.20, -0.02, 0.40)             # ear roots, from the head ball's centre
-EAR_R = (0.20, -0.02, 0.40)
-SHOULDER_L = (-0.95, 0.12, 0.45)         # from the body centre
-SHOULDER_R = (0.95, 0.12, 0.45)
-ELBOW_R = (0.20, 0.36, -0.40)            # from the right shoulder
-FIST = (-0.40, 0.46, 0.16)               # from the right elbow
-HAND_L = (-0.26, 0.12, -0.62)            # from the left shoulder
-FOOT_L = (-0.52, 0.22, 0.30)             # leg pivots, from the ground under the body
-FOOT_R = (0.52, 0.22, 0.30)
+# Which skinned mesh a triangle goes into, by the bone that carries most of it.
+GROUP_OF = {
+    "head": "head", "jaw": "head", "neck": "head",
+    "earl1": "head", "earl2": "head", "earl3": "head", "earr1": "head", "earr2": "head", "earr3": "head",
+    "rootdummy": "torso", "belly": "torso", "chest": "torso", "tail": "torso",
+    "uparmr": "armr", "forearmr": "armr", "handr": "armr",
+    "uparmg": "armg", "forearmg": "armg", "handg": "armg",
+    "thighl": "legs", "footl": "legs", "thighr": "legs", "footr": "legs",
+}
 
-STONE_ORDER = ["stone_power", "stone_space", "stone_reality", "stone_soul"]   # along the knuckles
+# How much more texture a piece gets than its size alone would give it.
+TEXEL_WEIGHT = {"skin_head": 1.7, "eyel": 3.0, "eyer": 3.0, "lidl": 2.0, "lidr": 2.0, "teeth": 2.5, "stones": 2.0}
 
 
-def _mesh(shape, shadow=False):
-    shape = geom.drop_degenerate(shape)
-    scaled = shape.verts * SCALE
+def _mesh(piece, texture_name, weights=None, offset=(0.0, 0.0, 0.0), selfillum=(0.0, 0.0, 0.0), shadow=False):
+    verts = (piece.verts[piece.origin].astype(float) - np.asarray(offset)) * SCALE
     return kmdl.Mesh(
-        verts=[tuple(v) for v in scaled],
-        normals=[tuple(n) for n in geom.smooth_normals(shape)],
-        uvs=[tuple(uv) for uv in shape.uvs],
-        faces=[tuple(int(k) for k in f) for f in shape.faces],
-        texture=TEXTURE,
+        verts=[tuple(float(c) for c in v) for v in verts],
+        normals=[tuple(float(c) for c in n) for n in piece.normals[piece.origin]],
+        uvs=[tuple(float(c) for c in uv) for uv in piece.uvs],
+        faces=[tuple(int(k) for k in f) for f in piece.out_faces],
+        texture=texture_name,
+        selfillum=selfillum,
         shadow=shadow,
+        weights=[weights[k] for k in piece.origin] if weights is not None else None,
     )
 
 
-def _at(position):
-    return tuple(float(v) * SCALE for v in position)
+def _flat_normals(verts, faces):
+    """Normals for a faceted piece (its triangles do not share vertices)."""
+    normals = np.zeros_like(verts)
+    for a, b, c in faces:
+        n = np.cross(verts[b] - verts[a], verts[c] - verts[a])
+        n /= max(np.linalg.norm(n), 1e-12)
+        normals[[a, b, c]] = n
+    return normals
 
 
-def _pear(h):
-    # Heavier below the middle, narrowing toward the shoulders.
-    return 1.0 - 0.13 * h - 0.06 * h * h
+def _radial_normals(verts, centre):
+    n = verts - np.asarray(centre)
+    return n / np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-12)
 
 
-def _body():
-    belly = ball((1.12, 0.95, 1.0), texture.rect("body"), around=24, up=16, profile=_pear)
-    tail = ball((0.22, 0.2, 0.22), texture.rect("white"), around=10, up=6).painted(texture.rect("white"), "flat")
-    return merge(belly, tail.moved((0.0, -0.93, -0.5)))
+def _vertex_normals(verts, faces):
+    normals = np.zeros_like(verts)
+    face_normals = np.cross(verts[faces[:, 1]] - verts[faces[:, 0]], verts[faces[:, 2]] - verts[faces[:, 0]])
+    for k in range(3):
+        np.add.at(normals, faces[:, k], face_normals)
+    return normals / np.maximum(np.linalg.norm(normals, axis=1, keepdims=True), 1e-12)
 
 
-def _head():
-    r = texture.rect
-    skull = ball((0.52, 0.5, 0.5), r("head"), around=20, up=14)
-    parts = [skull]
-    for side in (-1, 1):
-        cheek = ball((0.3, 0.26, 0.23), r("white"), around=12, up=8).painted(r("white"), "flat")
-        parts.append(cheek.turned(ry=side * 20).moved((side * 0.38, 0.2, -0.2)))
-        # A second, smaller tuft so the cheek reads as fluff and not one ball.
-        tuft = ball((0.17, 0.15, 0.13), r("white"), around=10, up=6).painted(r("white"), "flat")
-        parts.append(tuft.turned(ry=side * 35).moved((side * 0.58, 0.14, -0.3)))
-        eye = ball((0.115, 0.05, 0.15), r("eye"), around=12, up=8).painted(r("eye"), "planar", "y")
-        parts.append(eye.turned(rz=-side * 8).moved((side * 0.17, 0.445, 0.11)))
-        # Heavy lids and low, level brows: the unbothered look.
-        lid = ball((0.125, 0.06, 0.085), r("fur"), around=12, up=6).painted(r("fur"), "flat")
-        parts.append(lid.turned(rz=-side * 8).moved((side * 0.17, 0.452, 0.2)))
-        brow = tube((side * 0.04, 0.5, 0.31), (side * 0.3, 0.45, 0.3), 0.03, 0.024, r("black"), around=6, rings=1)
-        parts.append(brow.painted(r("black"), "flat"))
-    muzzle = ball((0.25, 0.19, 0.16), r("white"), around=12, up=8).painted(r("white"), "flat")
-    parts.append(muzzle.moved((0.0, 0.42, -0.13)))
-    nose = ball((0.075, 0.05, 0.05), r("pink"), around=8, up=6).painted(r("pink"), "flat")
-    parts.append(nose.moved((0.0, 0.6, -0.05)))
-    mouth = ball((0.16, 0.06, 0.07), r("mouth"), around=10, up=6).painted(r("mouth"), "flat")
-    parts.append(mouth.moved((0.0, 0.47, -0.27)))
-    for side in (-1, 1):
-        tooth = ball((0.04, 0.025, 0.065), r("tooth"), around=6, up=4).painted(r("tooth"), "flat")
-        parts.append(tooth.moved((side * 0.042, 0.535, -0.245)))
-    return merge(*parts).moved(HEAD)
+class Built:
+    """Everything build.py writes and preview.py draws."""
+
+    def __init__(self):
+        self.root = None
+        self.textures = {}        # texture name -> (H, W, 3 or 4) uint8 array
+        self.joints = {}          # node name -> rest position in the model's space
+        self.txi = {}             # texture name -> text
 
 
-def _ear(side):
-    ear = ball((0.17, 0.07, 0.58), texture.rect("ear"), around=12, up=12).painted(texture.rect("ear"), "planar", "y")
-    # Only the front shows the pink inside; the back is plain fur.
-    back = geom.smooth_normals(ear)[:, 1] < -0.15
-    fur = texture.rect("fur")
-    ear.uvs[back] = ((fur[0] + fur[2]) / 2, (fur[1] + fur[3]) / 2)
-    return ear.moved((0.0, 0.0, 0.52)).turned(ry=side * 7)
+def build(body_texture=1024, gauntlet_texture=512, log=print):
+    built = Built()
+    joints = dict(sculpt.JOINTS)
+    joints.update(sculpt.gauntlet_joints())
+    bones = list(joints)
 
+    # ---- the skin
+    log("sculpting the body ...")
+    figure, verts, faces = sculpt.body()
+    normals = figure.normals(verts)
+    share = figure.bone_weights(verts, bones)
+    per_vertex = [[(bones[b], float(share[v, b])) for b in np.nonzero(share[v])[0]] for v in range(len(verts))]
 
-def _arm_left():
-    r = texture.rect
-    upper = tube((0, 0, 0), HAND_L, 0.2, 0.16, r("fur"), around=10, rings=3, bulge=0.1).painted(r("fur"), "flat")
-    glove = ball((0.2, 0.19, 0.22), r("white"), around=10, up=8).painted(r("white"), "flat").moved(HAND_L)
-    cuff = ball((0.2, 0.2, 0.08), r("white"), around=10, up=4).painted(r("white"), "flat")
-    cuff = cuff.moved((HAND_L[0] + 0.05, HAND_L[1] - 0.02, HAND_L[2] + 0.17))
-    fingers = []
-    for k, dx in enumerate((-0.11, 0.0, 0.11)):
-        tip = ball((0.065, 0.065, 0.11), r("white"), around=6, up=4).painted(r("white"), "flat")
-        fingers.append(tip.moved((HAND_L[0] + dx, HAND_L[1] + 0.03, HAND_L[2] - 0.2)))
-    return merge(upper, glove, cuff, *fingers)
+    carried = share[faces].sum(axis=1)                       # (faces, bones)
+    group_names = sorted(set(GROUP_OF.values()))
+    score = np.stack([carried[:, [i for i, b in enumerate(bones) if GROUP_OF.get(b) == g]].sum(axis=1)
+                      for g in group_names], axis=1)
+    face_group = score.argmax(axis=1)
 
+    body_pieces, skin_weights = [], {}
+    for index, group in enumerate(group_names):
+        chosen = faces[face_group == index]
+        used = np.unique(chosen)
+        remap = -np.ones(len(verts), dtype=int)
+        remap[used] = np.arange(len(used))
+        piece = bake.Piece("skin_" + group, verts[used], remap[chosen], normals[used], texture.skin(figure))
+        body_pieces.append(piece)
+        skin_weights[piece.name] = [per_vertex[v] for v in used]
+        count = len({bone for v in used for bone, _ in per_vertex[v]})
+        log(f"  {piece.name}: {len(chosen)} triangles, {count} bones")
 
-def _arm_right():
-    r = texture.rect
-    return tube((0, 0, 0), ELBOW_R, 0.2, 0.18, r("fur"), around=10, rings=3, bulge=0.1).painted(r("fur"), "flat")
+    # ---- rigid face pieces
+    rigid = {}                                               # node name -> (piece, parent bone, pivot)
+    for tag, centre, side in (("l", sculpt.EYE_L, -1), ("r", sculpt.EYE_R, 1)):
+        ev, ef = sdf.uv_sphere((sculpt.EYE_RADIUS,) * 3, centre)
+        rigid["eye" + tag] = (bake.Piece("eye" + tag, ev, ef, _radial_normals(ev, centre), texture.eye(centre, side)),
+                              "head", centre)
+        lv, lf = sculpt.eyelid(centre)
+        close = np.radians(-sculpt.LID_REST_DEGREES)
+        turn = np.array([[1, 0, 0], [0, np.cos(close), -np.sin(close)], [0, np.sin(close), np.cos(close)]])
+        lv = (lv - centre) @ turn.T + centre                 # at rest the lids hang half shut
+        rigid["lid" + tag] = (bake.Piece("lid" + tag, lv, lf, _radial_normals(lv, centre), texture.lid(centre)),
+                              "head", centre)
+    tv, tf = sculpt.teeth()
+    rigid["teeth"] = (bake.Piece("teeth", tv, tf, _vertex_normals(tv, tf), texture.teeth), "head", sculpt.J("head"))
+    mv, mf = sculpt.mouth_inside()
+    rigid["mouthin"] = (bake.Piece("mouthin", mv, mf, -_radial_normals(mv, (0.0, 0.50, 2.02)), texture.mouth_inside),
+                        "head", sculpt.J("head"))
 
+    log("unwrapping and painting the body texture ...")
+    all_body = body_pieces + [entry[0] for entry in rigid.values()]
+    bake.unwrap(all_body, body_texture, weights=TEXEL_WEIGHT)
+    built.textures[TEXTURE] = bake.paint(all_body, body_texture, channels=3)
 
-def _fist_frame():
-    """Unit vectors of the hand: along the forearm, across the knuckles, and out of the back of the hand."""
-    along = np.array(FIST, dtype=float)
-    along /= np.linalg.norm(along)
-    back = np.array([0.0, 0.8, 0.6])
-    back -= along * (back @ along)
-    back /= np.linalg.norm(back)
-    across = np.cross(back, along)
-    return along, across, back
+    # ---- the gauntlet
+    log("forging the gauntlet ...")
+    metal = {}
+    elbow, wrist = sculpt.J("forearmg"), sculpt.J("handg")
+    for bone, (gv, gf, gsculpt) in sculpt.gauntlet_pieces().items():
+        ring = (elbow, wrist) if bone == "forearmg" else (None, None)
+        metal[bone] = bake.Piece("g" + bone, gv, gf, gsculpt.normals(gv), texture.metal(gsculpt, *ring))
+    along, across, back = sculpt.hand_frame()
+    stone_verts, stone_faces, stone_normals, stone_paint = [], [], [], []
+    base = 0
+    for name, (gv, gf) in sculpt.stones().items():
+        stone_verts.append(gv)
+        stone_faces.append(gf + base)
+        stone_normals.append(_flat_normals(gv, gf))
+        stone_paint.append((gv.mean(axis=0), texture.stone(name, gv.mean(axis=0), back)))
+        base += len(gv)
+    stone_verts = np.concatenate(stone_verts)
+    centres = np.array([centre for centre, _ in stone_paint])
 
+    def paint_stones(points, normals_):
+        # each point belongs to the stone it is nearest
+        which = np.linalg.norm(points[:, None, :] - centres[None, :, :], axis=2).argmin(axis=1)
+        out = np.zeros((len(points), 4))
+        for k, (_, fn) in enumerate(stone_paint):
+            mask = which == k
+            if mask.any():
+                out[mask] = fn(points[mask], normals_[mask])
+        return out
 
-def _in_hand(shape, frame):
-    """Lays a shape built flat (x across the knuckles, y along the forearm, z out of the back) onto the hand."""
-    along, across, back = frame
-    return geom.Shape(shape.verts @ np.stack([across, along, back]), shape.uvs, shape.faces)
+    stones = bake.Piece("stones", stone_verts, np.concatenate(stone_faces), np.concatenate(stone_normals), paint_stones)
+    all_metal = list(metal.values()) + [stones]
+    bake.unwrap(all_metal, gauntlet_texture, padding=4, weights=TEXEL_WEIGHT)
+    built.textures[GAUNTLET_TEXTURE] = bake.paint(all_metal, gauntlet_texture, channels=4)
+    built.txi[GAUNTLET_TEXTURE] = GAUNTLET_TXI
 
-
-def _gauntlet():
-    r = texture.rect
-    frame = _fist_frame()
-    along, across, back = frame
-    fist = np.array(FIST)
-    sleeve = tube((0, 0, 0), fist * 0.7, 0.25, 0.24, r("gauntlet"), around=14, rings=3, caps=False)
-    cuff = tube(fist * -0.12, fist * 0.1, 0.3, 0.26, r("gold"), around=14, rings=1).painted(r("gold"), "flat")
-    hand = _in_hand(ball((0.36, 0.3, 0.3), r("gold"), around=14, up=10).painted(r("gold"), "flat"), frame)
-    plate = _in_hand(ball((0.24, 0.2, 0.07), r("gold"), around=10, up=4).painted(r("gold"), "flat"), frame)
-    return merge(sleeve, cuff, hand.moved(fist), plate.moved(fist + back * 0.26)), fist, frame
-
-
-def _stones(fist, frame):
-    r = texture.rect
-    along, across, back = frame
-    mind = _in_hand(ball((0.13, 0.13, 0.08), r("stone_mind"), around=10, up=6).painted(r("stone_mind"), "planar", "z"), frame)
-    parts = [mind.moved(fist + back * 0.31 - along * 0.02)]
-    for k, name in enumerate(STONE_ORDER):
-        gem = _in_hand(ball((0.075, 0.075, 0.06), r(name), around=8, up=6).painted(r(name), "planar", "z"), frame)
-        parts.append(gem.moved(fist + along * 0.23 + across * (-0.225 + 0.15 * k) + back * 0.17))
-    time = _in_hand(ball((0.075, 0.075, 0.06), r("stone_time"), around=8, up=6).painted(r("stone_time"), "planar", "z"), frame)
-    parts.append(time.moved(fist + across * 0.34 + back * 0.1 - along * 0.02))
-    return merge(*parts)
-
-
-def _fingers(frame):
-    """Two gold fingers curled under the fist. The node's pivot is the knuckle line, so turning it opens the hand."""
-    r = texture.rect
-    along, across, back = frame
-    parts = []
-    for offset in (-0.1, 0.08):
-        base = across * offset
-        knuckle = base + along * 0.1 - back * 0.1
-        parts.append(tube(base, knuckle, 0.085, 0.08, r("gold"), around=8, rings=1).painted(r("gold"), "flat"))
-        parts.append(tube(knuckle, knuckle - along * 0.12 - back * 0.16, 0.08, 0.065, r("gold"), around=8, rings=1)
-                     .painted(r("gold"), "flat"))
-    return merge(*parts)
-
-
-def _thumb(frame):
-    r = texture.rect
-    along, across, back = frame
-    return tube((0, 0, 0), across * 0.14 + along * 0.14 - back * 0.14, 0.095, 0.075, r("gold"), around=8, rings=2).painted(r("gold"), "flat")
-
-
-def _foot():
-    r = texture.rect
-    sole = ball((0.3, 0.56, 0.15), r("fur"), around=12, up=8).painted(r("fur"), "flat").moved((0.0, 0.36, -0.15))
-    toes = []
-    for dx in (-0.17, 0.0, 0.17):
-        toe = ball((0.1, 0.13, 0.11), r("fur"), around=8, up=5).painted(r("fur"), "flat")
-        toes.append(toe.moved((dx, 0.85, -0.17)))
-    return merge(sole, *toes)
-
-
-def build_nodes():
-    """The node tree in its rest pose. Every node's rest orientation is 'no rotation'."""
+    # ---- the node tree
+    log("building the skeleton ...")
     Node = kmdl.Node
     root = Node(NAME)
+    for piece in body_pieces:
+        root.add(Node(piece.name, mesh=_mesh(piece, TEXTURE, skin_weights[piece.name], selfillum=BODY_GLOW)))
     cutscene = root.add(Node("cutscenedummy"))
-    rootdummy = cutscene.add(Node("rootdummy", position=_at(BODY_CENTRE)))
+    nodes = {}
+    world = {name: np.array(position, dtype=float) for name, (_, position) in joints.items()}
+    for name, (parent, _) in joints.items():
+        above = nodes[parent] if parent else cutscene
+        origin = world[parent] if parent else np.zeros(3)
+        nodes[name] = above.add(Node(name, position=tuple(float(c) * SCALE for c in world[name] - origin)))
 
-    rootdummy.add(Node("body", mesh=_mesh(_body())))
-    neck = rootdummy.add(Node("neck", position=_at(NECK)))
-    head = neck.add(Node("head", mesh=_mesh(_head())))
-    head_centre = np.array(HEAD)
-    head.add(Node("earl", position=_at(head_centre + EAR_L), mesh=_mesh(_ear(-1))))
-    head.add(Node("earr", position=_at(head_centre + EAR_R), mesh=_mesh(_ear(1))))
-    head.add(Node("talkdummy", position=_at(head_centre + (0.0, 0.5, -0.2))))
-    head.add(Node("headhook", position=_at(head_centre + (0.0, 0.0, 0.55))))
-    head.add(Node("headconjure", position=_at(head_centre + (0.0, 0.7, 0.0))))
+    def hang(name, parent, pivot, mesh=None):
+        pivot = np.asarray(pivot, dtype=float)
+        world[name] = pivot
+        nodes[name] = nodes[parent].add(
+            Node(name, position=tuple(float(c) * SCALE for c in pivot - world[parent]), mesh=mesh))
+        return nodes[name]
 
-    arml = rootdummy.add(Node("armf", position=_at(SHOULDER_L), mesh=_mesh(_arm_left())))
-    arml.add(Node("lhand", position=_at(HAND_L)))
+    for name, (piece, parent, pivot) in rigid.items():
+        hang(name, parent, pivot, _mesh(piece, TEXTURE, offset=pivot, selfillum=BODY_GLOW))
+    for bone, piece in metal.items():
+        hang("g_" + bone, bone, world[bone], _mesh(piece, GAUNTLET_TEXTURE, offset=world[bone], shadow=True))
+    hang("stones", "handg", world["handg"],
+         _mesh(stones, GAUNTLET_TEXTURE, offset=world["handg"], selfillum=(0.35, 0.35, 0.35)))
 
-    armr = rootdummy.add(Node("armg", position=_at(SHOULDER_R), mesh=_mesh(_arm_right())))
-    gauntlet_shape, fist, frame = _gauntlet()
-    gauntlet = armr.add(Node("gauntlet", position=_at(ELBOW_R), mesh=_mesh(gauntlet_shape)))
-    stones = gauntlet.add(Node("stones", mesh=_mesh(_stones(fist, frame))))
-    stones.mesh.selfillum = (0.3, 0.3, 0.3)
-    along, across, back = frame
-    gauntlet.add(Node("fingers", position=_at(fist + along * 0.24 - back * 0.02), mesh=_mesh(_fingers(frame))))
-    gauntlet.add(Node("thumb", position=_at(fist + across * 0.3 - back * 0.08), mesh=_mesh(_thumb(frame))))
-    gauntlet.add(Node("rhand", position=_at(fist)))
-    gauntlet.add(Node("handconjure", position=_at(fist + back * 0.45)))
+    # Points the engine looks for by name: where effects strike, where the hands and head are.
+    hang("impact", "rootdummy", (0.0, 1.0, 1.25))
+    hang("headhook", "head", world["head"] + (0.0, 0.0, 0.55))
+    hang("talkdummy", "head", world["head"] + (0.0, 0.45, -0.15))
+    hang("headconjure", "head", world["head"] + (0.0, 0.75, 0.05))
+    hang("lhand", "handg", world["handg"] + along * 0.25)
+    hang("handconjure", "handg", world["handg"] + along * 0.25 + back * 0.45)
+    hang("rhand", "handr", world["handr"] + (0.0, 0.10, -0.13))
+    world["camerahook"] = np.array((0.0, 0.0, 2.4))
+    cutscene.add(Node("camerahook", position=tuple(float(c) * SCALE for c in world["camerahook"])))
 
-    rootdummy.add(Node("impact", position=_at((0.0, 0.95, 0.25))))
-
-    cutscene.add(Node("legl", position=_at(FOOT_L), mesh=_mesh(_foot())))
-    cutscene.add(Node("legr", position=_at(FOOT_R), mesh=_mesh(_foot())))
-    cutscene.add(Node("camerahook", position=_at((0.0, 0.0, 2.3))))
-    if MIRROR:
-        _mirror(root)
-    return root
-
-
-def _mirror(node):
-    x, y, z = node.position
-    node.position = (-x, y, z)
-    if node.mesh:
-        m = node.mesh
-        m.verts = [(-vx, vy, vz) for vx, vy, vz in m.verts]
-        m.normals = [(-nx, ny, nz) for nx, ny, nz in m.normals]
-        m.faces = [(a, c, b) for a, b, c in m.faces]
-    for child in node.children:
-        _mirror(child)
+    built.root = root
+    built.joints = {name: tuple(float(c) * SCALE for c in position) for name, position in world.items()}
+    return built

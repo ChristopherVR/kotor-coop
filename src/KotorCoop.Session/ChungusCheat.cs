@@ -17,6 +17,7 @@ public static class ChungusCheat
     public const int OpDespawn = 4;
     public const int OpAnimation = 5;
     public const int OpSound = 6;
+    public const int OpBlink = 7;
 
     public const uint FlagHitsLocalPlayer = 1u << 16;
     public const uint FlagHost = 1u << 17;

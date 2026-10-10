@@ -142,7 +142,7 @@ public sealed partial class CoopCommandDispatcher
                 BossCue cue = new((BossPower)command.Amount, BossPowers.Strength((BossPower)command.Amount), 0);
                 if (!cue.IsKnown)
                 {
-                    Reply("chungus power takes a number from 1 to 9");
+                    Reply("chungus power takes a number from 1 to 10");
                     return;
                 }
 

@@ -161,6 +161,34 @@ public sealed class ArenaFlow
         return (a.X, a.Y + (side * step * 3.2f), a.Z);
     }
 
+    /// <summary>A spot in the ring for someone the boss has thrown there (or for him): on a
+    /// circle about the middle, <paramref name="turn"/> of the way round it (0 to 1) and
+    /// <paramref name="out"/> of the way out (0 to 1) to where the two ends' marks are.</summary>
+    public static (float X, float Y, float Z) RingSpot(double turn, double @out)
+    {
+        ArenaSpawn a = ArenaModule.SpawnFor(0, 1);
+        ArenaSpawn b = ArenaModule.SpawnFor(1, 1);
+        float cx = (a.X + b.X) / 2f;
+        float cy = (a.Y + b.Y) / 2f;
+        float reach = MathF.Sqrt(((a.X - b.X) * (a.X - b.X)) + ((a.Y - b.Y) * (a.Y - b.Y))) / 2f;
+        float radius = reach * (float)Math.Clamp(@out, 0.0, 1.0);
+        float angle = (float)(turn * 2.0 * Math.PI);
+        return (cx + (radius * MathF.Cos(angle)), cy + (radius * MathF.Sin(angle)), a.Z);
+    }
+
+    /// <summary>Where the boss lands when he blinks to someone standing at
+    /// <paramref name="at"/>: beside them, on the side the middle of the ring is, so it is
+    /// floor.</summary>
+    public static (float X, float Y, float Z) BesideInRing(Vector3f at, float distance = 2.6f)
+    {
+        (float cx, float cy, _) = RingSpot(0, 0);
+        float dx = cx - at.X;
+        float dy = cy - at.Y;
+        float length = MathF.Sqrt((dx * dx) + (dy * dy));
+        (dx, dy) = length < 0.5f ? (1f, 0f) : (dx / length, dy / length);
+        return (at.X + (dx * distance), at.Y + (dy * distance), at.Z);
+    }
+
     /// <summary>Where the boss appears: the west end, where a duel's second fighter stands.</summary>
     public static (float X, float Y, float Z) BossSpot
     {

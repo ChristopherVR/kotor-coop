@@ -1,8 +1,10 @@
 """Writer for the KOTOR 1 (PC) binary model format: a .mdl with its .mdx vertex file.
 
-Covers what a rigid-part creature needs and nothing else: dummy nodes, textured triangle
-meshes, and animations made of position / orientation / scale / self-illumination keyframes.
-No skinning, emitters, lights, walkmeshes or lightsabers.
+Covers what a creature needs and nothing else: dummy nodes, textured triangle meshes, skinned
+meshes (each vertex carried by up to four bones, at most sixteen bones a mesh, which is the
+engine's limit and why the game's own creatures are cut into several skins), and animations
+made of position / orientation / scale / self-illumination keyframes. No emitters, lights,
+walkmeshes or lightsabers.
 
 Layout facts were checked against the game's own creature models (c_gizka, c_rancor,
 c_gammorean) with tools/chungus/mdldump.py; see docs/research/chungus-boss.md.
@@ -18,9 +20,12 @@ from dataclasses import dataclass, field
 MODEL_FN = (4273776, 4216096)
 ANIM_FN = (4273392, 4451552)
 MESH_FN = (4216656, 4216672)
+SKIN_FN = (4216592, 4216608)
+MAX_SKIN_BONES = 16
 
 NODE_BASE = 0x0001
 NODE_MESH = 0x0020
+NODE_SKIN = 0x0040
 
 CTRL_POSITION = 8
 CTRL_ORIENTATION = 20
@@ -52,6 +57,10 @@ class Mesh:
     scale: float = 1.0
     render: bool = True
     shadow: bool = False
+    # For a skin: one entry per vertex, [(bone node name, share), ...] with up to four bones
+    # whose shares sum to 1. A skin's node must sit unrotated at the model's origin, and so
+    # must every bone it names rest unrotated (this writer assumes it; the model keeps to it).
+    weights: list | None = None
 
 
 @dataclass
@@ -104,6 +113,17 @@ def flatten(root: Node):
 
     walk(root, None)
     return nodes, parents
+
+
+def _world_positions(nodes, parents):
+    """Where each node rests in the model's space (rest orientations are all 'no rotation')."""
+    world = []
+    for node, parent in zip(nodes, parents):
+        base = world[parent] if parent is not None else (0.0, 0.0, 0.0)
+        if node.orientation != (1.0, 0.0, 0.0, 0.0) and node.mesh is None and node.children:
+            raise ValueError(f"node '{node.name}' rests rotated; skins assume unrotated bones")
+        world.append(tuple(b + p for b, p in zip(base, node.position)))
+    return world
 
 
 def _fixed(text: str, size: int) -> bytes:
@@ -187,9 +207,12 @@ def _geometry_controllers(node: Node, is_root: bool) -> _Controllers:
     w, x, y, z = node.orientation
     c.add(CTRL_POSITION, [(0.0, *node.position)], 3, False)
     c.add(CTRL_ORIENTATION, [(0.0, x, y, z, w)], 4, False)
-    if node.mesh:
+    if node.mesh and node.mesh.weights is None:
         c.add(CTRL_ALPHA, [(0.0, node.mesh.alpha)], 1, False)
         c.add(CTRL_SCALE, [(0.0, node.mesh.scale)], 1, False)
+        c.add(CTRL_SELFILLUM, [(0.0, *node.mesh.selfillum)], 3, False)
+    elif node.mesh and any(node.mesh.selfillum):
+        # A skin takes this one and no other (see the note on skins in chungus-boss.md).
         c.add(CTRL_SELFILLUM, [(0.0, *node.mesh.selfillum)], 3, False)
     return c
 
@@ -279,6 +302,8 @@ def write(model: Model) -> tuple[bytes, bytes]:
             if len(m.verts) > 65000:
                 raise ValueError(f"mesh '{node.name}' has too many vertices")
             pos += 332
+            if m.weights is not None:
+                pos += 100
             item["faces"] = pos
             pos += 32 * len(m.faces)
             item["index_offset"] = pos
@@ -292,7 +317,16 @@ def write(model: Model) -> tuple[bytes, bytes]:
             item["indices"] = pos
             pos += 6 * len(m.faces)
             item["mdx"] = mdx_pos
-            mdx_pos += 32 * (len(m.verts) + 1)
+            mdx_pos += (64 if m.weights is not None else 32) * (len(m.verts) + 1)
+            if m.weights is not None:
+                item["bonemap"] = pos
+                pos += 4 * len(nodes)
+                item["qbones"] = pos
+                pos += 16 * len(nodes)
+                item["tbones"] = pos
+                pos += 12 * len(nodes)
+                item["garbage"] = pos
+                pos += 4 * len(nodes)
         ctrl = _geometry_controllers(node, parents[i] is None)
         item["ctrl"] = ctrl
         item["children"] = pos
@@ -363,7 +397,10 @@ def write(model: Model) -> tuple[bytes, bytes]:
         assert len(out) == item["offset"], (node.name, len(out), item["offset"])
         ctrl = item["ctrl"]
         parent = node_layout[parents[i]]["offset"] if parents[i] is not None else 0
-        out += struct.pack("<HHHHII", NODE_BASE | (NODE_MESH if node.mesh else 0), i, i, 0, 0, parent)
+        flags = NODE_BASE | (NODE_MESH if node.mesh else 0)
+        if node.mesh and node.mesh.weights is not None:
+            flags |= NODE_SKIN
+        out += struct.pack("<HHHHII", flags, i, i, 0, 0, parent)
         out += struct.pack("<3f4f", *node.position, *node.orientation)
         out += _array(item["children"], len(children[i]))
         out += _array(item["keys"] if ctrl.keys else 0, len(ctrl.keys))
@@ -380,7 +417,9 @@ def write(model: Model) -> tuple[bytes, bytes]:
             radius = max(math.dist(v, average) for v in used)
             area = sum(a for _, a in face_data)
 
-            out += struct.pack("<II", *MESH_FN)
+            skinned = m.weights is not None
+            stride = 64 if skinned else 32
+            out += struct.pack("<II", *(SKIN_FN if skinned else MESH_FN))
             out += _array(item["faces"], len(m.faces))
             out += struct.pack("<6f", *bb_min, *bb_max)
             out += struct.pack("<f3f", radius, *average)
@@ -393,11 +432,30 @@ def write(model: Model) -> tuple[bytes, bytes]:
             out += struct.pack("<III", 0xFFFFFFFF, 0xFFFFFFFF, 0)
             out += bytes([3, 0, 0, 0, 0, 0, 0, 0])
             out += struct.pack("<I4f", 0, 0.0, 0.0, 0.0, 0.0)
-            out += struct.pack("<II", 32, MDX_VERTEX | MDX_NORMAL | MDX_UV1)
+            out += struct.pack("<II", stride, MDX_VERTEX | MDX_NORMAL | MDX_UV1)
             out += struct.pack("<11I", 0, 12, NO_OFFSET, 24, *([NO_OFFSET] * 7))
             out += struct.pack("<HH", len(m.verts), 1)
             out += struct.pack("<6B2x", 0, 0, 0, 1 if m.shadow else 0, 0, 1 if m.render else 0)
             out += struct.pack("<fIII", area, 0, item["mdx"], item["verts"])
+
+            bones = []
+            if skinned:
+                # The bones this skin uses, in the order its vertices index them.
+                for entry in m.weights:
+                    for bone, _ in entry:
+                        if bone not in bones:
+                            bones.append(bone)
+                if len(bones) > MAX_SKIN_BONES:
+                    raise ValueError(f"skin '{node.name}' uses {len(bones)} bones; the engine allows {MAX_SKIN_BONES}")
+                if node.position != (0.0, 0.0, 0.0) or parents[i] != 0:
+                    raise ValueError(f"skin '{node.name}' must sit at the origin, directly under the root")
+                out += _array(0, 0)
+                out += struct.pack("<IIII", 32, 48, item["bonemap"], len(nodes))
+                out += _array(item["qbones"], len(nodes))
+                out += _array(item["tbones"], len(nodes))
+                out += _array(item["garbage"], len(nodes))
+                slots = [index_of[b] for b in bones] + [0xFFFF] * (MAX_SKIN_BONES - len(bones))
+                out += struct.pack("<16HI", *slots, 0)
 
             assert len(out) == item["faces"]
             for (a, b, c), (normal, _), adjacent in zip(m.faces, face_data, _adjacency(m)):
@@ -412,9 +470,32 @@ def write(model: Model) -> tuple[bytes, bytes]:
                 out += struct.pack("<3H", *face)
 
             assert len(mdx) == item["mdx"]
-            for v, n, uv in zip(m.verts, m.normals, m.uvs):
-                mdx += struct.pack("<3f3f2f", *v, *n, *uv)
-            mdx += struct.pack("<3f3f2f", 1e7, 1e7, 1e7, 0.0, 0.0, 0.0, 0.0, 0.0)
+            if skinned:
+                for v, n, uv, entry in zip(m.verts, m.normals, m.uvs, m.weights):
+                    if not 1 <= len(entry) <= 4:
+                        raise ValueError(f"skin '{node.name}': a vertex needs one to four bones")
+                    shares = [share for _, share in entry] + [0.0] * (4 - len(entry))
+                    slots = [float(bones.index(bone)) for bone, _ in entry] + [-1.0] * (4 - len(entry))
+                    mdx += struct.pack("<3f3f2f4f4f", *v, *n, *uv, *shares, *slots)
+                mdx += struct.pack("<3f3f2f4f4f", 1e7, 1e7, 1e7, 0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 0, 0, 0)
+
+                # Which bone number each node of the model is in this skin (-1: not one of its bones).
+                bonemap = [-1.0] * len(nodes)
+                for number, bone in enumerate(bones):
+                    bonemap[index_of[bone]] = float(number)
+                out += struct.pack(f"<{len(nodes)}f", *bonemap)
+                # For every node, the transform from the skin's space into that node's own space at
+                # rest. With everything unrotated that is no rotation and minus the node's position.
+                world = _world_positions(nodes, parents)
+                for _ in nodes:
+                    out += struct.pack("<4f", 1.0, 0.0, 0.0, 0.0)
+                for position in world:
+                    out += struct.pack("<3f", -position[0], -position[1], -position[2])
+                out += bytes(4 * len(nodes))
+            else:
+                for v, n, uv in zip(m.verts, m.normals, m.uvs):
+                    mdx += struct.pack("<3f3f2f", *v, *n, *uv)
+                mdx += struct.pack("<3f3f2f", 1e7, 1e7, 1e7, 0.0, 0.0, 0.0, 0.0, 0.0)
 
         assert len(out) == item["children"]
         out += struct.pack(f"<{len(children[i])}I", *(node_layout[c]["offset"] for c in children[i]))

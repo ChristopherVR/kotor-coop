@@ -12,9 +12,9 @@ public static class BossPowers
         BossPower.Snap => 1_300,
         BossPower.Blast => 900,
         BossPower.Gizka => 900,
-        BossPower.Drain => 1_000,
+        BossPower.Drain => 850,
         BossPower.Entrance => 1_500,
-        BossPower.Defeat => 0,
+        BossPower.Defeat or BossPower.Blink => 0,
         _ => 700,
     };
 
@@ -25,9 +25,17 @@ public static class BossPowers
         BossPower.Snap => 50,
         BossPower.Blast => 30,
         BossPower.Drain => 15,
-        BossPower.Slow => 50,
         _ => 0,
     };
+
+    /// <summary>How long after the snap lands he says his line.</summary>
+    public const int SnapLineDelayMs = 900;
+
+    /// <summary>The sound of the line (k_coop_chline.wav).</summary>
+    public const string SnapLine = "k_coop_chline";
+
+    /// <summary>How long time stays stopped. KEEP IN SYNC with the plugin's ChungusRule.</summary>
+    public const int TimeStopMs = 3_500;
 
     /// <summary>Aimed at one player; the others hit everyone.</summary>
     public static bool Targeted(BossPower power) =>
