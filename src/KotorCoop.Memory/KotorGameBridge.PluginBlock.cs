@@ -601,6 +601,22 @@ public sealed partial class KotorGameBridge
 
     private FriendlyCreatureResolver? _friendlyCreatures;
 
+    /// <summary>The module the last travel request was for, and when; see
+    /// <see cref="TryWriteFriendlyTemplates(IReadOnlyList{string})"/>.</summary>
+    private volatile string? _friendlyTravelDestination;
+    private long _friendlyTravelAtMs;
+
+    /// <summary>Long enough for the slowest module load and the scene's first scripts.</summary>
+    private const long FriendlyTravelHoldMs = 120_000;
+
+    /// <summary>Remembers a travel destination and writes its friendly actors at once.</summary>
+    private void WriteFriendlyTemplatesForTravel(string module)
+    {
+        _friendlyTravelAtMs = Environment.TickCount64;
+        _friendlyTravelDestination = module;
+        TryWriteFriendlyTemplates([module]);
+    }
+
     /// <inheritdoc />
     public bool TryWriteFriendlyTemplates(string module) => TryWriteFriendlyTemplates([module]);
 
@@ -614,9 +630,24 @@ public sealed partial class KotorGameBridge
 
         _friendlyCreatures ??= new FriendlyCreatureResolver(directory);
         List<string> templates = [];
+
+        // A travel destination stays in the list until the trip is long over: the refresh that
+        // follows a travel request names the module being left (and the host's, often still the
+        // same one), and rewriting the list from those alone dropped the destination's actors
+        // before its scene created them. On the Star Forge the joiner then left Carth to the host
+        // and never saw the confrontation at all (2026-10-10).
+        string? destination = _friendlyTravelDestination;
+        if (destination is not null && Environment.TickCount64 - _friendlyTravelAtMs < FriendlyTravelHoldMs)
+        {
+            templates.AddRange(_friendlyCreatures.FriendlyTemplates(destination));
+        }
+
         foreach (string module in modules)
         {
-            templates.AddRange(_friendlyCreatures.FriendlyTemplates(module));
+            if (!string.Equals(module, destination, StringComparison.OrdinalIgnoreCase))
+            {
+                templates.AddRange(_friendlyCreatures.FriendlyTemplates(module));
+            }
         }
 
         uint[] hashes = FriendlyTemplateRule.Publishable(templates);

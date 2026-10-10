@@ -34,7 +34,7 @@ public sealed partial class KotorGameBridge
         // The destination's friendly story actors first, before the load can begin: a scene
         // creates them in the first second after arrival, before any pump runs there
         // (sta_m45aa's Carth, 2026-10-10). Harmless on the host, which never suppresses.
-        TryWriteFriendlyTemplates(module);
+        WriteFriendlyTemplatesForTravel(module);
 
         bool ok = _memory.TryWriteAsciiString(_pluginBlock + BlockTravelModule, module, BlockTravelNameLength);
         ok &= _memory.TryWriteAsciiString(_pluginBlock + BlockTravelWaypoint, waypoint, BlockTravelNameLength);
