@@ -23,7 +23,7 @@ internal sealed class WorldStatePump(
     /// edge that could be dropped, which is what makes a client dying mid-conversation
     /// harmless rather than a permanently frozen NPC.
     /// </summary>
-    public void PumpInteractionLocks(in PlayerState local)
+    public void PumpInteractionLocks(in PlayerState local, bool holdConversationClaim = false)
     {
         // A stunt module's "interaction" is whatever the cutscene's own scripted objects
         // happen to look like — not a real container/door/NPC this player chose to use, and
@@ -66,11 +66,18 @@ internal sealed class WorldStatePump(
         // locks are scoped to, and a lock names a tag (or, for InteractionKind.Container, a
         // target id instead — see InteractionLockStore's remarks), which only means anything
         // in one.
+        // A joiner's own conversation still inside its claim grace (DialogueClaimGrace) does not
+        // lock its partner yet: the host's claim on the same world scene is refused while anyone
+        // else holds that lock, so a joiner whose engine began the Taris hideout's banter first
+        // held the lock, won the conversation, and the host could not answer it (2026-10-11).
+        bool heldBack = holdConversationClaim && kind == (uint)InteractionKind.Conversation;
+        bool withhold = isFollowedConversation || heldBack;
+
         session.PublishInteractionClaim(
             local.Module,
-            isFollowedConversation ? string.Empty : tag ?? string.Empty,
-            isFollowedConversation ? 0 : (InteractionKind)kind,
-            !isFollowedConversation && active,
+            withhold ? string.Empty : tag ?? string.Empty,
+            withhold ? 0 : (InteractionKind)kind,
+            !withhold && active,
             targetId);
 
         // ⚠ OUR OWN LOCK IS FILTERED OUT HERE, so the plugin can hold everything it is given

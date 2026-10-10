@@ -18,9 +18,12 @@ namespace KotorCoop.Session.Pumps;
 /// </summary>
 public sealed class DialogueClaimGrace
 {
-    /// <summary>Comfortably more than the 0.3-0.4 s the two games' starts were measured apart
-    /// for an ordinary conversation, and short against a conversation's first line.</summary>
-    public const long GraceMs = 1000;
+    /// <summary>For a conversation that does not read as script-forced here. The same scene can be
+    /// forced on one game and not on the other (the Taris hideout's banter, 2026-10-11: forced on
+    /// the host, not on the joiner), and the host's own claim reaches its arbiter a few hundred
+    /// milliseconds after its engine starts the conversation: with 1 s the joiner, 0.5 s ahead,
+    /// still won. Short against a conversation's first line.</summary>
+    public const long GraceMs = 2500;
 
     /// <summary>For a conversation a script forced on the player. The joiner's game, loading the
     /// same module faster, reached the Star Forge confrontation up to 2 s ahead of the host's.

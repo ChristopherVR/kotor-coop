@@ -171,6 +171,37 @@ internal static unsafe class ScriptDestroyGuardHook
         PhantomBodies.Add(id);
     }
 
+    /// <summary>
+    /// A companion object this game's own party table names. Party members are each player's
+    /// own, never the host's creatures, whatever number they happen to carry: entering the
+    /// Taris hideout again, its arrival script removes the companion it placed last time before
+    /// placing a fresh one, the guard refused that because the host had a different creature
+    /// with the same id, and the joiner saw two Carths (2026-10-11, Party Conversations on
+    /// Ebon Hawk build).
+    /// </summary>
+    private static bool IsOwnCompanion(uint id)
+    {
+        for (int slot = 0; slot < 9; slot++)
+        {
+            if (Odyssey.GetPartyRosterObjectId(slot) == id)
+            {
+                return true;
+            }
+        }
+
+        // A companion standing about (available, not in the party) has no roster slot: known by
+        // the tag every K1 companion blueprint carries.
+        nint body = Odyssey.ResolveServerObject(id);
+        return body != 0 && NativeMethods.IsReadable(body, 0x20)
+            && Odyssey.TryReadExoString(body + 0x18, 16, out string tag)
+            && CompanionTags.Contains(tag);
+    }
+
+    private static readonly HashSet<string> CompanionTags = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Carth", "Mission", "Bastila", "Cand", "Zaalbar", "T3M4", "Jolee", "Juhani", "HK47",
+    };
+
     private static bool IsProtected(uint id)
     {
         long now = Environment.TickCount64;
@@ -194,7 +225,7 @@ internal static unsafe class ScriptDestroyGuardHook
             return;
         }
 
-        if (!Bypass && eventId == *(uint*)DestroyEventIdAddress && IsProtected(target))
+        if (!Bypass && eventId == *(uint*)DestroyEventIdAddress && IsProtected(target) && !IsOwnCompanion(target))
         {
             Refused++;
             if (_logged < 20)
