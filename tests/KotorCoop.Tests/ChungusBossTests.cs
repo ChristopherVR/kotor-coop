@@ -444,6 +444,8 @@ public sealed class ChungusBossTests : IDisposable
         Assert.Equal((int)BossPower.Slow, ChungusRule.Slow);
         Assert.Equal((int)BossPower.Entrance, ChungusRule.Entrance);
         Assert.Equal((int)BossPower.Defeat, ChungusRule.Defeat);
+        Assert.Equal((int)BossPower.Blink, ChungusRule.Blink);
+        Assert.Equal(BossPowers.TimeStopMs, (int)ChungusRule.TimeStopMs);
 
         Assert.Equal(ChungusCheat.OpSpawn, ChungusRule.OpSpawn);
         Assert.Equal(ChungusCheat.OpWindUp, ChungusRule.OpWindUp);
@@ -451,6 +453,7 @@ public sealed class ChungusBossTests : IDisposable
         Assert.Equal(ChungusCheat.OpDespawn, ChungusRule.OpDespawn);
         Assert.Equal(ChungusCheat.OpAnimation, ChungusRule.OpAnimation);
         Assert.Equal(ChungusCheat.OpSound, ChungusRule.OpSound);
+        Assert.Equal(ChungusCheat.OpBlink, ChungusRule.OpBlink);
         Assert.Equal(ChungusCheat.FlagHitsLocalPlayer, ChungusRule.FlagHitsLocalPlayer);
         Assert.Equal(ChungusCheat.FlagHost, ChungusRule.FlagHost);
         Assert.Equal(ChungusBlueprint.ResRef, ChungusRule.Template);
@@ -487,10 +490,15 @@ public sealed class ChungusBossTests : IDisposable
     }
 
     [Fact]
-    public void EveryPowerHasAnAnimationASoundThatShipsAndSomethingToDo()
+    public void EveryPowerHasAnAnimationASoundThatExistsAndSomethingToDo()
     {
+        // His sounds are the game's own files by name (the Hutt's voice, the Force powers, read
+        // out of the game's sound archive when this was written) and one of the mod's.
         HashSet<string> shipped = [.. Directory.GetFiles(Path.GetDirectoryName(FindShipped("k_coop_chungus.mdl"))!, "k_coop_ch*.wav")
             .Select(path => Path.GetFileNameWithoutExtension(path))];
+        Assert.Equal(["k_coop_chline", "k_coop_chsnap"], shipped.Order());
+        Assert.Contains(BossPowers.SnapLine, shipped);                       // what he says after the snap
+        shipped.UnionWith(["v_pro_frcaura", "v_imp_mindfrc", "v_imp_choke", "c_hutt_atk1", "c_hutt_bat1", "c_hutt_bat2", "al_ot_rumble"]);
         HashSet<string> animations = [.. ReadAnimationNames(File.ReadAllBytes(FindShipped("k_coop_chungus.mdl")))];
 
         // The engine's animation ids for a creature model, by the animation name each one plays
@@ -521,9 +529,16 @@ public sealed class ChungusBossTests : IDisposable
             BossLanding landing = ChungusRule.Landing(power, BossPowers.Strength((BossPower)power), 100, 200);
             Assert.True(landing.Damage > 0 || landing.Effect != 0, $"power {power} does nothing");
             Assert.True(BossPowers.LandDelayMs((BossPower)power) > 0);
+
+            // ... and is seen: one of the game's own visual effects on whoever it hits, and a
+            // beam only together with how long it is drawn.
+            BossSight sight = ChungusRule.Sight(power);
+            Assert.True(sight.Impact != 0, $"power {power} shows nothing on the player");
+            Assert.Equal(sight.Beam != 0, sight.BeamMs != 0);
+            Assert.Equal(sight.Lasting != 0, sight.LastingMs != 0);
         }
 
-        for (int power = ChungusRule.Snap; power <= ChungusRule.Defeat; power++)
+        for (int power = ChungusRule.Snap; power <= ChungusRule.Blink; power++)
         {
             foreach (string sound in (string[])[ChungusRule.WindUpSound(power), ChungusRule.LandSound(power)])
             {
@@ -531,6 +546,35 @@ public sealed class ChungusBossTests : IDisposable
                 Assert.True(sound.Length <= 16);
             }
         }
+    }
+
+    [Fact]
+    public void TimeStopsAndSpaceThrowsAndTheSpotsHeThrowsPeopleToAreInTheRing()
+    {
+        // Time: held still, for as long as both sides say.
+        BossLanding stopped = ChungusRule.Landing(ChungusRule.Slow, 0, 100, 200);
+        Assert.Equal((2u, ChungusRule.TimeStopMs), (stopped.Effect, stopped.DurationMs));   // PeerEffectKind.Paralyze
+        Assert.Equal((uint)PeerEffectKind.Paralyze, stopped.Effect);
+
+        // Space: thrown down (the move itself is the agent's teleport just before).
+        Assert.Equal((uint)PeerEffectKind.ForcePush, ChungusRule.Landing(ChungusRule.Lift, 0, 100, 200).Effect);
+
+        // Every spot is between the two ends' marks, and beside a player means a few steps
+        // toward the middle from them.
+        (float cx, float cy, float cz) = ArenaFlow.RingSpot(0, 0);
+        (float bx, float by, _) = ArenaFlow.BossSpot;
+        float reach = MathF.Sqrt(((bx - cx) * (bx - cx)) + ((by - cy) * (by - cy)));
+        Assert.True(reach > 3f);
+        for (int i = 0; i < 16; i++)
+        {
+            (float x, float y, float z) = ArenaFlow.RingSpot(i / 16.0, 0.85);
+            Assert.InRange(MathF.Sqrt(((x - cx) * (x - cx)) + ((y - cy) * (y - cy))), 0f, reach * 0.86f);
+            Assert.Equal(cz, z);
+        }
+
+        (float sx, float sy, _) = ArenaFlow.BesideInRing(new Vector3f(bx, by, cz));
+        Assert.InRange(MathF.Sqrt(((sx - bx) * (sx - bx)) + ((sy - by) * (sy - by))), 2.5f, 2.7f);
+        Assert.True(MathF.Sqrt(((sx - cx) * (sx - cx)) + ((sy - cy) * (sy - cy))) < reach);
     }
 
     // ---- words ------------------------------------------------------------------------------
@@ -544,7 +588,8 @@ public sealed class ChungusBossTests : IDisposable
             Assert.NotEqual(string.Empty, PvpText.Format(code, "Aria", aboutSelf: true));
         }
 
-        foreach (BossPower power in Enum.GetValues<BossPower>().Where(p => p != BossPower.None))
+        // (The blink has no line: he does it every few seconds, and it is seen.)
+        foreach (BossPower power in Enum.GetValues<BossPower>().Where(p => p is not (BossPower.None or BossPower.Blink)))
         {
             BossCue cue = new(power, 0, 2);
             Assert.NotEqual(string.Empty, PvpText.FormatBossPower(cue, "Aria", aimedAtReader: false));
@@ -662,6 +707,28 @@ public sealed class ChungusBossTests : IDisposable
     }
 
     [Fact]
+    public void InstallBringsARowFromAnEarlierVersionUpToDateWhereItIs()
+    {
+        // His row as an earlier version of the mod left it, with another mod's row after it.
+        string overrideDirectory = WriteGame(ChungusInstaller.AppearanceLabel, "Other_Mod");
+
+        ChungusInstallResult result = ChungusInstaller.Install(_temp);
+
+        Assert.Equal(ChungusInstallOutcome.Installed, result.Outcome);
+        Assert.Equal(2, result.AppearanceRow);
+        TwoDa table = TwoDa.Parse(File.ReadAllBytes(Path.Combine(overrideDirectory, "appearance.2da")));
+        Assert.Equal(4, table.RowCount);
+        foreach ((string column, string value) in ChungusInstaller.RowValues.Where(cell => table.TryGetColumnIndex(cell.Column, out _)))
+        {
+            Assert.Equal(value, table.Get(2, column));
+        }
+
+        Assert.Equal("Other_Mod", table.Get(3, "label"));
+        Assert.Equal("C_Other", table.Get(3, "race"));
+        Assert.Equal(ChungusInstallOutcome.UpToDate, ChungusInstaller.Install(_temp).Outcome);
+    }
+
+    [Fact]
     public void InstallSaysWhyWhenHisFilesAreNotThere()
     {
         string overrideDirectory = WriteGame();
@@ -748,19 +815,72 @@ public sealed class ChungusBossTests : IDisposable
     }
 
     [Fact]
+    public void TheBodyIsSkinnedAndNoSkinNamesMoreBonesThanTheEngineAllows()
+    {
+        byte[] mdl = File.ReadAllBytes(FindShipped("k_coop_chungus.mdl"));
+        int nodeCount = (int)U32(mdl, 12 + 44);
+        int skins = 0;
+
+        void Walk(int offset)
+        {
+            ushort flags = BinaryPrimitives.ReadUInt16LittleEndian(mdl.AsSpan(12 + offset));
+            if ((flags & 0x40) != 0)
+            {
+                // The skin's header follows the 332-byte mesh header: its bone map has one
+                // entry per node of the model, a bone number or -1.
+                int skin = offset + 80 + 332;
+                int bonemap = (int)U32(mdl, 12 + skin + 20);
+                Assert.Equal(nodeCount, (int)U32(mdl, 12 + skin + 24));
+                int bones = 0;
+                for (int i = 0; i < nodeCount; i++)
+                {
+                    if (BitConverter.ToSingle(mdl, 12 + bonemap + (4 * i)) >= 0f)
+                    {
+                        bones++;
+                    }
+                }
+
+                Assert.InRange(bones, 1, 16);
+                // 64 bytes a vertex: position, normal, texture coordinate, four weights, four bones.
+                Assert.Equal(64u, U32(mdl, 12 + offset + 80 + 252));
+                skins++;
+            }
+
+            int children = (int)U32(mdl, 12 + offset + 44);
+            int childCount = (int)U32(mdl, 12 + offset + 48);
+            for (int i = 0; i < childCount; i++)
+            {
+                Walk((int)U32(mdl, 12 + children + (4 * i)));
+            }
+        }
+
+        Walk((int)U32(mdl, 12 + 40));
+        Assert.Equal(5, skins);
+    }
+
+    [Fact]
     public void TheShippedTextureAndSoundsAreInFormatsTheGameReads()
     {
         byte[] tga = File.ReadAllBytes(FindShipped("k_coop_chungus.tga"));
         Assert.Equal(2, tga[2]);                                             // uncompressed true colour
         int width = BinaryPrimitives.ReadUInt16LittleEndian(tga.AsSpan(12));
         int height = BinaryPrimitives.ReadUInt16LittleEndian(tga.AsSpan(14));
-        Assert.Equal((512, 512), (width, height));                           // a power of two
+        Assert.Equal((1024, 1024), (width, height));                         // a power of two
         Assert.Equal(24, tga[16]);
         Assert.Equal(18 + (width * height * 3), tga.Length);
 
+        // The gauntlet's: 32 bit, because its alpha says where the metal mirrors the room, with
+        // the note beside it that tells the engine to (the same line the game's droids carry).
+        byte[] gold = File.ReadAllBytes(FindShipped("k_coop_chungusg.tga"));
+        Assert.Equal(2, gold[2]);
+        Assert.Equal((512, 512, 32), (BinaryPrimitives.ReadUInt16LittleEndian(gold.AsSpan(12)),
+            BinaryPrimitives.ReadUInt16LittleEndian(gold.AsSpan(14)), gold[16]));
+        Assert.Equal(18 + (512 * 512 * 4), gold.Length);
+        Assert.StartsWith("envmaptexture CM_Baremetal", File.ReadAllText(FindShipped("k_coop_chungusg.txi")));
+
         string directory = Path.GetDirectoryName(FindShipped("k_coop_chungus.mdl"))!;
         string[] sounds = Directory.GetFiles(directory, "k_coop_ch*.wav");
-        Assert.True(sounds.Length >= 8);
+        Assert.Equal(2, sounds.Length);                                       // the snap, and his line
         foreach (string path in sounds)
         {
             byte[] wav = File.ReadAllBytes(path);

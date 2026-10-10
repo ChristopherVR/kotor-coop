@@ -1,150 +1,243 @@
-"""Paints the one texture the model uses and says where each part's patch sits on it."""
+"""What colour every point of him is.
+
+The texture is painted from the model, not onto a flat sheet: each function here is given
+points on a surface and which way they face, and answers with colours. bake.py asks them for
+every texel. The look aimed for is the game's own creature textures: muted, hand-painted, with
+the shading of folds and undersides painted in, because the engine's lighting is too plain to
+give a round body any depth by itself.
+"""
 from __future__ import annotations
 
-import struct
-
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter
 
-SIZE = 512
+GREY = np.array((0.560, 0.570, 0.600))
+GREY_DARK = np.array((0.360, 0.365, 0.395))
+WHITE = np.array((0.965, 0.955, 0.920))
+CREAM = np.array((0.930, 0.915, 0.870))
+PINK = np.array((0.820, 0.500, 0.520))
+NOSE = np.array((0.660, 0.360, 0.390))
+CHARCOAL = np.array((0.105, 0.100, 0.115))
+MOUTH = np.array((0.300, 0.055, 0.070))
+IVORY = np.array((0.930, 0.900, 0.790))
+GOLD = np.array((0.780, 0.585, 0.205))
+GOLD_DEEP = np.array((0.300, 0.190, 0.060))
+GOLD_BRIGHT = np.array((1.000, 0.880, 0.520))
 
-GREY = (126, 128, 132)
-GREY_DARK = (92, 94, 100)
-WHITE = (238, 236, 228)
-PINK = (226, 150, 160)
-GOLD = (214, 160, 52)
-GOLD_DARK = (128, 84, 22)
-GOLD_LIGHT = (255, 226, 130)
-MOUTH = (150, 22, 30)
-BLACK = (18, 16, 18)
-
-STONES = {
-    "stone_power": (170, 60, 255),
-    "stone_space": (60, 120, 255),
-    "stone_reality": (255, 50, 50),
-    "stone_soul": (255, 150, 30),
-    "stone_time": (60, 230, 90),
-    "stone_mind": (255, 235, 70),
+STONE_COLOURS = {
+    "power": (0.62, 0.20, 0.95),
+    "space": (0.18, 0.42, 1.00),
+    "reality": (0.95, 0.12, 0.14),
+    "soul": (1.00, 0.52, 0.08),
+    "time": (0.16, 0.85, 0.30),
+    "mind": (1.00, 0.78, 0.05),
 }
 
-# Pixel rectangles (left, top, right, bottom), top-left origin as PIL draws.
-_PIXELS = {
-    "body": (0, 0, 256, 256),
-    "head": (256, 0, 512, 256),
-    "ear": (0, 256, 96, 512),
-    "eye": (96, 256, 224, 384),
-    "gauntlet": (224, 256, 480, 384),
-    "fur": (96, 384, 160, 448),
-    "white": (160, 384, 224, 448),
-    "pink": (224, 384, 288, 448),
-    "gold": (288, 384, 352, 448),
-    "mouth": (352, 384, 416, 448),
-    "black": (416, 384, 480, 448),
-    "tooth": (96, 448, 160, 512),
-}
-for _index, _name in enumerate(STONES):
-    _PIXELS[_name] = (160 + 48 * _index, 448, 208 + 48 * _index, 496)
+
+def step(lo, hi, x):
+    t = np.clip((x - lo) / (hi - lo), 0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)
 
 
-def rect(name):
-    """The patch as (u0, v0, u1, v1) with v pointing up, as the model file wants it."""
-    left, top, right, bottom = _PIXELS[name]
-    return (left / SIZE, 1 - bottom / SIZE, right / SIZE, 1 - top / SIZE)
+def _hash(ix, iy, iz, seed):
+    n = (ix * 374761393 + iy * 668265263 + iz * 2147483647 + seed * 974711) & 0xFFFFFFFF
+    n = ((n ^ (n >> 13)) * 1274126177) & 0xFFFFFFFF
+    return ((n ^ (n >> 16)) & 0xFFFF) / 65535.0
 
 
-def _fur(image, box, colour, rng, strength=10):
-    """Fill with a colour and a little soft mottling so a big surface is not flat."""
-    left, top, right, bottom = box
-    w, h = right - left, bottom - top
-    noise = rng.normal(0.0, 1.0, (h // 4 + 2, w // 4 + 2))
-    noise = np.asarray(Image.fromarray((noise * 40 + 128).clip(0, 255).astype(np.uint8)).resize((w, h), Image.BICUBIC),
-                       dtype=float)
-    noise = (noise - 128) / 40 * strength
-    fine = rng.normal(0.0, strength * 0.35, (h, w))
-    block = np.clip(np.array(colour, dtype=float)[None, None, :] + (noise + fine)[:, :, None], 0, 255).astype(np.uint8)
-    image.paste(Image.fromarray(block, "RGB"), (left, top))
+def noise(points, scale, seed=0):
+    """Smooth random values in -1..1 that vary over a distance of about 1/scale."""
+    p = points * np.asarray(scale, dtype=float)
+    base = np.floor(p).astype(np.int64)
+    f = p - base
+    f = f * f * (3.0 - 2.0 * f)
+    total = np.zeros(len(points))
+    for dx in (0, 1):
+        for dy in (0, 1):
+            for dz in (0, 1):
+                w = (f[:, 0] if dx else 1 - f[:, 0]) * (f[:, 1] if dy else 1 - f[:, 1]) * (f[:, 2] if dz else 1 - f[:, 2])
+                total += w * _hash(base[:, 0] + dx, base[:, 1] + dy, base[:, 2] + dz, seed)
+    return total * 2.0 - 1.0
 
 
-def _soft_blob(size, box, feather):
-    """A white-on-black mask of an ellipse with a soft edge."""
-    mask = Image.new("L", size, 0)
-    ImageDraw.Draw(mask).ellipse(box, fill=255)
-    return mask.filter(ImageFilter.GaussianBlur(feather))
+def fur(points, strength):
+    """Short strokes combed downwards, over a slow mottle."""
+    strokes = noise(points, (46, 46, 13), 1) * 0.55 + noise(points, (95, 95, 30), 2) * 0.35
+    mottle = noise(points, (5, 5, 5), 3)
+    return 1.0 + strength * (strokes + 0.6 * mottle)
 
 
-def paint():
-    rng = np.random.default_rng(1138)
-    image = Image.new("RGB", (SIZE, SIZE), GREY)
-
-    # Body, unwrapped like a globe: the middle column is the front. Grey coat, white belly and chest.
-    box = _PIXELS["body"]
-    _fur(image, box, GREY, rng)
-    belly = Image.new("RGB", (256, 256))
-    _fur(belly, (0, 0, 256, 256), WHITE, rng, strength=5)
-    image.paste(belly, (box[0], box[1]), _soft_blob((256, 256), (58, 30, 198, 262), 5))
-    # The coat darkens a little toward the back (both edges of the patch).
-    shade = Image.new("L", (256, 256), 0)
-    draw = ImageDraw.Draw(shade)
-    draw.rectangle((0, 0, 26, 256), fill=70)
-    draw.rectangle((230, 0, 256, 256), fill=70)
-    image.paste(Image.new("RGB", (256, 256), GREY_DARK), (box[0], box[1]), shade.filter(ImageFilter.GaussianBlur(14)))
-
-    # Head, same unwrap: grey skull, white lower face reaching up between the eyes.
-    box = _PIXELS["head"]
-    _fur(image, box, GREY, rng)
-    face = Image.new("RGB", (256, 256))
-    _fur(face, (0, 0, 256, 256), WHITE, rng, strength=5)
-    mask = Image.new("L", (256, 256), 0)
-    draw = ImageDraw.Draw(mask)
-    draw.ellipse((44, 118, 212, 300), fill=255)          # cheeks and chin
-    draw.ellipse((100, 70, 156, 190), fill=255)          # the blaze up the nose
-    image.paste(face, (box[0], box[1]), mask.filter(ImageFilter.GaussianBlur(4)))
-
-    # Ear seen from the front: grey rim, pink inside.
-    box = _PIXELS["ear"]
-    _fur(image, box, GREY, rng)
-    inner = Image.new("RGB", (96, 256), PINK)
-    image.paste(inner, (box[0], box[1]), _soft_blob((96, 256), (26, 26, 70, 236), 4))
-
-    # Eye seen from the front: white, a big black pupil low and toward the nose, a glint.
-    box = _PIXELS["eye"]
-    draw = ImageDraw.Draw(image)
-    draw.rectangle(box, fill=(250, 250, 248))
-    cx, cy = box[0] + 64, box[1] + 70
-    draw.ellipse((cx - 30, cy - 34, cx + 30, cy + 34), fill=BLACK)
-    draw.ellipse((cx - 16, cy - 26, cx - 2, cy - 10), fill=(255, 255, 255))
-
-    # Gauntlet, wrapped around the forearm: beaten gold with darker bands and rivets.
-    box = _PIXELS["gauntlet"]
-    _fur(image, box, GOLD, rng, strength=14)
-    draw = ImageDraw.Draw(image)
-    for y in (box[1] + 10, box[1] + 62, box[1] + 110):
-        draw.rectangle((box[0], y, box[2], y + 7), fill=GOLD_DARK)
-        draw.rectangle((box[0], y + 7, box[2], y + 10), fill=GOLD_LIGHT)
-    for x in range(box[0] + 12, box[2], 32):
-        for y in (box[1] + 40, box[1] + 90):
-            draw.ellipse((x - 4, y - 4, x + 4, y + 4), fill=GOLD_LIGHT, outline=GOLD_DARK)
-
-    _fur(image, _PIXELS["fur"], GREY, rng, strength=8)
-    _fur(image, _PIXELS["white"], WHITE, rng, strength=4)
-    _fur(image, _PIXELS["pink"], PINK, rng, strength=4)
-    _fur(image, _PIXELS["gold"], GOLD, rng, strength=12)
-    draw = ImageDraw.Draw(image)
-    draw.rectangle(_PIXELS["mouth"], fill=MOUTH)
-    draw.rectangle(_PIXELS["black"], fill=BLACK)
-    draw.rectangle(_PIXELS["tooth"], fill=(252, 250, 240))
-    for name, colour in STONES.items():
-        left, top, right, bottom = _PIXELS[name]
-        draw.rectangle((left, top, right, bottom), fill=colour)
-        # A pale core so the stone reads as lit from inside.
-        core = tuple(min(255, c + 110) for c in colour)
-        draw.ellipse((left + 14, top + 14, right - 14, bottom - 14), fill=core)
-    return image
+def occlusion(sculpt, points, normals):
+    """How open the surface is to the sky: low in folds and where parts press together."""
+    total = np.zeros(len(points))
+    for reach in (0.03, 0.08, 0.18):
+        total += np.clip(sculpt.field(points + normals * reach) / reach, 0.0, 1.0)
+    return total / 3.0
 
 
-def tga_bytes(image):
-    """Uncompressed 24-bit TGA, bottom row first (the origin the game expects)."""
-    rgb = np.asarray(image.convert("RGB"))
-    bgr = rgb[::-1, :, ::-1]
-    header = struct.pack("<BBBHHBHHHHBB", 0, 0, 2, 0, 0, 0, 0, 0, image.width, image.height, 24, 0)
-    return header + bgr.tobytes()
+def _mix(a, b, t):
+    return a + (b - a) * t[:, None]
+
+
+def skin(sculpt):
+    """The fur: grey coat, white belly, chest and lower face, pink inside the ears."""
+    parts = {part.name: part for part in sculpt.parts}
+
+    def near(names, points):
+        return np.min([parts[name](points) for name in names if name in parts], axis=0)
+
+    tufts = [n for n in parts if n.startswith("tuft") or n.startswith("cheek") or n.startswith("pad") or n in ("chin", "jowl")]
+    glove = [n for n in parts if n in ("cuffr", "palmr", "thumbr") or n.startswith("fingerr")]
+    brows = [n for n in parts if n.startswith("brow")]
+    scoops = [n for n in parts if n.startswith("earscoop")]
+    sockets = [n for n in parts if n.startswith("socket")]
+    smiles = [n for n in parts if n.startswith("smile")]
+    tail = ["tail", "tailtuft"]
+
+    def paint(points, normals):
+        x, y, z = points[:, 0], points[:, 1], points[:, 2]
+        ax = np.abs(x)
+
+        # the coat: darker down the back and on top of the head
+        back = step(0.25, -0.85, normals[:, 1])
+        colour = _mix(np.tile(GREY, (len(points), 1)), np.tile(GREY_DARK, (len(points), 1)), back * 0.55)
+        colour = _mix(colour, np.tile(GREY_DARK, (len(points), 1)), step(3.30, 3.52, z) * 0.35)  # ear tips
+
+        # white: the belly, up the chest to the chin, the lower face and its tufts, the tail
+        belly = (1 - step(0.84, 1.02, np.hypot(x / 0.82, (z - 1.00) / 0.93))) * step(-0.08, 0.22, y) * (1 - step(1.78, 1.98, z))
+        throat = step(0.22, 0.40, y) * (1 - step(0.34, 0.56, ax)) * step(1.62, 1.76, z) * (1 - step(1.98, 2.06, z))
+        face = step(2.34, 2.22, z) * step(0.02, 0.20, y) * step(1.86, 1.92, z)
+        blaze = step(0.085, 0.045, ax) * step(2.20, 2.30, z) * (1 - step(2.40, 2.52, z)) * step(0.30, 0.40, y)
+        fluff = step(0.05, 0.0, near(tufts, points)) * step(-0.05, 0.10, y) * step(2.40, 2.28, z)
+        tailed = step(0.05, 0.01, near(tail, points))
+        white = np.clip(np.maximum.reduce([belly, throat, face, blaze, fluff, tailed]), 0.0, 1.0)
+        colour = _mix(colour, np.tile(WHITE, (len(points), 1)), white)
+
+        # the glove on his free hand
+        gloved = step(0.03, 0.005, near(glove, points))
+        colour = _mix(colour, np.tile(CREAM, (len(points), 1)), gloved)
+
+        strength = 0.085 - 0.05 * np.maximum(white, gloved)
+        colour = colour * (1.0 + (fur(points, 1.0) - 1.0) * strength)[:, None]
+
+        # pink inside the ears, deeper toward the root
+        inside = step(0.035, 0.0, near(scoops, points)) * step(0.0, 0.25, normals[:, 1])
+        ear_pink = _mix(np.tile(PINK, (len(points), 1)), np.tile(PINK * 0.72, (len(points), 1)), step(3.1, 2.7, z))
+        colour = np.where(inside[:, None] > 0, _mix(colour, ear_pink, inside), colour)
+
+        # the face's dark accents: brows, the rims of the eyes, the nose, the line of the mouth
+        browed = step(0.012, -0.01, near(brows, points)) * step(-0.2, 0.3, normals[:, 2] + normals[:, 1])
+        colour = _mix(colour, np.tile(CHARCOAL, (len(points), 1)), browed * 0.92)
+        rim = step(0.016, 0.0, np.abs(near(sockets, points) - 0.002))
+        colour = _mix(colour, np.tile(CHARCOAL, (len(points), 1)), rim * 0.55)
+        nosed = step(0.014, 0.0, parts["nose"](points))
+        colour = _mix(colour, np.tile(NOSE, (len(points), 1)), nosed)
+        lipped = np.maximum(step(0.016, 0.002, parts["mouth"](points)), step(0.014, 0.002, near(smiles, points)))
+        colour = _mix(colour, np.tile(MOUTH * 0.6, (len(points), 1)), lipped)
+
+        # painted light: open sky above, shadow in the folds and underneath
+        ao = occlusion(sculpt, points, normals)
+        shade = (0.66 + 0.34 * ao) * (0.88 + 0.12 * step(-1.0, 0.9, normals[:, 2]))
+        # the cool cast of shadow that the game's own creature textures carry
+        cool = np.array((0.92, 0.95, 1.04))
+        colour = colour * shade[:, None] * _mix(np.tile(cool, (len(points), 1)), np.ones((len(points), 3)), ao)
+        return np.clip(colour, 0.0, 1.0)
+
+    return paint
+
+
+def eye(centre, side):
+    """An eyeball: a big dark pupil looking a little inward and down, a glint, a shaded white."""
+    centre = np.asarray(centre, dtype=float)
+    look = np.array((-side * 0.14, 1.0, -0.10))
+    look /= np.linalg.norm(look)
+    glint = np.array((-side * 0.16 - 0.22, 1.0, 0.02))
+    glint /= np.linalg.norm(glint)
+
+    def paint(points, normals):
+        d = points - centre
+        d /= np.maximum(np.linalg.norm(d, axis=1, keepdims=True), 1e-9)
+        angle = np.arccos(np.clip(d @ look, -1.0, 1.0))
+        white = np.tile(np.array((0.93, 0.92, 0.89)), (len(points), 1))
+        # shadow from the lid above, and a warm edge
+        white *= (0.70 + 0.30 * step(0.75, -0.2, d[:, 2]))[:, None]
+        white = _mix(white, np.tile(np.array((0.80, 0.62, 0.60)), (len(points), 1)), step(0.95, 1.35, angle) * 0.5)
+        iris = np.tile(np.array((0.22, 0.13, 0.07)), (len(points), 1))
+        colour = _mix(white, iris, step(0.50, 0.45, angle))
+        colour = _mix(colour, np.tile(np.array((0.02, 0.02, 0.03)), (len(points), 1)), step(0.42, 0.38, angle))
+        spark = np.arccos(np.clip(d @ glint, -1.0, 1.0))
+        colour = _mix(colour, np.ones((len(points), 3)), step(0.13, 0.09, spark))
+        return colour
+
+    return paint
+
+
+def lid(centre):
+    centre = np.asarray(centre, dtype=float)
+
+    def paint(points, normals):
+        d = points - centre
+        d /= np.maximum(np.linalg.norm(d, axis=1, keepdims=True), 1e-9)
+        colour = np.tile(GREY * 0.92, (len(points), 1)) * (1.0 + (fur(points, 1.0) - 1.0) * 0.06)[:, None]
+        # the lid's edge is dark, like a lash line (the cap's rim is what is lowest when it hangs)
+        rim = np.linalg.norm(points - centre, axis=1)
+        low = points[:, 2] - centre[2]
+        edge = step(low.min() + 0.035, low.min() + 0.012, low)
+        return np.clip(_mix(colour, np.tile(CHARCOAL, (len(points), 1)), edge * 0.8), 0, 1)
+
+    return paint
+
+
+def teeth(points, normals):
+    colour = np.tile(IVORY, (len(points), 1))
+    colour *= (0.72 + 0.28 * step(2.03, 1.95, points[:, 2]))[:, None]          # shadow under the lip
+    gap = step(0.010, 0.003, np.abs(points[:, 0]))
+    return np.clip(_mix(colour, np.tile(IVORY * 0.45, (len(points), 1)), gap), 0, 1)
+
+
+def mouth_inside(points, normals):
+    depth = step(0.60, 0.42, points[:, 1])
+    return _mix(np.tile(MOUTH, (len(points), 1)), np.tile(np.array((0.05, 0.01, 0.015)), (len(points), 1)), depth)
+
+
+def metal(sculpt, axis_from=None, axis_to=None):
+    """Beaten gold. The fourth channel is how much of the surface is paint and how much mirror:
+    worn high spots mirror the room, the recesses stay dull."""
+    def paint(points, normals):
+        ao = np.zeros(len(points))
+        for reach in (0.012, 0.03, 0.07):
+            ao += np.clip(sculpt.field(points + normals * reach) / reach, 0.0, 1.0)
+        ao /= 3.0
+        # Slow tonal drift, like a casting, and a few long scratches; nothing fine-grained,
+        # which would read as cloth.
+        cast = noise(points, (9, 9, 9), 11) * 0.7 + noise(points, (20, 20, 20), 12) * 0.3
+        scratches = np.abs(noise(points, (150, 14, 150), 13))
+        colour = np.tile(GOLD, (len(points), 1)) * (1.0 + 0.07 * cast)[:, None]
+        # worn bright where the surface is most exposed, tarnished dark in the recesses
+        colour = _mix(colour, np.tile(GOLD_BRIGHT, (len(points), 1)), step(0.86, 1.0, ao) * 0.30)
+        colour = _mix(colour, np.tile(GOLD_BRIGHT, (len(points), 1)), step(0.05, 0.0, scratches) * step(0.7, 1.0, ao) * 0.45)
+        colour = _mix(np.tile(GOLD_DEEP, (len(points), 1)), colour, step(0.0, 0.60, ao))
+        if axis_from is not None:
+            # two engraved rings around the sleeve
+            along = (points - axis_from) @ (axis_to - axis_from) / ((axis_to - axis_from) @ (axis_to - axis_from))
+            for at in (0.50, 0.76):
+                line = step(0.012, 0.004, np.abs(along - at))
+                colour = _mix(colour, np.tile(GOLD_DEEP, (len(points), 1)), line * 0.8)
+        colour *= (0.86 + 0.14 * step(-1.0, 1.0, normals[:, 2]))[:, None]
+        mirror = 0.50 + 0.45 * (1.0 - step(0.25, 0.9, ao))      # alpha: lower mirrors more
+        return np.concatenate([np.clip(colour, 0, 1), mirror[:, None]], axis=1)
+
+    return paint
+
+
+def stone(name, centre, outward):
+    colour = np.array(STONE_COLOURS[name])
+    centre = np.asarray(centre, dtype=float)
+    outward = np.asarray(outward, dtype=float)
+
+    def paint(points, normals):
+        facing = np.clip(normals @ outward, 0.0, 1.0)
+        lit = _mix(np.tile(colour * 0.50, (len(points), 1)), np.tile(np.minimum(colour * 1.12 + 0.10, 1.0), (len(points), 1)),
+                   facing ** 1.5)
+        return np.concatenate([np.clip(lit, 0, 1), np.ones((len(points), 1))], axis=1)
+
+    return paint

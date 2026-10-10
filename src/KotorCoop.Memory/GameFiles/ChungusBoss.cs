@@ -9,6 +9,8 @@ namespace KotorCoop.Memory.GameFiles;
 /// tools/chungus/build.py). The blueprint cannot ship ready-made, because it names a row of
 /// appearance.2da and that row's number depends on the player's own table (a mod may have added
 /// rows): <see cref="ChungusInstaller"/> adds the row and writes this file with its number.
+/// (Two textures: the body's, and the gauntlet's with a .txi beside it that tells the engine to
+/// mirror its stock metal reflection in it, as its droids' textures do.)
 ///
 /// The field set follows the game's own hostile creatures (g_kathhound01, g_rancor01): the
 /// stock default combat scripts by name, so the engine's ordinary AI walks him at the party and
@@ -26,6 +28,10 @@ public static class ChungusBlueprint
     public const string Name = "Chungus";
 
     public const short HitPoints = 800;
+
+    /// <summary>soundset.2da row 15, "Hutt" (c_hutt): the game's own deep Huttese voice set, which
+    /// the engine plays by itself when he attacks, is hit and dies.</summary>
+    public const ushort SoundSet = 15;
 
     /// <summary>repute.2da row 1, Hostile_1: hostile to the player, as every stock enemy is.</summary>
     public const ushort Faction = 1;
@@ -72,7 +78,7 @@ public static class ChungusBlueprint
         root.SetByte("Disarmable", 0);
         root.SetString("Subrace", "");
         root.SetString("Deity", "");
-        root.SetWord("SoundSetFile", 65535);   // no soundset: his sounds are played by the mod
+        root.SetWord("SoundSetFile", SoundSet); // the Hutt's voice: his grunts, his pain, his death
         root.SetByte("Plot", 0);               // a plot creature is never mirrored to joiners
         root.SetByte("Interruptable", 1);
         root.SetByte("NoPermDeath", 0);
@@ -179,8 +185,8 @@ public static class ChungusInstaller
         ("race", ChungusBlueprint.ResRef),
         ("racetex", ""),
         ("modeltype", "S"),
-        ("walkdist", "0.84"),
-        ("rundist", "1.2"),
+        ("walkdist", "2.0"),
+        ("rundist", "6.3"),
         ("hitradius", "1.0"),
         ("perspace", "1.0"),
         ("creperspace", "1.2"),
@@ -194,7 +200,7 @@ public static class ChungusInstaller
     /// <summary>The files that make up the boss beside the blueprint; all of them ship in the
     /// package's Override folder.</summary>
     public static readonly IReadOnlyList<string> ShippedFiles =
-        ["k_coop_chungus.mdl", "k_coop_chungus.mdx", "k_coop_chungus.tga"];
+        ["k_coop_chungus.mdl", "k_coop_chungus.mdx", "k_coop_chungus.tga", "k_coop_chungusg.tga", "k_coop_chungusg.txi"];
 
     public static ChungusInstallResult Install(string gameDirectory)
     {
@@ -258,6 +264,27 @@ public static class ChungusInstaller
                 TwoDa.Parse(merged);   // never write a table that does not read back
                 File.WriteAllBytes(Path.Combine(overrideDirectory, TableFile), merged);
                 wrote = true;
+            }
+            else
+            {
+                // His row from an earlier version of the mod: bring the cells that are his up to
+                // date (how far a walk or run cycle carries him changed with his animations).
+                int found = row;
+                List<(string Column, string Value)> stale = [.. RowValues.Where(cell =>
+                    table.TryGetColumnIndex(cell.Column, out int index) && table.Get(found, index) != cell.Value)];
+                if (stale.Count > 0)
+                {
+                    TwoDaWriter writer = new(table);
+                    foreach ((string column, string value) in stale)
+                    {
+                        writer.SetCell(row, column, value);
+                    }
+
+                    byte[] merged = writer.ToBytes();
+                    TwoDa.Parse(merged);
+                    File.WriteAllBytes(Path.Combine(overrideDirectory, TableFile), merged);
+                    wrote = true;
+                }
             }
 
             if (row is < 0 or > ushort.MaxValue)

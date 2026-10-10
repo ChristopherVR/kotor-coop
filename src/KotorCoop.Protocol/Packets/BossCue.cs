@@ -12,7 +12,8 @@ public enum BossPower : byte
     /// <summary>Power stone: one player takes a heavy hit and is thrown back.</summary>
     Blast = 2,
 
-    /// <summary>Space stone: everyone is lifted off the floor and spun.</summary>
+    /// <summary>Space stone: everyone is thrown to another part of the ring, and he goes
+    /// somewhere else too. (The name is from when it lifted them.)</summary>
     Lift = 3,
 
     /// <summary>Reality stone: one player is turned into a gizka for a while.</summary>
@@ -24,7 +25,8 @@ public enum BossPower : byte
     /// <summary>Soul stone: one player is choked while the boss heals.</summary>
     Drain = 6,
 
-    /// <summary>Time stone: everyone is slowed.</summary>
+    /// <summary>Time stone: time stops for everyone but him, and he uses it to walk up to
+    /// someone. (The name is from when it only slowed them.)</summary>
     Slow = 7,
 
     /// <summary>He arrives (sound only).</summary>
@@ -32,6 +34,10 @@ public enum BossPower : byte
 
     /// <summary>He goes down (sound only).</summary>
     Defeat = 9,
+
+    /// <summary>He is suddenly next to the player it names. Nothing lands; it is only how he
+    /// gets about.</summary>
+    Blink = 10,
 }
 
 /// <summary>
@@ -47,7 +53,7 @@ public readonly record struct BossCue(BossPower Power, byte Strength, ushort Tar
     public static BossCue Unpack(uint word) =>
         new((BossPower)(word & 0xFF), (byte)((word >> 8) & 0xFF), (ushort)(word >> 16));
 
-    public bool IsKnown => Power is >= BossPower.Snap and <= BossPower.Defeat;
+    public bool IsKnown => Power is >= BossPower.Snap and <= BossPower.Blink;
 
     /// <summary>Whether <paramref name="peer"/> is hit by this use.</summary>
     public bool Hits(uint peer) => TargetPeer == 0 || TargetPeer == peer;

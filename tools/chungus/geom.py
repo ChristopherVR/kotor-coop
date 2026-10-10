@@ -43,6 +43,56 @@ def q_matrix(q):
     ])
 
 
+def q_conj(q):
+    return (q[0], -q[1], -q[2], -q[3])
+
+
+def q_from_matrix(m):
+    """The quaternion of a rotation matrix."""
+    m = np.asarray(m, dtype=float)
+    trace = m[0, 0] + m[1, 1] + m[2, 2]
+    if trace > 0:
+        s = math.sqrt(trace + 1.0) * 2
+        q = (0.25 * s, (m[2, 1] - m[1, 2]) / s, (m[0, 2] - m[2, 0]) / s, (m[1, 0] - m[0, 1]) / s)
+    elif m[0, 0] > m[1, 1] and m[0, 0] > m[2, 2]:
+        s = math.sqrt(1.0 + m[0, 0] - m[1, 1] - m[2, 2]) * 2
+        q = ((m[2, 1] - m[1, 2]) / s, 0.25 * s, (m[0, 1] + m[1, 0]) / s, (m[0, 2] + m[2, 0]) / s)
+    elif m[1, 1] > m[2, 2]:
+        s = math.sqrt(1.0 + m[1, 1] - m[0, 0] - m[2, 2]) * 2
+        q = ((m[0, 2] - m[2, 0]) / s, (m[0, 1] + m[1, 0]) / s, 0.25 * s, (m[1, 2] + m[2, 1]) / s)
+    else:
+        s = math.sqrt(1.0 + m[2, 2] - m[0, 0] - m[1, 1]) * 2
+        q = ((m[1, 0] - m[0, 1]) / s, (m[0, 2] + m[2, 0]) / s, (m[1, 2] + m[2, 1]) / s, 0.25 * s)
+    n = math.sqrt(sum(c * c for c in q))
+    return tuple(c / n for c in q)
+
+
+def q_between(a, b):
+    """The shortest turn that takes direction a to direction b."""
+    a = np.asarray(a, dtype=float) / np.linalg.norm(a)
+    b = np.asarray(b, dtype=float) / np.linalg.norm(b)
+    cross = np.cross(a, b)
+    dot = float(a @ b)
+    if dot < -0.999999:
+        axis = np.cross(a, (1.0, 0.0, 0.0))
+        if np.linalg.norm(axis) < 1e-6:
+            axis = np.cross(a, (0.0, 1.0, 0.0))
+        axis /= np.linalg.norm(axis)
+        return (0.0, *axis)
+    q = np.array((1.0 + dot, *cross))
+    return tuple(q / np.linalg.norm(q))
+
+
+def frame(along, back):
+    """A rotation matrix whose columns are a hand's axes: along the fingers, across the
+    knuckles, out of the back of the hand (back is squared up against along)."""
+    along = np.asarray(along, dtype=float) / np.linalg.norm(along)
+    back = np.asarray(back, dtype=float)
+    back = back - along * (back @ along)
+    back /= np.linalg.norm(back)
+    return np.stack([along, np.cross(along, back), back], axis=1)
+
+
 def q_slerp(a, b, t):
     a = np.array(a, dtype=float)
     b = np.array(b, dtype=float)

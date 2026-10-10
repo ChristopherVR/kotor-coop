@@ -54,6 +54,14 @@ internal sealed class ChungusPump(IGameBridge bridge, ICoopSession session, Acti
     private long _bossDownAtMs;
     private bool _downReported;
     private bool _despawned;
+    private Random? _whim;
+    private long _blinkAtMs;
+
+    /// <summary>The longest he stays where he is before he is suddenly somewhere else, and the
+    /// shortest; and how long after a power he waits, so its animation is not cut off.</summary>
+    private const int BlinkEveryMinMs = 5_000;
+    private const int BlinkEveryMaxMs = 8_000;
+    private const int BlinkAfterPowerMs = 4_000;
 
     public void Pump(in PlayerState local)
     {
@@ -70,14 +78,67 @@ internal sealed class ChungusPump(IGameBridge bridge, ICoopSession session, Acti
 
             // The row this install's copy of him wears rides along, so a joiner's game can pick
             // him out of the creatures it mirrors.
-            uint word = ChungusCheat.Word(cue, cue.Hits(session.LocalPeerId), isHost);
+            bool hitsMe = cue.Hits(session.LocalPeerId);
+            uint word = ChungusCheat.Word(cue, hitsMe, isHost);
             uint row = (uint)Math.Clamp(session.BossAppearanceRow, 0, ushort.MaxValue);
+            long landAt = now + BossPowers.LandDelayMs(cue.Power);
             _queue.Add((now,
                 new CheatRequest(CheatKinds.Chungus, Target: word, Amount: ChungusCheat.OpWindUp, Charges: row), false));
+
+            if (cue.Power == BossPower.Blink)
+            {
+                // Only how he gets about: the host's game moves him, and every other game sees
+                // its copy of him follow.
+                // Half the time he lands beside the player, and half the time across the ring from
+                // them, so that he comes back the other way he has of getting about: rolling.
+                if (isHost && PositionOf(cue.TargetPeer, local) is { } at)
+                {
+                    QueueBlink(now + 250, Random.Shared.Next(2) == 0
+                        ? ArenaFlow.BesideInRing(at, 3.2f)
+                        : ArenaFlow.RingSpot(Random.Shared.NextDouble(), 0.8));
+                }
+
+                continue;
+            }
+
+            if (cue.Power == BossPower.Lift)
+            {
+                // The space stone: this game's player is somewhere else in the ring when it
+                // lands (each game picks its own spot), and so is he.
+                if (hitsMe)
+                {
+                    (float x, float y, float z) = ArenaFlow.RingSpot(Random.Shared.NextDouble(), 0.35 + (0.5 * Random.Shared.NextDouble()));
+                    _queue.Add((landAt, new CheatRequest(
+                        CheatKinds.Teleport, Amount: ArenaFlow.FacingTowardCentre(new Vector3f(x, y, z)), X: x, Y: y, Z: z), false));
+                }
+
+                if (isHost)
+                {
+                    QueueBlink(landAt, ArenaFlow.RingSpot(Random.Shared.NextDouble(), 0.3));
+                }
+            }
+
             if (cue.Power != BossPower.Defeat)
             {
-                _queue.Add((now + BossPowers.LandDelayMs(cue.Power),
+                _queue.Add((landAt,
                     new CheatRequest(CheatKinds.Chungus, Target: word, Amount: ChungusCheat.OpLand, Charges: row), false));
+            }
+
+            if (cue.Power == BossPower.Snap)
+            {
+                // "Perfectly balanced, as all things should be."
+                _queue.Add((landAt + BossPowers.SnapLineDelayMs,
+                    new CheatRequest(CheatKinds.Chungus, Amount: ChungusCheat.OpSound, Text: BossPowers.SnapLine), false));
+            }
+
+            if (cue.Power == BossPower.Slow && isHost)
+            {
+                // Time has stopped for everyone but him: he uses it to stand next to somebody.
+                List<uint> frozen = [session.LocalPeerId, .. session.GetRemotePeers().Select(peer => peer.PeerId)];
+                if (PositionOf(frozen[Random.Shared.Next(frozen.Count)], local) is { } at)
+                {
+                    QueueBlink(landAt + 500, ArenaFlow.BesideInRing(at, 2.2f));
+                }
             }
 
             log($"chungus: {cue.Power}{(cue.TargetPeer != 0 ? $" at peer {cue.TargetPeer}" : string.Empty)}");
@@ -113,7 +174,27 @@ internal sealed class ChungusPump(IGameBridge bridge, ICoopSession session, Acti
         _bossDownAtMs = 0;
         _downReported = false;
         _despawned = false;
+        _whim = null;
+        _blinkAtMs = 0;
     }
+
+    /// <summary>Where a player in the fight stands, as this game knows it: its own, or the last
+    /// it heard of another's. Null for a player who is not in the arena with it.</summary>
+    private Vector3f? PositionOf(uint peer, in PlayerState local)
+    {
+        if (peer == 0 || peer == session.LocalPeerId)
+        {
+            return local.Position;
+        }
+
+        string module = local.Module;
+        return session.GetRemotePeers().FirstOrDefault(p => p.PeerId == peer && p.IsInModule(module))?.State.Position;
+    }
+
+    private void QueueBlink(long dueMs, (float X, float Y, float Z) to) =>
+        _queue.Add((dueMs, new CheatRequest(
+            CheatKinds.Chungus, Amount: ChungusCheat.OpBlink, X: to.X, Y: to.Y, Z: to.Z,
+            Charges: (uint)Math.Clamp(session.BossAppearanceRow, 0, ushort.MaxValue)), false));
 
     private void PumpHost(in PvpView view, in PlayerState local, long now)
     {
@@ -190,9 +271,26 @@ internal sealed class ChungusPump(IGameBridge bridge, ICoopSession session, Acti
 
         _brain ??= new BossBrain(view.RoundId);
         List<uint> players = [session.LocalPeerId, .. session.GetRemotePeers().Select(peer => peer.PeerId)];
+        _whim ??= new Random(unchecked((int)view.RoundId));
+        if (_blinkAtMs == 0)
+        {
+            _blinkAtMs = now + BlinkAfterPowerMs;
+        }
+
         if (_brain.Next(now, _bossHealthPercent, players) is { } cue)
         {
             session.AnnounceBossCue(cue);
+            _blinkAtMs = now + BossPowers.LandDelayMs(cue.Power) + BlinkAfterPowerMs;
+        }
+        else if (now >= _blinkAtMs)
+        {
+            // He does not walk across a room like anything else in this game.
+            _blinkAtMs = now + _whim.Next(BlinkEveryMinMs, BlinkEveryMaxMs + 1);
+            uint at = players[_whim.Next(players.Count)];
+            if (at <= ushort.MaxValue)
+            {
+                session.AnnounceBossCue(new BossCue(BossPower.Blink, 0, (ushort)at));
+            }
         }
     }
 

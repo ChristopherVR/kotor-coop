@@ -41,11 +41,11 @@ public static class PvpText
     /// aimed at ("you" for the reader); it is ignored by the powers that hit everyone.</summary>
     public static string FormatBossPower(BossCue cue, string targetName, bool aimedAtReader) => cue.Power switch
     {
-        BossPower.Snap => "Chungus snaps his fingers. Everyone loses half their health.",
+        BossPower.Snap => "Chungus snaps his fingers. Everyone loses half their health. \"Perfectly balanced, as all things should be.\"",
         BossPower.Blast => aimedAtReader
             ? "Chungus fires the Power Stone at you."
             : $"Chungus fires the Power Stone at {targetName}.",
-        BossPower.Lift => "Chungus bends space. Everyone is lifted off the floor.",
+        BossPower.Lift => "Chungus folds space. Everyone is thrown somewhere else, and so is he.",
         BossPower.Gizka => aimedAtReader
             ? "Chungus rewrites reality. You are a gizka for a while."
             : $"Chungus rewrites reality. {targetName} is a gizka for a while.",
@@ -53,9 +53,11 @@ public static class PvpText
         BossPower.Drain => aimedAtReader
             ? "Chungus grips your soul and heals himself."
             : $"Chungus grips {targetName}'s soul and heals himself.",
-        BossPower.Slow => "Chungus slows time. Everyone moves at half speed.",
+        BossPower.Slow => "Chungus stops time. Nobody can move but him.",
         BossPower.Entrance => "Chungus has arrived.",
         BossPower.Defeat => "Chungus falls over.",
+        // He does it every few seconds: seen, not announced.
+        BossPower.Blink => string.Empty,
         _ => string.Empty,
     };
 

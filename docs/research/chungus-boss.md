@@ -1,13 +1,16 @@
 # Chungus: the arena boss cheat
 
-Status: built and run in the game 2026-10-10, alone and with two players (section 5). What nobody
-has checked yet is in section 6, the sounds by ear above all. Tags as in the other research docs: **VERIFIED** = read from game files, the binary or repo code here;
+Status: built and run in the game 2026-10-10, alone and with two players (section 5), and
+rebuilt the same day with a sculpted, skinned model, the game's own effects and voice, and the
+ways he breaks the game's rules (blinking, rolling, stopping time). What nobody has checked yet
+is in section 6, the sounds by ear above all. Tags as in the other research docs: **VERIFIED** = read from game files, the binary or repo code here;
 **INFERRED** = deduced; **NEEDS-LIVE** = must be tried in the game.
 
 `chungus` takes every player in the session to the PvP arena module to fight one boss together: a
-very fat grey-and-white rabbit wearing a jewelled golden gauntlet. He has his own model, texture,
-animations and sounds, all made for this mod. He swings like any stock creature and, every few
-seconds, uses the gauntlet. When he is beaten, or has beaten everyone, or somebody types `yield`,
+very fat grey-and-white rabbit wearing a jewelled golden gauntlet. His model, textures and
+animations are made for this mod; his grunts and the look and sound of his powers are the game's
+own (the Hutt's voice, the Force powers' effects). He hits with the gauntlet, uses one of its
+stones every few seconds, and does not get about the way anything else in the game does. When he is beaten, or has beaten everyone, or somebody types `yield`,
 everyone is taken back to where they stood, as they were. Nothing is kept.
 
 ## 1. What the player sees
@@ -17,26 +20,39 @@ everyone is taken back to where they stood, as they were. Nothing is kept.
 | `chungus` | The host can always start it. A joiner can when the host has `pvp = arena`. Refused with a plain line if a duel is on, or if any player is in a conversation, in another area than the host, or does not have the boss installed |
 | Way in | The arena round's own single warp: the host's game changes module once, everyone follows |
 | Countdown | 5 s once everyone has arrived. The party stands in a row across the east end. Everyone is pinned at 1 hit point minimum from here: nobody can die |
-| Fight | He appears at the west end. Stock melee AI plus one gauntlet power every 7 to 10 s (5 to 7 once he is below a quarter health) |
+| Fight | He appears at the west end. Stock melee AI (a gauntlet punch and a gauntlet backhand) plus one gauntlet power every 7 to 10 s (5 to 7 once he is below a quarter health), and between powers he blinks |
 | End | He dies (win), every player is at the 1 hp floor together for 2.5 s (loss), `yield` from anyone (called off), the host leaves the arena, or 10 minutes pass |
 | Way back | One warp home, each player put back on their spot with the hit points and Force points they came with |
 
 The powers (`BossPower`, `BossPowers`, `ChungusRule.Landing`):
 
-| Power | Aimed at | Lands after | What it does to a player | His animation | Sounds |
+| Power | Aimed at | Lands after | What it does to a player | His animation | What is seen and heard (all the game's own unless said) |
 | --- | --- | --- | --- | --- | --- |
-| Snap | everyone | 1.3 s | half of current hit points, thrown down | `ctaunt` | charge, snap |
-| Power stone | one | 0.9 s | 30% of maximum hit points, thrown back | `disabled` (held 1.6 s) | charge, blast |
-| Space stone | everyone | 0.7 s | lifted and spun for 4 s | `chturnl` (a pirouette) | warp |
-| Reality stone | one | 0.9 s | turned into a gizka for 12 s, and slowed | `usecomp` (a ground slam) | charge, slam |
-| Mind stone | everyone | 0.7 s | frightened for 5 s | `cvictory` (a laugh) | laugh |
-| Soul stone | one | 1.0 s | 15% of maximum hit points and choked for 3 s; he heals a twelfth of his health | `chturnr` (a charge) | charge, warp |
-| Time stone | everyone | 0.7 s | slowed to half speed for 8 s | `chturnl` | warp |
+| Snap | everyone | 1.3 s | half of current hit points, thrown down | `ctaunt` | Force aura on him, the mod's snap sound, a Force wave from him, screen shake; 0.9 s later he says "Perfectly balanced, as all things should be." (the mod's `k_coop_chline.wav`) |
+| Power stone | one | 0.9 s | 30% of maximum hit points, thrown back | `disabled` (held 1.6 s) | Force aura, a dark lightning beam from his hand |
+| Space stone (`Lift`) | everyone | 0.7 s | moved to a random spot in the ring and thrown down there; he goes somewhere else too | `chturnl` (the open hand raised) | whirlwind burst, screen shake |
+| Reality stone | one | 0.9 s | turned into a gizka for 12 s, and slowed | `usecomp` (a hammer blow) | polymorph burst |
+| Mind stone | everyone | 0.7 s | frightened for 5 s | `cvictory` (a laugh) | mind-mastery on him, horror on the player |
+| Soul stone | one | 0.85 s | 15% of maximum hit points and choked for 3 s; he heals a twelfth of his health | `chturnr` (a reach and a clench) | drain beam from his hand |
+| Time stone (`Slow`) | everyone | 0.7 s | held still for 3.5 s (`EffectParalyze`); half a second in, he appears beside one of them | `chturnl` | suppress burst |
+| Blink | (names one player) | at once | nothing | none | Force aura where he lands. No line of text |
 
 The animation names look odd because a creature model can only be told to play a short, fixed
-list of one-shots (section 3); his powers are stored under the names on that list.
+list of one-shots (section 3); his powers are stored under the names on that list. `Lift` and
+`Slow` keep the names they had when they lifted and slowed, because the numbers are on the wire.
 
 The snap is kept for when it matters: the first time he drops to 60% health and again at 25%.
+
+How he gets about (the part that is meant to look wrong for this game):
+
+- **He bounces instead of walking** (`cwalk`: the whole of him leaves the floor twice a cycle and
+  lands on his belly) and **rolls instead of running** (`crun`: one head-over-heels turn a cycle).
+  `walkdist` 2.0 and `rundist` 6.3 in his appearance row are what those cycles cover.
+- **He blinks.** Every 5 to 8 s between powers (and not for 4 s after one, so its animation is
+  not cut off) the host's pump says `BossPower.Blink` at a random player. Half the time he lands
+  3.2 m from them on the side the middle of the ring is; the other half he lands across the ring,
+  and rolls back.
+- **He walks through stopped time**, as above.
 
 ## 2. How it is put together
 
@@ -72,8 +88,23 @@ The host decides (`BossBrain`, pure, seeded by the round id) and says so with a
 peer). Every game, the host's included, gets it twice over: as a line of text, and through
 `DrainBossCues` into `ChungusPump`, which asks its own plugin for two things through the cheat
 mailbox (`CheatKinds.Chungus` = 112): the wind-up now (his animation on this game's copy of him,
-and a sound), and the landing after `BossPowers.LandDelayMs` (a sound, and the result on this
-game's **own** player if the cue hits it).
+a sound and an effect on him), and the landing after `BossPowers.LandDelayMs` (a sound, effects,
+and the result on this game's **own** player if the cue hits it).
+
+Three powers ask for more, all through the same queue:
+
+- **Snap**: a third request 0.9 s after the landing plays his line (`OpSound`).
+- **Space stone**: just before the landing, each game sends its own player the ordinary
+  `Teleport` cheat (walkmesh-guarded) to `ArenaFlow.RingSpot`, a random point on a circle about
+  the middle of the ring. Each game picks its own spot, so nothing about where a player went has
+  to cross the wire; the others see it through that player's ordinary position updates.
+- **Anything that moves him** (blink, space stone, time stone): the host alone sends `OpBlink`
+  with a position, and the plugin moves him with `Odyssey.SnapTo`, the walkmesh-guarded snap, so
+  a spot that is not floor leaves him where he was. Joiners see their copy follow through the
+  enemy mirror (run with two players: the copy was where the host's was in every pair of frames).
+
+The blink is decided in the pump, not in `BossBrain`: the brain stays the thing that picks a
+power on a timer, and its tests did not have to learn about a second timer.
 
 Why each game hurts its own player: the alternative is the host applying effects to a joiner's
 stand-in and trusting the forwarding channels, several of which have never run for a hostile
@@ -108,7 +139,13 @@ path, VERIFIED in code). A joiner's copy has its scripts blanked like every mirr
   it at full volume wherever the camera is. NEEDS-LIVE that a plain PCM `.wav` in Override plays.
 - `Odyssey.PlayAnimationNow(objectId, scriptAnimation, seconds)`: NWScript `PlayAnimation`
   through the VM with the creature as the caller (section 3 has what the handler does).
-- `CheatController.Chungus`: spawn, wind-up, landing, remove, plus two staging forms (any
+- `OdysseyEffects.ApplyVisualEffect(objectId, effect, durationMs)`: NWScript
+  `EffectVisualEffect` (handler `0x005346B0`) applied to an object, instant or for a time. The
+  number is the id in the first column of visualeffects.2da.
+- `OdysseyEffects.ApplyBeam(objectId, beam, fromObjectId, durationMs)`: `EffectBeam` (handler
+  `0x00531260`), drawn from the other object's left hand node (`lhand`, which his model has on
+  the gauntlet).
+- `CheatController.Chungus`: spawn, wind-up, landing, remove, blink, plus two staging forms (any
   animation on him, by script constant or engine id, and any sound by name).
 - `ChungusRule` (pure, linked into the tests): the plugin's copy of the power numbers and what
   each does. `ChungusBossTests.ThePluginsNumbersAreTheWiresNumbers` pins it to the protocol.
@@ -117,20 +154,47 @@ No shared-block field was added and the block version did not change.
 
 ## 3. The model
 
-Made from scratch by `tools/chungus/` (Python; numpy, scipy, Pillow). No Blender, no third-party
-art, no BioWare bytes.
+Made from scratch by `tools/chungus/` (Python). No Blender, no third-party art, no BioWare
+bytes. The first build was stretched spheres hung rigidly off pivots, and looked it. The second
+is one continuous sculpted surface, skinned to a skeleton:
 
 | File | What |
 | --- | --- |
-| `kmdl.py` | Writer for the K1 PC binary model format (`.mdl` + `.mdx`): dummy nodes, textured triangle meshes, keyframe animations. No skinning |
-| `geom.py` | Stretched spheres and tapered tubes, rotations |
-| `model.py` | The body: 24 nodes, 12 meshes, about 6,450 triangles. Every part is rigid and hangs off a pivot, so no skin weights are needed |
-| `anims.py` | 32 animations written as poses over time, sampled at 15 keys a second |
-| `texture.py` | One 512 x 512 texture, painted in code |
-| `sfx.py` | Nine sounds synthesised in code (22 kHz mono 16-bit PCM) |
-| `preview.py` | A software renderer for looking at the model and animations without the game |
-| `build.py` | Writes everything to `profiles/override` (`--preview DIR` also renders pictures) |
+| `sdf.py` | Shapes as distance fields (ellipsoids, tapered limbs, boxes) blended smoothly into one surface, turned into triangles by marching cubes and thinned to a budget; the same fields give normals, ambient occlusion and, per vertex, how much of it each bone carries |
+| `sculpt.py` | What shape he is: the skeleton (23 body bones, 10 finger bones), the body's parts and which bone carries each, the gauntlet's plates, the six stones, eyes, lids, teeth |
+| `bake.py` | Lays the surfaces out on a texture (xatlas) and paints every texel from a function of its point in space, so there are no seams |
+| `texture.py` | What colour every point is: fur with baked shading, the face, gold with a mirror mask in the alpha channel, the stones |
+| `model.py` | Puts it together: 67 nodes, about 16,800 triangles; five skinned meshes for the body, rigid pieces for the face and the gauntlet |
+| `kmdl.py` | Writer for the K1 PC binary model format (`.mdl` + `.mdx`): dummy nodes, rigid and skinned triangle meshes, keyframe animations |
+| `anims.py` | 28 animations written as poses over time, with inverse kinematics for both arms, sampled at 15 keys a second |
+| `sfx.py`, `voice.ps1` | The two sounds the game has nothing like: the snap (synthesised), and his line (a Windows text-to-speech voice, `voice_raw.wav`, slowed, dropped in pitch, doubled an octave down and put in a hall) |
+| `preview.py` | A software renderer, skinning included, for looking at the model and animations without the game |
+| `build.py` | Writes everything to `profiles/override` |
 | `mdldump.py` | Dumps any K1 binary model's structure; `--cover` lists which bytes were accounted for |
+
+It needs more than the first build did (scikit-image, fast-simplification, xatlas beside numpy,
+scipy and Pillow), so it has its own environment:
+`python -m venv artifacts/chungus-venv`, install those, then
+`artifacts/chungus-venv/Scripts/python tools/chungus/build.py`.
+
+Skinning facts (**VERIFIED** by reading stock skins with `mdldump.py`, then in the game):
+
+- A skin node (type flag `0x40`) is a mesh header (332 bytes) followed by a 100-byte skin
+  header: where the weights and bone indices sit in an MDX row, a bone map with one float per
+  node of the model (the bone's number in this skin, or -1), and per bone its inverse rest
+  orientation (w, x, y, z) and the negative of its rest position.
+- An MDX row is 64 bytes: position, normal, texture coordinate, four weights, four bone numbers
+  as floats (-1 for unused).
+- **A skin names at most 16 bones.** His body is split into five skins (head, torso, each arm,
+  legs) by which bone carries most of each triangle.
+- **A skin node may carry position, orientation and self-illumination controllers and no
+  others.** With the alpha and scale controllers a rigid mesh gets, the skin drew flat and
+  untextured in the game (it was right in every offline reader). Found live.
+- The gauntlet's texture is 32-bit with a `.txi` beside it saying `envmaptexture CM_Baremetal`,
+  the same line the game's droids carry: where the alpha is low the engine blends its stock
+  metal reflection in.
+- His body has a little self-illumination (0.2). Without it the arena, which is dark and lit
+  blue, turned grey fur into a navy silhouette (seen live, then fixed).
 
 Format facts (**VERIFIED** against the game's own `c_gizka`, `c_rancor`, `c_gammorean`, read out
 of `models.bif`; KotorBlender's reader was the starting reference for the layout):
@@ -169,16 +233,17 @@ of `models.bif`; KotorBlender's reader was the starting reference for the layout
   self-illumination colour (100). In animations the unknown word of a position or orientation
   key is type + 8 (0x10, 0x1C), as in the stock files; it is 0xFFFF on geometry nodes.
 - The gauntlet's stones are their own mesh so the animations can light them (self-illumination
-  keyframes). The belly breathes with a scale key.
+  keyframes).
 
 Checks that run without the game: `tools/chungus/mdldump.py --cover` accounts for every byte of
-the file with no gaps (it is also how the stock models were read); PyKotor, an independent reader, parses it to
-the same 24 nodes, 12 meshes, per-mesh vertex and face counts, texture names, 32 animations and
-events; `ChungusBossTests` checks the shipped headers, sizes and animation names.
+the file with no gaps (it is also how the stock models were read); PyKotor, an independent
+reader, parsed the first build to the same nodes, meshes and animations (not repeated for the
+skinned one); `ChungusBossTests` checks the shipped headers, sizes, animation names, that
+there are five skins and that none names more than 16 bones.
 
 ## 4. Install
 
-His model, texture and sounds are ordinary `k_coop_*` files in the package's Override folder, so
+His model, textures and two sounds are ordinary `k_coop_*` files in the package's Override folder, so
 the existing copy, uninstall and locked-file probe cover them with no change.
 
 Two things cannot ship ready-made, because they depend on the player's own appearance table:
@@ -186,7 +251,8 @@ Two things cannot ship ready-made, because they depend on the player's own appea
 - **A row in appearance.2da** (`ChungusInstaller`): the table (Override copy if a mod put one
   there, else the game's) with one row labelled `coop_chungus` appended, copied from the stock
   gizka's row with the model name, size and walk/run distances changed. Written to
-  `Override\appearance.2da`.
+  `Override\appearance.2da`. A row already there from an earlier version has its own cells
+  brought up to date in place (the distances changed when he stopped walking).
 - **`k_coop_chungus.utc`** (`ChungusBlueprint`): generated with that row's number. Stock default
   combat scripts by name (`k_def_*`, as `g_kathhound01` carries them), one stock creature weapon
   (`g_w_crslash003`), 20 soldier levels, 800 hit points, faction Hostile_1, not plot, not pinned.
@@ -237,13 +303,30 @@ and `tools/shot.ps1`. Log lines are from `kotorcoop-plugin.log` and the agent's 
 Found on the way, not his fault: a 12 hp character loses in seconds (the floor is reached on the
 first blow), so the two-player runs gave the joiner temporary hit points to keep the round open.
 
+The second build, same day, same two installs:
+
+| What | Result | Evidence |
+| --- | --- | --- |
+| The skinned model loads and animates | PASS after a fix | under page heap, no fault; first drew flat and untextured (extra controllers on the skin nodes, section 3) |
+| He can be seen in the arena | PASS after a fix | a navy silhouette at first; with 0.2 self-illumination the face, belly and ears read from across the ring |
+| The gauntlet mirrors the room | PASS | frames show the gold picking up the room's light, stones lit |
+| The game's effects on him and on players | PASS | `effect 1011 shown`, `2 effect(s) shown` per landing; frames show the lightning beam on the player, the horror burst, the Force aura on him |
+| Time stops | PASS | `power 7 lands - ... effect 2 applied` on both games, then `blink to (...) done` half a second later |
+| Space throws | PASS | `cheat: moved from 212.0,100.4 to 203.9,97.5` on the joiner and its own on the host, each followed by `effect 8 applied`; he moved in the same instant |
+| He blinks | PASS | `power 10 begins`, `blink to (...) done` every 5 to 8 s; both screens show him in the new place |
+| His line after the snap | queued, not heard | the request is the staging `chungus sound` path, which has run; nobody was listening |
+| Two players through the new powers | PASS | 60 s of fight, every cue on both games within 50 ms, both games responding at the end, no first-chance faults in either log |
+
 ## 6. Still open (NEEDS-LIVE)
 
-1. **Sounds by ear.** The nine files are well-formed PCM and the engine call is the one its own
-   interface sounds use, but nobody has heard them in the game. If they are silent, the next
-   thing to try is the priority group (0xA instead of 0xB) and then `streamsounds`.
+1. **Sounds by ear.** The snap and his line are well-formed PCM, the stock names were read out
+   of the game's sound archive, and the engine call is the one its own interface sounds use, but
+   nobody has heard any of it in the game: not the Hutt grunts, not the line. If the mod's two
+   are silent, the next thing to try is the priority group (0xA instead of 0xB) and then
+   `streamsounds`. The line's voice is a slowed text-to-speech voice and wants a human opinion.
 2. **How the animations look in motion.** Stills show distinct poses; timing against the landing
-   (the snap at 1.3 s) needs eyes.
+   (the snap at 1.3 s), and the bounce and the roll at the game's own walk and run speeds, need
+   eyes. The stills that caught him moving were too few to judge the roll.
 3. **Loss with two players**, the host leaving the arena mid-fight, a joiner dropping mid-fight,
    the ten-minute limit. Unit and loopback tested only.
 4. **Three or more players**: the row of spots at the east end (unit-tested for spacing) and a

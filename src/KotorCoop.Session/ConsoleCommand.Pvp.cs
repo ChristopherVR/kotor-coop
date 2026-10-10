@@ -31,7 +31,7 @@ public static partial class ConsoleCommand
     /// <c>chungus</c> starts the boss fight. The other forms are staging, for trying one piece on
     /// this game alone: <c>chungus spawn</c> puts him in front of the player, <c>chungus anim
     /// &lt;id&gt;</c> plays an animation on him, <c>chungus sound &lt;name&gt;</c> plays a sound
-    /// file, <c>chungus power &lt;1-9&gt;</c> plays a power out on this player, <c>chungus
+    /// file, <c>chungus power &lt;1-10&gt;</c> plays a power out on this player, <c>chungus
     /// remove</c> takes him away. The piece is in <see cref="CoopCommand.Address"/>.
     /// </summary>
     private static CoopCommand ParseChungus(string[] rest)
