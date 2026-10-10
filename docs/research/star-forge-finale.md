@@ -1540,3 +1540,18 @@ engine's own sequence (animbase cutscene flag, idle, id), but the stand-in has n
 screen yet; the load also tended to land after the first ids (the stand-in is only staged once
 both players stand on the mark). Next step: load the track at conversation start, and check
 whether the body plays the add-in animation at all (read the Gob's current animation, not +0x48).
+
+**How a mod puts an extra character into a stunt shot (Dark Sacrifice, `stunt_sacrifice.mod`).**
+The mod adds a whole cutscene module and does not touch the engine's stunt path at all: its
+`stunt_sacrifice.git` places a real creature (`sacrifice_carth.utc`, tag `sacrifice_carth`), and its
+conversation `sacrifice_cut` lists both participants in the StuntList, `PLAYER` and
+`sacrifice_carth`, each with its own stunt model (`sacrifice_char01` / `sacrifice_char02`, 840 KB
+and 200 KB of animation) plus a camera model (`sacrifice_cam`). So the engine loads a stunt model
+onto any tagged creature the StuntList names, not only the player, and every character a shot
+shows has an animation track authored for it. The lesson for the stand-in: the player's track
+places its body relative to the scene origin, so the same track on the stand-in draws it on top
+of the player, never beside them. Showing the partner needs either a track of its own (a second
+copy of the player's track with the root moved sideways, written at runtime the way the arena
+module is) or the stand-in's object moved by the offset that track would add. Compatibility: the
+mod's module is an ordinary cutscene module the joiner follows like STUNT_55a; its dark-side
+Carth branch was not reached in the live pass.
