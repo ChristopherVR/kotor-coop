@@ -28,7 +28,7 @@ public static partial class PacketCodec
         uint serial = r.ReadUInt32();
         byte op = r.ReadUInt8();
         uint target = r.ReadUInt32();
-        if (r.Failed || op is 0 or > (byte)PvpOp.AwareArena)
+        if (r.Failed || op is 0 or > (byte)PvpOp.Chungus)
         {
             return null;
         }
@@ -58,7 +58,8 @@ public static partial class PacketCodec
         }
 
         // Appended last: a reader of the older shape stops before it.
-        w.WriteUInt8(packet.Arena ? (byte)1 : (byte)0);
+        // Bit 0 is the arena, bit 1 the boss fight.
+        w.WriteUInt8((byte)((packet.Arena ? 1 : 0) | (packet.Boss ? 2 : 0)));
         return w.Failed ? 0 : w.Position;
     }
 
@@ -88,7 +89,7 @@ public static partial class PacketCodec
             uint forPeer = r.ReadUInt32();
             byte code = r.ReadUInt8();
             uint other = r.ReadUInt32();
-            if (r.Failed || code == 0 || code > (byte)PvpNoticeCode.ArenaFailed)
+            if (r.Failed || code == 0 || code > (byte)PvpNoticeCode.BossPower)
             {
                 return null;
             }
@@ -97,12 +98,14 @@ public static partial class PacketCodec
         }
 
         // The arena flag follows the notices; a packet from a build without arenas ends before it.
-        bool arena = r.Remaining > 0 && r.ReadUInt8() == 1;
+        // The boss flag shares its byte (bit 1).
+        byte mode = r.Remaining > 0 ? r.ReadUInt8() : (byte)0;
         if (r.Failed)
         {
             return null;
         }
 
-        return new PvpStatePacket(session, (PvpPhase)phase, round, challenger, target, notices, arena);
+        return new PvpStatePacket(
+            session, (PvpPhase)phase, round, challenger, target, notices, (mode & 1) != 0, (mode & 2) != 0);
     }
 }

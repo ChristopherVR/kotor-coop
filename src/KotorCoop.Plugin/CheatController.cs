@@ -474,6 +474,10 @@ internal sealed unsafe partial class CheatController(SharedBlockView block)
                 SpawnCreature(player);
                 break;
 
+            case SharedBlock.CheatKindChungus:
+                Chungus(player, playerId);
+                break;
+
             case SharedBlock.CheatKindGalaxyAccept:
                 GalaxyMapAccept();
                 break;

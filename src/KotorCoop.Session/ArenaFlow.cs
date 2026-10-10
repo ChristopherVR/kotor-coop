@@ -144,8 +144,40 @@ public sealed class ArenaFlow
         return 1 + (int)MathF.Round((MathF.Atan2(dy, dx) + MathF.PI) * 1000f);
     }
 
-    public static (float X, float Y, float Z) SpawnOf(in PvpView view, uint localPeerId)
+    /// <summary>The east end of the ring holds the party in a boss fight: a row across it, the
+    /// first player in the middle and the rest alternating to either side. The boss takes the
+    /// west end (<see cref="BossSpot"/>).</summary>
+    public static (float X, float Y, float Z) BossFightSpot(int slot)
     {
+        ArenaSpawn a = ArenaModule.SpawnFor(0, 1);
+        slot = Math.Clamp(slot, 0, 7);
+        if (slot == 7)
+        {
+            return (a.X - 5f, a.Y, a.Z);
+        }
+
+        int step = (slot + 1) / 2;
+        float side = slot % 2 == 1 ? 1f : -1f;
+        return (a.X, a.Y + (side * step * 3.2f), a.Z);
+    }
+
+    /// <summary>Where the boss appears: the west end, where a duel's second fighter stands.</summary>
+    public static (float X, float Y, float Z) BossSpot
+    {
+        get
+        {
+            ArenaSpawn b = ArenaModule.SpawnFor(1, 1);
+            return (b.X, b.Y, b.Z);
+        }
+    }
+
+    public static (float X, float Y, float Z) SpawnOf(in PvpView view, uint localPeerId, int slot = 0)
+    {
+        if (view.Boss)
+        {
+            return BossFightSpot(slot);
+        }
+
         if (localPeerId == view.Challenger)
         {
             ArenaSpawn a = ArenaModule.SpawnFor(0, 0);
@@ -170,7 +202,10 @@ public sealed class ArenaFlow
 
     /// <summary>What to do this tick. Nothing is latched here: the caller carries the step out
     /// and reports back with <see cref="Confirm"/>.</summary>
-    public ArenaStep Step(in PvpView view, uint localPeerId, bool isHost, string module, Vector3f position, long nowMs)
+    /// <param name="slot">Boss fights only: this player's place in the party's row (0 for the
+    /// lowest peer id, and so on), so nobody is put on top of anybody else.</param>
+    public ArenaStep Step(
+        in PvpView view, uint localPeerId, bool isHost, string module, Vector3f position, long nowMs, int slot = 0)
     {
         bool settled = Settled(module);
         bool inArena = settled && string.Equals(module, PvpDuelRound.ArenaModule, StringComparison.OrdinalIgnoreCase);
@@ -212,7 +247,7 @@ public sealed class ArenaFlow
 
             case PvpPhase.Countdown:
             case PvpPhase.Live:
-                return PlaceStep(view, localPeerId, inArena, position, nowMs);
+                return PlaceStep(view, localPeerId, inArena, position, nowMs, slot);
 
             case PvpPhase.Leaving:
                 if (_leavingSinceMs == 0)
@@ -234,14 +269,15 @@ public sealed class ArenaFlow
         }
     }
 
-    private ArenaStep PlaceStep(in PvpView view, uint localPeerId, bool inArena, Vector3f position, long nowMs)
+    private ArenaStep PlaceStep(
+        in PvpView view, uint localPeerId, bool inArena, Vector3f position, long nowMs, int slot)
     {
         if (_placed || !inArena || nowMs - _inArenaSinceMs < SettleBeforeActMs)
         {
             return ArenaStep.None;
         }
 
-        (float x, float y, float z) = SpawnOf(view, localPeerId);
+        (float x, float y, float z) = SpawnOf(view, localPeerId, slot);
         if (Landed(position, x, y))
         {
             _placed = true;

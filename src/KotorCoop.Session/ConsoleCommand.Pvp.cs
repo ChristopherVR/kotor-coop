@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace KotorCoop.Session;
 
 /// <summary>
@@ -24,6 +26,39 @@ public static partial class ConsoleCommand
         rest.Length == 0
             ? new CoopCommand(CoopCommandKind.Invalid, Error: PvpText.ArenaUsageLine)
             : new CoopCommand(CoopCommandKind.DuelArena, Address: string.Join(' ', rest));
+
+    /// <summary>
+    /// <c>chungus</c> starts the boss fight. The other forms are staging, for trying one piece on
+    /// this game alone: <c>chungus spawn</c> puts him in front of the player, <c>chungus anim
+    /// &lt;id&gt;</c> plays an animation on him, <c>chungus sound &lt;name&gt;</c> plays a sound
+    /// file, <c>chungus power &lt;1-9&gt;</c> plays a power out on this player, <c>chungus
+    /// remove</c> takes him away. The piece is in <see cref="CoopCommand.Address"/>.
+    /// </summary>
+    private static CoopCommand ParseChungus(string[] rest)
+    {
+        if (rest.Length == 0)
+        {
+            return new CoopCommand(CoopCommandKind.Chungus);
+        }
+
+        string piece = rest[0].ToLowerInvariant();
+        switch (piece)
+        {
+            case "spawn" or "remove" when rest.Length == 1:
+                return new CoopCommand(CoopCommandKind.Chungus, Address: piece);
+
+            case "anim" or "power" when rest.Length == 2
+                && int.TryParse(rest[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out int number)
+                && number is > 0 and <= ushort.MaxValue:
+                return new CoopCommand(CoopCommandKind.Chungus, Address: piece, Amount: number);
+
+            case "sound" when rest.Length == 2 && rest[1].Length <= 16:
+                return new CoopCommand(CoopCommandKind.Chungus, Address: piece, Password: rest[1]);
+
+            default:
+                return new CoopCommand(CoopCommandKind.Invalid, Error: PvpText.BossUsageLine);
+        }
+    }
 
     private static CoopCommand ParseDuelAccept(string[] rest) => new(CoopCommandKind.DuelAccept);
 

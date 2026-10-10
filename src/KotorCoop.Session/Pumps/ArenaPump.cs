@@ -27,7 +27,10 @@ internal sealed class ArenaPump(IGameBridge bridge, ICoopSession session, Action
         }
 
         long now = SessionClock.NowMs;
-        ArenaStep step = _flow.Step(view, session.LocalPeerId, session.IsEnemyAuthority, local.Module, local.Position, now);
+        // A boss fight lines the party up; this player's place is its rank among the peer ids.
+        uint me = session.LocalPeerId;
+        int slot = view.Boss ? session.GetRemotePeers().Count(peer => peer.PeerId < me) : 0;
+        ArenaStep step = _flow.Step(view, me, session.IsEnemyAuthority, local.Module, local.Position, now, slot);
 
         if (view.ArenaActive && _lastLoggedRound != view.RoundId)
         {

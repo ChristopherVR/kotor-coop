@@ -94,7 +94,7 @@ public class PvpArenaWireTests
     {
         byte[] buffer = new byte[ProtocolConstants.MaxPacketSize];
         int length = PacketCodec.Write(buffer, new PvpIntentPacket(1, 2, 3, PvpOp.Accept, 0));
-        buffer[length - 5] = (byte)PvpOp.AwareArena + 1;
+        buffer[length - 5] = (byte)PvpOp.Chungus + 1;
 
         Assert.Null(PacketCodec.ReadPvpIntent(buffer.AsSpan(0, length)));
     }
@@ -151,7 +151,7 @@ public class PvpArenaWireTests
             new PvpStatePacket(1, PvpPhase.Idle, 0, 0, 0, [new PvpNotice(1, 2, PvpNoticeCode.ArenaFailed, 3)]));
         Assert.NotNull(PacketCodec.ReadPvpState(buffer.AsSpan(0, length)));
 
-        buffer[length - 6] = (byte)PvpNoticeCode.ArenaFailed + 1;
+        buffer[length - 6] = (byte)PvpNoticeCode.BossPower + 1;
         Assert.Null(PacketCodec.ReadPvpState(buffer.AsSpan(0, length)));
     }
 

@@ -785,6 +785,11 @@ public static class CheatKinds
     /// <summary>Security skill on a locked door: the native UnlockObject player input.</summary>
     public const uint UnlockDoor = 111;
 
+    /// <summary>The arena boss (<c>chungus</c>; docs/research/chungus-boss.md): spawn him, start
+    /// or land one of his powers, remove him. See <c>SharedBlock.CheatKindChungus</c> and
+    /// <c>ChungusPump</c> for the fields.</summary>
+    public const uint Chungus = 112;
+
     /// <summary>
     /// <c>screenshot &lt;name&gt; [front]</c> / <c>screenshot status</c> — plugin-side GL
     /// screenshot for the isolated rig (docs/research/isolated-rig.md): PrintWindow is

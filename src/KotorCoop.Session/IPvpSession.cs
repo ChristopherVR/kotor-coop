@@ -4,8 +4,10 @@ using KotorCoop.Protocol;
 namespace KotorCoop.Session;
 
 /// <summary>The duel round as one player's game sees it: which phase, and who is in it.</summary>
+/// <param name="Boss">The round is the boss fight (<c>chungus</c>): every player is in it, all on
+/// one side, in the arena. <paramref name="Challenger"/> is the host and there is no target.</param>
 public readonly record struct PvpView(
-    PvpPhase Phase, uint RoundId, uint Challenger, uint Target, bool Arena = false)
+    PvpPhase Phase, uint RoundId, uint Challenger, uint Target, bool Arena = false, bool Boss = false)
 {
     public static PvpView Idle => default;
 
@@ -19,9 +21,13 @@ public readonly record struct PvpView(
     public bool IsDuellist(uint peer) =>
         Phase != PvpPhase.Idle && (peer == Challenger || peer == Target);
 
-    /// <summary>The player is pinned at 1 hp minimum and (once live) hostile to the other.</summary>
+    /// <summary>The player is pinned at 1 hp minimum and (once live, in a duel) hostile to the
+    /// other. In a boss fight that is every player.</summary>
     public bool IsFighting(uint peer) =>
-        Phase is PvpPhase.Countdown or PvpPhase.Live && (peer == Challenger || peer == Target);
+        Phase is PvpPhase.Countdown or PvpPhase.Live && (Boss || peer == Challenger || peer == Target);
+
+    /// <summary>The boss fight is on its way in, under way, or on its way out.</summary>
+    public bool BossActive => Boss && ArenaActive;
 
     /// <summary>The other duellist, or 0 when <paramref name="peer"/> is not in the round.</summary>
     public uint OpponentOf(uint peer) =>
@@ -42,6 +48,10 @@ public interface IPvpSession
     /// can be taken to it.</summary>
     bool PvpArenaReady => false;
 
+    /// <summary>Whether THIS install can load the arena boss (and the arena), so this player can
+    /// be taken to the boss fight.</summary>
+    bool BossReady => false;
+
     /// <summary>The round, as this player's game should act on it. A client that has not heard
     /// from the host for a few seconds reads this as idle, so a lost host never strands a
     /// player pinned.</summary>
@@ -58,4 +68,14 @@ public interface IPvpSession
 
     /// <summary>Lines for this player since the last call, oldest first.</summary>
     IReadOnlyList<PvpNotice> DrainPvpNotices() => [];
+
+    /// <summary>The boss's powers used since the last call, oldest first, for this game to play
+    /// out (sound, and the result on its own player). Every game gets every one.</summary>
+    IReadOnlyList<BossCue> DrainBossCues() => [];
+
+    /// <summary>Host only: the boss uses a power. Said to every player.</summary>
+    void AnnounceBossCue(BossCue cue) { }
+
+    /// <summary>Host only: the host's game saw the boss go down.</summary>
+    void ReportBossDown() { }
 }

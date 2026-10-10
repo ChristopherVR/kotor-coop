@@ -516,6 +516,7 @@ public static partial class PackageInstaller
         }
 
         InstallArena(game, log);
+        InstallBoss(game, log);
 
         // coop.ini is the player's own config once it exists; never clobber it.
         string iniSource = Path.Combine(package, "coop.ini");
@@ -566,6 +567,23 @@ public static partial class PackageInstaller
         {
             log($"arena module not installed ({ex.Message}); arena fights will not be available, duels still work");
         }
+    }
+
+    /// <summary>
+    /// Adds the arena boss's row to the game's appearance table and writes his blueprint with
+    /// that row's number (docs/research/chungus-boss.md). His model, texture and sounds were
+    /// copied with the other Override assets just before. Never fails the install: without him
+    /// the <c>chungus</c> cheat says he is not installed and everything else works.
+    /// </summary>
+    private static void InstallBoss(string game, Action<string> log)
+    {
+        ChungusInstallResult result = ChungusInstaller.Install(game);
+        log(result.Outcome switch
+        {
+            ChungusInstallOutcome.Installed => $"installed the arena boss ({result.Message})",
+            ChungusInstallOutcome.UpToDate => $"arena boss already current ({result.Message})",
+            _ => $"arena boss not installed ({result.Message}); the chungus cheat will not be available",
+        });
     }
 
     public const string ModProfileManifestName = "kotorcoop-installed.txt";
@@ -923,6 +941,8 @@ public static partial class PackageInstaller
         {
             log($"removed arena module {removedArena}");
         }
+
+        log($"arena boss: {ChungusInstaller.Uninstall(game)}");
 
         RemoveModProfiles(game, log);
         RestoreEnableCheats(game, log);

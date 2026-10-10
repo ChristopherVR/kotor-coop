@@ -129,7 +129,7 @@ internal static unsafe class FuncInterpHook
 
         // Duels (docs/research/pvp-plan.md): the words a player types to challenge and answer.
         // None shadows a retail console verb.
-        "duel", "arena", "accept", "decline", "yield",
+        "duel", "arena", "accept", "decline", "yield", "chungus",
 
         // A fourth live-test primitive (2026-08-28, docs/research/star-forge-finale.md §11):
         // registered here, unlike "recruit"/"skipline"/etc above, because the live plan for the

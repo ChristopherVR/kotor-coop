@@ -24,6 +24,7 @@ public sealed partial class CoopClient
     private uint _pvpNoticesSeenSerial;
     private uint _pvpNoticeSession;
     private readonly List<PvpNotice> _pvpInbox = [];
+    private readonly List<BossCue> _bossCues = [];
 
     // The request being repeated. Seeded from the clock so a rejoin (which keeps its peer id)
     // never restarts below a serial the host has already seen.
@@ -38,6 +39,8 @@ public sealed partial class CoopClient
     public bool PvpArenaEnabled => _overrides.PvpArena ?? _settings.Behaviour.Has(BehaviourFlags.PvpArena);
 
     public bool PvpArenaReady => _settings.PvpArenaReady;
+
+    public bool BossReady => _settings.BossReady;
 
     public PvpView PvpState
     {
@@ -89,6 +92,21 @@ public sealed partial class CoopClient
         }
     }
 
+    public IReadOnlyList<BossCue> DrainBossCues()
+    {
+        lock (_gate)
+        {
+            if (_bossCues.Count == 0)
+            {
+                return [];
+            }
+
+            BossCue[] drained = [.. _bossCues];
+            _bossCues.Clear();
+            return drained;
+        }
+    }
+
     private void FlushPvp(long now)
     {
         PvpIntentPacket packet;
@@ -115,7 +133,9 @@ public sealed partial class CoopClient
 
                 // Nothing to ask: say "my game knows about duels", so the host does not turn a
                 // challenge to this player away as an older build.
-                if (!PvpEnabled || now - _lastPvpAwareMs < PvpAwareIntervalMs)
+                // "I have the arena" is said whatever the pvp setting is: the host may start the
+                // boss fight (chungus) without it, and has to know who can be taken along.
+                if ((!PvpEnabled && !PvpArenaReady) || now - _lastPvpAwareMs < PvpAwareIntervalMs)
                 {
                     return;
                 }
@@ -123,7 +143,8 @@ public sealed partial class CoopClient
                 _lastPvpAwareMs = now;
                 packet = new PvpIntentPacket(
                     _hostSessionId, _localPeerId, 0,
-                    PvpArenaEnabled && PvpArenaReady ? PvpOp.AwareArena : PvpOp.Aware, 0);
+                    PvpArenaReady ? PvpOp.AwareArena : PvpOp.Aware,
+                    PvpArenaReady && BossReady ? PvpAwareBits.Boss : 0);
             }
         }
 
@@ -153,7 +174,8 @@ public sealed partial class CoopClient
                 return;
             }
 
-            _pvpView = new PvpView(packet.Phase, packet.RoundId, packet.Challenger, packet.Target, packet.Arena);
+            _pvpView = new PvpView(
+                packet.Phase, packet.RoundId, packet.Challenger, packet.Target, packet.Arena, packet.Boss);
             _pvpViewAtMs = now;
 
             // The host numbers its messages from 1 each session, so a new host session restarts the
@@ -174,9 +196,14 @@ public sealed partial class CoopClient
                 }
 
                 _pvpNoticesSeenSerial = notice.Serial;
-                if (notice.ForPeer == _localPeerId)
+                // Peer 0 is everyone: the boss fight's lines and the boss's powers.
+                if (notice.ForPeer == _localPeerId || notice.ForPeer == 0)
                 {
                     _pvpInbox.Add(notice);
+                    if (notice.Code == PvpNoticeCode.BossPower)
+                    {
+                        _bossCues.Add(BossCue.Unpack(notice.Other));
+                    }
                 }
             }
         }

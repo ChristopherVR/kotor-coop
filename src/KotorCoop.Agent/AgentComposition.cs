@@ -56,6 +56,11 @@ internal static class AgentComposition
         // time the game starts.
         bool arenaReady = EnsureArenaModule(TryResolveInstallDirectory(memory.ProcessId));
 
+        // The arena boss needs a row in the game's appearance table and a blueprint naming it,
+        // both made from this install's own table. Same rule as the arena: written now when
+        // missing, counted as ready from the next start (the game read its tables at launch).
+        bool bossReady = EnsureBoss(TryResolveInstallDirectory(memory.ProcessId)) && arenaReady;
+
         // Fingerprint this install so a mod mismatch with the peer is caught at join time.
         // Best-effort: a digest that could not be computed compares as "unchecked" and
         // never blocks a session.
@@ -291,6 +296,7 @@ internal static class AgentComposition
             Password = sessionPassword.Length > 0 ? sessionPassword : fallbackPassword,
             PeerIdentity = peerIdentity,
             PvpArenaReady = arenaReady,
+            BossReady = bossReady,
             ItemContinuationPath = installDirectory is null ? null : Path.Combine(installDirectory, "coop.items.json"),
             ConnectTimeoutMs = config is { ConnectTimeoutMs: > 0 }
                 ? config.ConnectTimeoutMs
@@ -516,6 +522,31 @@ internal static class AgentComposition
     /// same lookup <see cref="TryLoadCoopConfig"/> does, named separately because it is also
     /// where per-install state that is not configuration lives (see <c>PeerIdentity</c>).
     /// </summary>
+    /// <summary>Whether the arena boss was already installed (his appearance row and blueprint),
+    /// installing him when he was not. Never throws.</summary>
+    private static bool EnsureBoss(string? installDirectory)
+    {
+        if (installDirectory is null)
+        {
+            return false;
+        }
+
+        ChungusInstallResult result = ChungusInstaller.Install(installDirectory);
+        switch (result.Outcome)
+        {
+            case ChungusInstallOutcome.UpToDate:
+                return true;
+            case ChungusInstallOutcome.Installed:
+                Console.WriteLine($"chungus: installed ({result.Message}) - restart the game once before the boss fight can work");
+                break;
+            default:
+                Console.WriteLine($"chungus: not installed ({result.Message})");
+                break;
+        }
+
+        return false;
+    }
+
     /// <summary>Whether the arena module was already in the install's modules folder, writing it
     /// when it was not (and the game's own files can make one). Never throws: an install
     /// that cannot have an arena simply has no arena fights.</summary>

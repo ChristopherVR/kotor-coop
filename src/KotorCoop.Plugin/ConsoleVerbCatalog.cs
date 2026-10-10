@@ -205,6 +205,7 @@ internal static class ConsoleVerbCatalog
         // shadows a retail console verb (the engine registers no accept/decline/yield/duel).
         ("duel", "duel <name>  (challenge a player; they type accept or decline); duel off / duel on  (refuse / allow challenges)"),
         ("arena", "arena <name>  (challenge a player to a duel in the arena; the host takes everyone there and back)"),
+        ("chungus", "chungus  (cheat: everyone goes to the arena to fight Chungus together; yield calls it off)"),
         ("accept", "accept  (say yes to a duel challenge)"),
         ("decline", "decline  (say no to a duel challenge)"),
         ("yield", "yield  (give up a duel)"),

@@ -13,6 +13,16 @@ public static class PvpPumpRule
     /// player is not in, is 0 — a challenge still waiting for an answer pins nobody.</summary>
     public static (uint Phase, uint Opponent) Levels(in PvpView view, uint localPeerId, bool enabled)
     {
+        // The boss fight: everyone is pinned (level 1) for the countdown AND the fight. It never
+        // goes to level 2, which is what turns a duellist's stand-in hostile and makes the hit
+        // hook drop every blow on a stand-in that is not the local player's own; in a boss fight
+        // the players are on one side and the boss's blows on their stand-ins have to count. It
+        // does not need the pvp setting either: chungus is a cheat, not a duel.
+        if (view.Boss)
+        {
+            return view.IsFighting(localPeerId) ? (1u, 0u) : (0u, 0u);
+        }
+
         if (!enabled || !view.IsFighting(localPeerId))
         {
             return (0, 0);

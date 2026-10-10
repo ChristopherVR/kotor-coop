@@ -16,9 +16,10 @@ namespace KotorCoop.Session;
 /// <param name="Downed">Already on the floor in the engine's temp-dead state.</param>
 /// <param name="ArenaReady">Their game can go to the arena: a build that knows arenas, with the
 /// generated arena module in its modules folder (<see cref="PvpOp.AwareArena"/>).</param>
+/// <param name="BossReady">Their game can also load the arena boss (it said so in the same handshake).</param>
 public readonly record struct PvpParticipant(
     bool Present, bool Aware, bool Busy, string Module, int Health, int MaxHealth, bool Downed,
-    bool ArenaReady = false);
+    bool ArenaReady = false, bool BossReady = false);
 
 /// <summary>
 /// The host's duel round (docs/research/pvp-plan.md): one at a time, between two consenting

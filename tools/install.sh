@@ -442,6 +442,14 @@ if [ -z "$(arena_module)" ]; then
     echo "arena module: not installed yet - the co-op helper generates it from your own game files the first time the game starts"
 fi
 
+# The arena boss (the chungus cheat): his model, texture and sounds were copied with the Override
+# assets above. His row in the game's appearance table and his blueprint are made from the
+# player's own table by the agent (PackageInstaller.InstallBoss on Windows); a shell script cannot
+# edit that binary table, so the first start of the helper in the prefix does it.
+if ! find "$game" -maxdepth 2 -type f -iname k_coop_chungus.utc -ipath '*/override/*' 2>/dev/null | grep -q .; then
+    echo "arena boss: not installed yet - the co-op helper installs him the first time the game starts; restart the game once after that"
+fi
+
 if [ -f "$game/coop.ini" ]; then
     echo "coop.ini already exists at $game/coop.ini - left untouched"
 elif [ -f "$package/coop.ini" ]; then

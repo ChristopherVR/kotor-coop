@@ -758,6 +758,12 @@ public enum CoopCommandKind
     /// </summary>
     DuelArena,
 
+    /// <summary>
+    /// <c>chungus</c> — a cheat: every player is taken to the arena to fight the boss together,
+    /// and brought back afterwards. docs/research/chungus-boss.md.
+    /// </summary>
+    Chungus,
+
     /// <summary><c>accept</c> — say yes to the duel challenge waiting for you.</summary>
     DuelAccept,
 
@@ -1325,6 +1331,7 @@ public static partial class ConsoleCommand
         new(["jedichoice"], ParseJediChoice),
         new(["duel"], ParseDuel),
         new(["arena"], ParseArena),
+        new(["chungus"], ParseChungus),
         new(["accept"], ParseDuelAccept),
         new(["decline"], ParseDuelDecline),
         new(["yield"], ParseDuelYield),
