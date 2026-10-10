@@ -67,7 +67,7 @@ internal sealed unsafe class PvpMenuController(SharedBlockView block)
 
         // Not while the console, a conversation or a full-screen panel owns the keyboard.
         bool keyboardFree = !Odyssey.IsConsoleOpen && !Odyssey.IsConversationActive
-            && !Odyssey.IsFullScreenGuiUp && !PasswordEntryModal.IsAnyOpen;
+            && !Odyssey.IsFullScreenGuiUp && !Odyssey.IsHudHidden() && !PasswordEntryModal.IsAnyOpen;
 
         if (!keyboardFree)
         {
