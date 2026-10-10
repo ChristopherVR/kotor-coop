@@ -46,6 +46,8 @@ public sealed class DialogueNodeFollower
     {
         _appliedSerial = 0;
         _deferrals = 0;
+        _aheadSinceMs = null;
+        _aheadNode = -1;
     }
 
     /// <summary>
@@ -59,11 +61,45 @@ public sealed class DialogueNodeFollower
     public bool NeedsNode(int peerNode, uint peerSerial, bool hasContent) =>
         peerNode >= 0 && hasContent && peerSerial != _appliedSerial;
 
-    /// <summary>A local pending entry may move the follower after it acknowledged the
-    /// owner's serial. The owner remains authoritative until a new serial arrives.</summary>
-    public bool NeedsNode(int peerNode, uint peerSerial, bool hasContent, int localNode) =>
-        peerNode >= 0 && peerSerial != 0 && hasContent
-        && (peerSerial != _appliedSerial || localNode != peerNode);
+    /// <summary>How long a follower that moved on by itself waits for the owner's next
+    /// position before it is pulled back. Both games run the same lines on the same clock, so
+    /// the follower's engine routinely reaches the next line a moment before the owner's
+    /// message saying so (0.13 s on the Star Forge, 2026-10-10).</summary>
+    public const long LeadGraceMs = 1000;
+
+    private long? _aheadSinceMs;
+    private int _aheadNode = -1;
+
+    /// <summary>
+    /// A local pending entry may move the follower after it acknowledged the owner's serial.
+    /// The owner remains authoritative until a new serial arrives, but a move the follower
+    /// made on its own is given <see cref="LeadGraceMs"/> for that serial to arrive before the
+    /// follower is sent back. Sending it straight back re-sent the line it had just left and
+    /// reran that line's script: on the Star Forge the joiner was sent back to Carth's opening
+    /// entry, whose script stages the whole scene, the instant its own engine moved past it,
+    /// and its copy of the conversation ended under it.
+    /// </summary>
+    public bool NeedsNode(int peerNode, uint peerSerial, bool hasContent, int localNode, long nowMs)
+    {
+        if (peerNode < 0 || peerSerial == 0 || !hasContent)
+        {
+            return false;
+        }
+
+        if (peerSerial != _appliedSerial || localNode == peerNode)
+        {
+            _aheadSinceMs = null;
+            return peerSerial != _appliedSerial;
+        }
+
+        if (_aheadSinceMs is null || _aheadNode != localNode)
+        {
+            _aheadSinceMs = nowMs;
+            _aheadNode = localNode;
+        }
+
+        return nowMs - _aheadSinceMs.Value >= LeadGraceMs;
+    }
 
     /// <summary>
     /// Whether the engine is on the wanted node, banking the owner's serial if it is. Called

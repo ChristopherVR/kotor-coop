@@ -50,6 +50,7 @@ internal static unsafe class ScriptDestroyGuardHook
     private static long _snapshotUntilMs;
     private static bool _installed;
     private static int _logged;
+    private static int _allowedLogged;
 
     private static byte* _block;
 
@@ -213,6 +214,15 @@ internal static unsafe class ScriptDestroyGuardHook
             if (body != 0 && NativeMethods.IsReadable(body, 4) && *(nint*)body == CreatureFinder.CreatureVtable)
             {
                 RecordScriptDestroy(target);
+
+                // Which creatures local scripts remove, and on whose orders: a joiner whose
+                // copy of a scene loses an actor the host still has is otherwise silent.
+                if (_allowedLogged < 20)
+                {
+                    _allowedLogged++;
+                    Odyssey.TryReadExoString(body + 0x18, 32, out string tag);
+                    PluginHost.Log($"script destroy guard: let a local script destroy creature 0x{target:X} '{tag}' (source 0x{source:X})");
+                }
             }
         }
 

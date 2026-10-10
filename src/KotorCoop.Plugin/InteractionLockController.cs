@@ -480,7 +480,14 @@ internal sealed unsafe partial class InteractionLockController(SharedBlockView b
                 continue;
             }
 
-            if (*(nint*)creature == CreatureFinder.CreatureVtable
+            // Not while this game follows the conversation the lock is for: the NPC then plays
+            // the same conversation here, and clearing its queue ends that copy on the spot. On
+            // the Star Forge (2026-10-10) every scripted step Carth took was cleared on the
+            // joiner, his conversation there ended under the follow, and the scene's scripts
+            // removed him, so the joiner sat on the first choice for the rest of the scene.
+            bool playingItHere = kind == InteractionKindConversation && DialogueSpectateController.FollowingAConversation;
+            if (!playingItHere
+                && *(nint*)creature == CreatureFinder.CreatureVtable
                 && Odyssey.HoldCreatureStill(creature))
             {
                 held++;
