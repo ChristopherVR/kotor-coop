@@ -344,6 +344,74 @@ internal static unsafe partial class Odyssey
         *flags = (*flags | ControlFlagVisible) & ~ControlFlagLocked;
     }
 
+    // ---- lining the Co-op button up with the menu's own buttons -------------------
+    //
+    // CSWGuiExtent sits at control+0x04 (left, top, width, height, screen pixels). The menu's
+    // buttons are embedded in CSWGuiMainMenu like BTN_WARP, each starting with the CSWGuiButton
+    // vtable, so scanning the menu object for that vtable finds every one of them without
+    // knowing their offsets (docs/research/menu-button-runtime.md, "Extent").
+
+    private const int ControlExtentOffset = 0x04;
+
+    /// <summary>How far into CSWGuiMainMenu to look for embedded buttons: past BTN_WARP, the
+    /// last control the .gui lays out.</summary>
+    private const int MainMenuScanBytes = MainMenuWarpButton + 0x200;
+
+    // CSWGuiButton::SetExtent(this, CSWGuiExtent* src), ret 4: copies the rect and re-lays the
+    // button's border and label off it. VERIFIED (menu-button-runtime.md).
+    private static readonly delegate* unmanaged[Thiscall]<nint, int*, void> ButtonSetExtentFn =
+        (delegate* unmanaged[Thiscall]<nint, int*, void>)0x00417A20;
+
+    /// <summary>A control's on-screen rectangle.</summary>
+    public static MenuColumnRule.Extent GetControlExtent(nint control)
+    {
+        int* e = (int*)(control + ControlExtentOffset);
+        return new MenuColumnRule.Extent(e[0], e[1], e[2], e[3]);
+    }
+
+    /// <summary>
+    /// The rectangles of the main menu's visible buttons other than <paramref name="except"/>
+    /// (the Co-op button itself), found by their vtable inside the menu object. Empty when the
+    /// menu cannot be read. MAIN THREAD ONLY.
+    /// </summary>
+    public static List<MenuColumnRule.Extent> GetMainMenuButtonExtents(nint except)
+    {
+        List<MenuColumnRule.Extent> found = [];
+        nint menu = GetMainMenu();
+        if (menu == 0 || !NativeMethods.IsReadable(menu, (nuint)MainMenuScanBytes))
+        {
+            return found;
+        }
+
+        for (int offset = 0; offset + ControlFlagsOffset + 4 <= MainMenuScanBytes; offset += 4)
+        {
+            nint control = menu + offset;
+            if (control == except || *(nint*)control != ButtonVtable)
+            {
+                continue;
+            }
+
+            if ((*(uint*)(control + ControlFlagsOffset) & ControlFlagVisible) != 0)
+            {
+                found.Add(GetControlExtent(control));
+            }
+        }
+
+        return found;
+    }
+
+    /// <summary>Moves a button through the engine's own SetExtent, which re-lays its border and
+    /// label. MAIN THREAD ONLY.</summary>
+    public static void SetButtonExtent(nint button, MenuColumnRule.Extent extent)
+    {
+        int* rect = stackalloc int[4];
+        rect[0] = extent.Left;
+        rect[1] = extent.Top;
+        rect[2] = extent.Width;
+        rect[3] = extent.Height;
+        ButtonSetExtentFn(button, rect);
+    }
+
     /// <summary>Sets a button control's on-screen label via the engine's own SetText (which
     /// refreshes the linked text object and pins str_ref to -1 so the literal wins). Builds a
     /// temporary CExoString on the stack and frees it. Idempotent. MAIN THREAD ONLY.</summary>

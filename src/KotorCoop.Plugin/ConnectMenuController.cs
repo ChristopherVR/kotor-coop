@@ -86,6 +86,7 @@ internal sealed unsafe class ConnectMenuController
         // fully constructed: its flags differ from a working button's by exactly this bit, and
         // its extent already places it one row below Quit.
         Odyssey.SetControlVisible(button);
+        AlignWithMenuColumn(button);
 
         if (!_bound)
         {
@@ -101,6 +102,30 @@ internal sealed unsafe class ConnectMenuController
                 button, 0x1, (nint)(delegate* unmanaged[Thiscall]<nint, nint, void>)&OnCoopClicked);
             LogOnce("menu: Co-op button shown, labelled and bound");
         }
+    }
+
+    /// <summary>
+    /// Puts the Co-op button one row under the menu's own buttons, the slot the stock 800x600
+    /// layout gives it. A menu mod that lays the menu out for the player's resolution moves the
+    /// real buttons and leaves BTN_WARP behind (see <see cref="MenuColumnRule"/>). Only writes
+    /// when the button is somewhere else, so a steady menu costs a scan and a compare per frame,
+    /// and a menu the engine rebuilds at the same address is put right again.
+    /// </summary>
+    private void AlignWithMenuColumn(nint button)
+    {
+        if (!MenuColumnRule.TrySlotBelowColumn(Odyssey.GetMainMenuButtonExtents(button), Odyssey.ScreenHeight, out MenuColumnRule.Extent slot))
+        {
+            return;
+        }
+
+        MenuColumnRule.Extent current = Odyssey.GetControlExtent(button);
+        if (current == slot)
+        {
+            return;
+        }
+
+        Odyssey.SetButtonExtent(button, slot);
+        LogOnce($"menu: Co-op button moved from ({current.Left},{current.Top},{current.Width}x{current.Height}) to ({slot.Left},{slot.Top},{slot.Width}x{slot.Height}) under the menu's buttons");
     }
 
     /// <summary>
