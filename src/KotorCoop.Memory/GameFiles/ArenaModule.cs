@@ -437,23 +437,28 @@ public static class ArenaModuleInstaller
         try
         {
             using GameFiles files = new(gameDirectory);
-            if (!files.TryReadModuleMember(ArenaModule.SourceModule, "module", "ifo", out byte[] ifo)
-                || !files.TryReadModuleMember(ArenaModule.SourceModule, ArenaModule.SourceArea, "are", out byte[] are)
-                || !files.TryReadModuleMember(ArenaModule.SourceModule, ArenaModule.SourceArea, "git", out byte[] git))
+            // The engine's own lookup order (override, then the module's .mod or rims, then the
+            // base archives): a mod build that replaces the cantina with its own
+            // modules	ar_m02ae.mod (Dueling Arena Adjustment in the K1 Full build) must be
+            // what the arena is made from, or the arena's files contradict the game's.
+            string source = ArenaModule.SourceModule;
+            string area = ArenaModule.SourceArea;
+            if (!files.TryReadAreaResource(source, "module", "ifo", out byte[] ifo)
+                || !files.TryReadAreaResource(source, area, "are", out byte[] are)
+                || !files.TryReadAreaResource(source, area, "git", out byte[] git))
             {
-                error = $"{ArenaModule.SourceModule}.rim (the Taris cantina) was not found in the game's modules folder";
+                error = $"{source} (the Taris cantina) was not found in the game's modules folder";
                 return false;
             }
 
-            if (!files.TryReadResource(ArenaModule.SourceArea, "lyt", out byte[] lyt)
-                || !files.TryReadResource(ArenaModule.SourceArea, "vis", out byte[] vis))
+            if (!files.TryReadAreaResource(source, area, "lyt", out byte[] lyt)
+                || !files.TryReadAreaResource(source, area, "vis", out byte[] vis))
             {
                 error = "the cantina's layout files were not found in the game's data";
                 return false;
             }
 
-            byte[]? pth = files.TryReadModuleMember(
-                ArenaModule.SourceModule + "_s", ArenaModule.SourceArea, "pth", out byte[] pathFile) ? pathFile : null;
+            byte[]? pth = files.TryReadAreaResource(source, area, "pth", out byte[] pathFile) ? pathFile : null;
 
             module = ArenaModule.Build(new ArenaSources(ifo, are, git, pth, lyt, vis));
             return true;

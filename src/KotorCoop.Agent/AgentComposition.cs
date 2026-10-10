@@ -528,15 +528,23 @@ internal static class AgentComposition
 
         try
         {
-            if (ArenaModuleInstaller.IsInstalled(installDirectory))
-            {
-                return true;
-            }
-
+            // Regenerated on every start, not only when missing: a mod installed afterwards that
+            // replaces the Taris cantina (modules\tar_m02ae.mod) makes an old arena stale, and
+            // Install writes only when the bytes differ.
             ArenaInstallResult result = ArenaModuleInstaller.Install(installDirectory);
-            Console.WriteLine(result.Outcome == ArenaInstallOutcome.Installed
-                ? "arena: wrote modules\\k_coop_arena.mod - restart the game once before arena fights can work"
-                : $"arena: not installed ({result.Message})");
+            switch (result.Outcome)
+            {
+                case ArenaInstallOutcome.UpToDate:
+                    return true;
+                case ArenaInstallOutcome.Installed:
+                case ArenaInstallOutcome.Refreshed:
+                    Console.WriteLine("arena: wrote modules\\k_coop_arena.mod from this game's own cantina - "
+                        + "restart the game once before arena fights can work");
+                    break;
+                default:
+                    Console.WriteLine($"arena: not installed ({result.Message})");
+                    break;
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

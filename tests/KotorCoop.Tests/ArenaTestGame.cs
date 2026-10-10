@@ -11,6 +11,11 @@ public static class ArenaTestGame
 {
     public static ArenaSources Sources() => new(Ifo(), Are(), Git(), Pth(), Encoding.Latin1.GetBytes(Layout("\r\n")), CantinaVis());
 
+    /// <summary>The cantina with a different room sound setting: a stand-in for a mod's replacement
+    /// area (the arena generator rewrites the tag and name, but keeps the ring room's fields).</summary>
+    public static ArenaSources SourcesWithRoomAudio(int envAudio) =>
+        new(Ifo(), Are(envAudio: envAudio), Git(), Pth(), Encoding.Latin1.GetBytes(Layout("\r\n")), CantinaVis());
+
     private static byte[] Ifo()
     {
         GffWriter w = new("IFO ");
@@ -35,16 +40,16 @@ public static class ArenaTestGame
         return w.ToBytes();
     }
 
-    private static byte[] Are()
+    private static byte[] Are(string tag = "Untitled", int envAudio = 77)
     {
         GffWriter w = new("ARE ");
-        w.Root.SetString("Tag", "Untitled");
+        w.Root.SetString("Tag", tag);
         w.Root.SetLocString("Name", 35872);
         w.Root.SetByte("Unescapable", 1);
         GffWriterList rooms = w.Root.AddList("Rooms");
         foreach (string room in new[] { "M02ae_09a", "M02ae_07a", "M02ae_01a" })
         {
-            rooms.Add(0).SetResRef("RoomName", room).SetInt("EnvAudio", 77).SetFloat("AmbientScale", 0.5f);
+            rooms.Add(0).SetResRef("RoomName", room).SetInt("EnvAudio", envAudio).SetFloat("AmbientScale", 0.5f);
         }
 
         w.Root.SetResRef("OnEnter", "k_ptar_a02ae_en");
