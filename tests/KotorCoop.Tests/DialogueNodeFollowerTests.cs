@@ -170,4 +170,42 @@ public sealed class DialogueNodeFollowerTests
 
         Assert.True(follower.NeedsNode(peerNode: 29, peerSerial: 1, hasContent: true));
     }
+
+    /// <summary>Star Forge, 2026-10-10: the follower's engine reached Carth's next line 0.13 s
+    /// before the owner's message did, and sending it straight back reran the opening entry's
+    /// staging script.</summary>
+    [Fact]
+    public void AFollowerThatMovedOnByItselfWaitsForTheOwnersNextLine()
+    {
+        DialogueNodeFollower follower = new();
+        Assert.True(follower.Arrived(peerSerial: 2, localNode: 0, wantedNode: 0));
+
+        // Our engine moved 0 -> 1; the owner's serial still names 0.
+        Assert.False(follower.NeedsNode(0, 2, true, localNode: 1, nowMs: 10_000));
+        Assert.False(follower.NeedsNode(0, 2, true, localNode: 1, nowMs: 10_130));
+
+        // The owner's message arrives: node 1, a new serial. Already there, so nothing to drive.
+        Assert.True(follower.NeedsNode(1, 3, true, localNode: 1, nowMs: 10_140));
+        Assert.True(follower.Arrived(peerSerial: 3, localNode: 1, wantedNode: 1));
+        Assert.False(follower.NeedsNode(1, 3, true, localNode: 1, nowMs: 10_150));
+    }
+
+    [Fact]
+    public void AFollowerThatWanderedIsSentBackAfterTheGrace()
+    {
+        DialogueNodeFollower follower = new();
+        follower.Arrived(peerSerial: 2, localNode: 5, wantedNode: 5);
+
+        Assert.False(follower.NeedsNode(5, 2, true, localNode: 9, nowMs: 0));
+        Assert.True(follower.NeedsNode(5, 2, true, localNode: 9, nowMs: DialogueNodeFollower.LeadGraceMs));
+    }
+
+    [Fact]
+    public void ANewOwnerPositionIsDrivenAtOnce()
+    {
+        DialogueNodeFollower follower = new();
+        follower.Arrived(peerSerial: 2, localNode: 5, wantedNode: 5);
+
+        Assert.True(follower.NeedsNode(7, 3, true, localNode: 5, nowMs: 0));
+    }
 }

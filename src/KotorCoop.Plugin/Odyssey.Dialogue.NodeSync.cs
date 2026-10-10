@@ -122,6 +122,7 @@ internal static unsafe partial class Odyssey
             if (IsDialogueOwner(participant, out dialog))
             {
                 owner = participant;
+                _lastDialogueOwnerId = id;
                 return true;
             }
 
@@ -138,11 +139,66 @@ internal static unsafe partial class Odyssey
             if (candidate != 0 && IsDialogueOwner(candidate, out dialog))
             {
                 owner = candidate;
+                _lastDialogueOwnerId = ownerId;
+                return true;
+            }
+        }
+
+        // The owner found last time, while it still owns a conversation. A participant's link to
+        // its owner is not steady: on the Star Forge the conversation hangs off an invisible
+        // placeholder (sta_invis_bastila) and Carth's +0x54 dropped to OBJECT_INVALID between
+        // his lines, so a follower lost the conversation it was in and sat on its first choice.
+        if (_lastDialogueOwnerId is not (0 or ObjectInvalid))
+        {
+            nint remembered = ResolveServerObject(_lastDialogueOwnerId);
+            if (remembered != 0 && IsDialogueOwner(remembered, out dialog))
+            {
+                owner = remembered;
                 return true;
             }
         }
 
         return false;
+    }
+
+    /// <summary>The object id <see cref="TryGetActiveDialogue"/> last found owning the
+    /// conversation through a participant's link. Only ever used again after
+    /// <see cref="IsDialogueOwner"/> confirms it still owns one.</summary>
+    private static uint _lastDialogueOwnerId;
+
+    /// <summary>
+    /// Why <see cref="TryGetActiveDialogue"/> found no conversation, as one line for the log:
+    /// the GUI's live flag, each participant id it names, and for each one that resolves its
+    /// own id, the owner id it names and whether its dialog pointer carries the CSWSDialog
+    /// vtable. Read-only. MAIN THREAD ONLY.
+    /// </summary>
+    public static string DescribeActiveDialogueLookup()
+    {
+        nint gui = GetInGameGui();
+        if (gui == 0)
+        {
+            return "no in-game GUI";
+        }
+
+        System.Text.StringBuilder line = new($"live {(ConversationLive(gui) ? 1 : 0)}");
+        foreach (int offset in stackalloc int[] { GuiParticipantA, GuiParticipantB })
+        {
+            uint raw = *(uint*)(gui + offset);
+            line.Append($"; participant 0x{raw:X}");
+            uint id = raw & 0x7FFFFFFF;
+            nint obj = id is 0 or ObjectInvalid or 0x7FFFFFFF ? 0 : ResolveServerObject(id);
+            if (obj == 0)
+            {
+                line.Append(" (no server object)");
+                continue;
+            }
+
+            nint dialogPtr = Deref(obj + ObjActiveDialog);
+            bool isDialog = LooksLikeHeapPointer(dialogPtr) && *(nint*)dialogPtr == DialogVtable;
+            line.Append($" id 0x{*(uint*)(obj + ObjIdOffset):X} owner 0x{*(uint*)(obj + ObjDialogOwner):X} dialog {(isDialog ? "yes" : "no")}");
+        }
+
+        return line.ToString();
     }
 
     /// <summary>Whether an object is the owner of a live conversation: it names itself as the

@@ -52,6 +52,11 @@ namespace KotorCoop.Plugin;
 internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
 {
     private readonly DialogueFollowMachine _machine = new();
+
+    /// <summary>This game is running its own copy of a peer's conversation (adopted or joined).
+    /// Its NPCs then act out that conversation's scripts here too, so nothing else may clear
+    /// their actions (see <see cref="InteractionLockController"/>).</summary>
+    public static bool FollowingAConversation { get; private set; }
     private readonly DialogueNodeFollower _nodes = new();
 
     /// <summary>"No node." Mirrors <c>DialogueState.NoNode</c> on the wire.</summary>
@@ -251,6 +256,7 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         PublishLocal();
         ReportCounters();
         FollowRemote();
+        FollowingAConversation = _machine.IsFollowing;
     }
 
     // ══════════════════════════════════════════════════════════════════════════════════════
@@ -746,7 +752,7 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         uint wantedSerial = block.RemoteDialogueNodeSerial;
 
         int before = Odyssey.GetDialogueNodeIndex();
-        if (!_nodes.NeedsNode(wantedNode, wantedSerial, hasContent, before))
+        if (!_nodes.NeedsNode(wantedNode, wantedSerial, hasContent, before, Environment.TickCount64))
         {
             return; // no position published, already sent there, or nothing on screen to drive
         }
@@ -773,6 +779,18 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         if (!called)
         {
             LogDriveAttempt(before, wantedNode, before, callMs, arrived: false);
+
+            // Say what the engine holds when the conversation cannot be found at all, a few
+            // times and seconds apart: a joiner left on a reply list while the owner thought
+            // for 40 s lost its handle on the conversation (Star Forge, 2026-10-10).
+            long now = Environment.TickCount64;
+            if (before < 0 && _lookupNotes < 6 && now - _lastLookupNoteMs > 5000)
+            {
+                _lookupNotes++;
+                _lastLookupNoteMs = now;
+                PluginHost.Log($"dialogue: cannot reach node {wantedNode}, no conversation found here: {Odyssey.DescribeActiveDialogueLookup()}");
+            }
+
             return; // could not even be asked for yet; try again next frame
         }
 
@@ -803,6 +821,9 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
     /// about a second, and the frame hook runs at roughly 300 Hz, so this is several times
     /// the ordinary wait — it fires for a gate that is stuck, not for one that is working.</summary>
     private const int DeferralsBeforeComplaining = 1200;
+
+    private int _lookupNotes;
+    private long _lastLookupNoteMs;
 
     /// <summary>The machine names the event; the sentence lives here, where the log does.</summary>
     private void Say(DialogueFollowNote note)

@@ -66,11 +66,13 @@ public class DialogueSceneRelayTests
     {
         DialogueNodeFollower follower = new();
         Assert.True(follower.Arrived(20, 28, 28));
-        Assert.False(follower.NeedsNode(28, 20, true, 28));
-        // Observed on the listener: acknowledged node 28, then its engine sent node 0.
-        Assert.True(follower.NeedsNode(28, 20, true, 0));
-        Assert.False(follower.NeedsNode(28, 0, true, 0));
-        Assert.False(follower.NeedsNode(28, 20, false, 0));
+        Assert.False(follower.NeedsNode(28, 20, true, 28, 0));
+        // Observed on the listener: acknowledged node 28, then its engine sent node 0. It is
+        // sent back once the owner has had a moment to say it moved too.
+        Assert.False(follower.NeedsNode(28, 20, true, 0, 1000));
+        Assert.True(follower.NeedsNode(28, 20, true, 0, 1000 + DialogueNodeFollower.LeadGraceMs));
+        Assert.False(follower.NeedsNode(28, 0, true, 0, 5000));
+        Assert.False(follower.NeedsNode(28, 20, false, 0, 5000));
     }
 
     [Theory]
