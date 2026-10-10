@@ -20,6 +20,8 @@ internal sealed class DialoguePump(IGameBridge bridge, ICoopSession session, Age
     /// <summary>When the local player was last genuinely in a conversation, and who with —
     /// held across the engine's between-entries flicker (see PumpDialogue).</summary>
     private long _dialogueLastActiveMs;
+
+    private readonly DialogueClaimGrace _claimGrace = new();
     private string _dialogueHeldPartnerTag = string.Empty;
 
     /// <summary>The last node the local conversation was really on, held across the engine's
@@ -234,6 +236,12 @@ internal sealed class DialoguePump(IGameBridge bridge, ICoopSession session, Age
 
         bool active = rawInDialogue
             || (_dialogueLastActiveMs > 0 && (nowMs - _dialogueLastActiveMs) < DialogueLingerMs);
+
+        // A joiner holds a brand-new conversation's claim for a moment, so a world scene the
+        // host's game started too goes to the host (see DialogueClaimGrace).
+        active = _claimGrace.AllowClaim(
+            session.IsEnemyAuthority, active, token.Active && token.OwnerPeerId == session.LocalPeerId, nowMs,
+            _dialogueHeldForced);
 
         // Never publish as active while this instance sits in a stunt module — see the gate
         // above. The linger window still exists for an ordinary conversation caught mid-line

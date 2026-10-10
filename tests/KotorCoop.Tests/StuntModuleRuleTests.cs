@@ -464,7 +464,7 @@ public sealed class StuntModuleRuleTests
     public void DialoguePublishesInactiveWhileLocalIsAStuntModuleAndResumesInARealOne()
     {
         StuntGateBridge bridge = new() { Module = StuntModule };
-        StuntGateSession session = new();
+        StuntGateSession session = new() { EnemyAuthority = true };
         DialoguePump pump = new(bridge, session, Settings(), _ => { });
 
         // The engine reads "in a conversation" — the scripted cutscene entry — while the local
