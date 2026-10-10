@@ -142,8 +142,10 @@ internal static unsafe class ScriptCreateObjectHook
         // original pops it.
         string template = ReadTemplate(Odyssey.PeekStackTopValue());
 
+        bool localStoryActor = false;
         if (SuppressCreatures && IsFriendlyTemplate(template))
         {
+            localStoryActor = true;
             // Friendly story actors are never mirrored (the mirror takes hostiles only), so this
             // game builds its own. Falls through to the original with the arguments untouched.
             uint hash = FriendlyTemplateRule.Hash(template);
@@ -169,6 +171,19 @@ internal static unsafe class ScriptCreateObjectHook
 
         StackPushInteger(vm, objectType);
         int status = original(commands, commandId, paramCount);
+        if (status == 0 && localStoryActor)
+        {
+            uint localId = ObjectInvalid;
+            if (StackPopObject(vm, &localId) != 0)
+            {
+                StackPushObject(vm, localId);
+                if (localId != ObjectInvalid && localId != 0)
+                {
+                    NoteLocalStoryActor(localId, template);
+                }
+            }
+        }
+
         if (status == 0 && RecordSpawns && template.Length > 0)
         {
             uint objectId = ObjectInvalid;
@@ -184,6 +199,46 @@ internal static unsafe class ScriptCreateObjectHook
 
         return status;
     }
+
+    private static readonly Dictionary<uint, string> LocalStoryActors = [];
+
+    /// <summary>
+    /// Joiner: a friendly story actor this game built itself. Its object id comes from this
+    /// game's own counter, so it can equal an id the host gave to something else entirely: on
+    /// the Star Forge the joiner's Carth was 0x111 while the host's Bastila was 0x111. Anything
+    /// that acts on host ids (the liveness reconcile) must leave these alone.
+    /// </summary>
+    public static bool IsLocalStoryActor(uint objectId) => LocalStoryActors.ContainsKey(objectId);
+
+    /// <summary>The story actor this game built from <paramref name="template"/>, if one still
+    /// stands (the latest, when a scene built more than one).</summary>
+    public static bool TryGetLocalStoryActor(string template, out uint objectId)
+    {
+        objectId = 0;
+        foreach ((uint id, string built) in LocalStoryActors)
+        {
+            if (string.Equals(built, template, StringComparison.OrdinalIgnoreCase) && id > objectId
+                && Odyssey.ResolveServerObject(id) != 0)
+            {
+                objectId = id;
+            }
+        }
+
+        return objectId != 0;
+    }
+
+    private static void NoteLocalStoryActor(uint objectId, string template)
+    {
+        if (LocalStoryActors.Count > 1024)
+        {
+            LocalStoryActors.Clear();
+        }
+
+        LocalStoryActors[objectId] = template;
+    }
+
+    /// <summary>A new world: the ids name different objects now.</summary>
+    public static void ForgetLocalStoryActors() => LocalStoryActors.Clear();
 
     /// <summary>Joiner: the blueprint the host named for its creature
     /// <paramref name="hostObjectId"/> (agent-written, SharedBlock.OffsetSpawnTemplateRecords).</summary>

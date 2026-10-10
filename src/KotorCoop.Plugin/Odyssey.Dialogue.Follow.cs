@@ -85,6 +85,11 @@ internal static unsafe partial class Odyssey
     /// compares it with the object's own id at +0x04 to decide owner from participant.</summary>
     private const int ObjDialogOwner = 0x54;
 
+    /// <summary>Whether a server object is taking part in a conversation (its dialog-owner id
+    /// names someone). MAIN THREAD ONLY.</summary>
+    public static bool IsInAnyConversation(nint obj) =>
+        obj != 0 && *(uint*)(obj + ObjDialogOwner) is not (ObjectInvalid or 0);
+
     /// <summary>Copies a creature's tag into an ASCII buffer. Empty when unavailable.</summary>
     public static void ReadObjectTag(nint obj, byte* dest, int cap)
     {

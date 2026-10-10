@@ -109,10 +109,14 @@ internal sealed unsafe class LivenessReconcileController(SharedBlockView block, 
         // while a script holds the stage is exactly the collision those guards exist to
         // avoid. Nothing is lost: the owner republishes its full view every cycle, so the
         // next clean pass catches up.
-        if (Odyssey.IsConversationActive)
-        {
-            return;
-        }
+        //
+        // Except a creature the host has REMOVED that stands outside the conversation: it can
+        // fight the scene's own actors here for as long as the scene lasts. On the Star Forge
+        // (2026-10-10) the scene's script removes the captive Jedi on both games, the joiner's
+        // guard refused it against a stale census, and the Jedi left standing on the joiner
+        // killed its Carth mid-conversation; they were removed only when the scene ended, 35 s
+        // later. Those removals still go through; kills and anything in a conversation wait.
+        bool inConversation = Odyssey.IsConversationActive;
 
         uint sequence = block.LivenessPublishSequence;
         if (!BankCurrent(sequence)) return;
@@ -129,7 +133,7 @@ internal sealed unsafe class LivenessReconcileController(SharedBlockView block, 
         {
             LivenessView entry = block.GetLiveness(i);
             if (!BankCurrent(sequence)) return;
-            if (Apply(entry, sequence))
+            if (Apply(entry, sequence, inConversation))
             {
                 actionsLeft--;
             }
@@ -143,7 +147,7 @@ internal sealed unsafe class LivenessReconcileController(SharedBlockView block, 
     /// <summary>Returns true when this entry spent a dispatch (kill or destroy) from the
     /// pass's budget; false for every other outcome — nothing to do, or an anomaly, which is
     /// a log line and a counter bump, never an engine call.</summary>
-    private bool Apply(LivenessView entry, uint sequence)
+    private bool Apply(LivenessView entry, uint sequence, bool inConversation = false)
     {
         if (entry.ObjectId == 0 || entry.ObjectId == Odyssey.ObjectInvalid)
         {
@@ -194,7 +198,20 @@ internal sealed unsafe class LivenessReconcileController(SharedBlockView block, 
             return false;
         }
 
+        if (mapped == 0)
+        {
+            mapped = MaterialisedEnemies.StoryAliasFor(entry.ObjectId);
+        }
+
         uint effectiveId = mapped != 0 ? mapped : entry.ObjectId;
+
+        // The same number on this game names a story actor this game built itself, not the
+        // host's creature (see ScriptCreateObjectHook.IsLocalStoryActor).
+        if (mapped == 0 && ScriptCreateObjectHook.IsLocalStoryActor(effectiveId))
+        {
+            return false;
+        }
+
         nint creature = Odyssey.ResolveServerObject(effectiveId);
         if (creature != 0)
         {
@@ -206,6 +223,11 @@ internal sealed unsafe class LivenessReconcileController(SharedBlockView block, 
             if (!LivenessRule.CanReconcileBody((uint)*(nint*)creature, *(uint*)(creature + 4),
                 effectiveId, effectiveId == Odyssey.GetPlayerObjectId(), peerPhantom)) return false;
         }
+        if (inConversation && (hostState != LivenessHostState.Gone || creature == 0 || Odyssey.IsInAnyConversation(creature)))
+        {
+            return false;
+        }
+
         bool localResolved = creature != 0;
         bool localDead = localResolved && Odyssey.IsCreatureDead(creature);
         bool localPlot = localResolved && Odyssey.IsPlot(creature);
