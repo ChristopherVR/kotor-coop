@@ -13,6 +13,9 @@ internal static class PluginConfig
 
     public static void UseDirectory(string gameDirectory) => _directory = gameDirectory;
 
+    /// <summary>The game directory, once known (for files the plugin looks for in it).</summary>
+    public static string? Directory => _directory;
+
     /// <summary>Reads one key, or null when the file or key is absent.</summary>
     public static string? Read(string key)
     {

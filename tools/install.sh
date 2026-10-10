@@ -246,6 +246,10 @@ uninstall() {
     for f in "$game"/Override/k_coop_*; do
         [ -e "$f" ] && { rm -f "$f"; echo "removed override $f"; }
     done
+    # The stand-in's sideways stunt tracks the helper writes (StuntStandInModels): kcs0_/kcs1_ + hash.
+    for f in "$game"/Override/kcs[0-9]_????????.md[lx]; do
+        [ -e "$f" ] && { rm -f "$f"; echo "removed stand-in track $f"; }
+    done
     arena="$(arena_module)"
     [ -n "$arena" ] && { rm -f "$arena"; echo "removed arena module $arena"; }
     remove_mod_profiles
