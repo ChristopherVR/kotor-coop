@@ -307,6 +307,7 @@ see [personal-inventory.md](research/personal-inventory.md).
 | `party_pool_sync` | `2` (ON — flipped 2026-08-29) | sync the shared party item pool both ways — `0` off, `1` the disqualified op-log (kept for config compatibility), `2` the host-authoritative redesign and shipped default | [party-pool-sync.md](research/party-pool-sync.md), [shared-inventory-v2.md](research/shared-inventory-v2.md) |
 | `party_pool_trace` | OFF | rig-only per-tick diagnostics for both mode-2 shared-inventory pumps | [shared-inventory-v2.md §12](research/shared-inventory-v2.md) |
 | `store_sync` | `2` (ON — flipped 2026-08-29) | sync merchant store stock both ways — same `0`/`1`/`2` shape as `party_pool_sync` | [store-sync.md](research/store-sync.md), [shared-inventory-v2.md](research/shared-inventory-v2.md) |
+| `dismiss_load_summary` | ON | a joiner's "Item(s) Received" box that comes up right after a load or transition is clicked away for them (the items are the shared inventory putting their own gear back); the host's box is never touched | [shared-inventory-v2.md §20](research/shared-inventory-v2.md) |
 
 ### Interaction & world objects
 

@@ -84,6 +84,7 @@ internal static unsafe partial class PluginHost
         _agentLiveness = new AgentLivenessController(_view);
         _connectionIndicator = new ConnectionIndicatorController(_view);
         _minigameNotice = new MinigameNoticeController(_view);
+        _loadSummaryDismiss = new LoadSummaryDismissController(_view);
         _soloSegment = new SoloSegmentController(_view);
         DialogueNodeActionGateHook.Observer += ObserveKorribanDialogueScript;
         KorribanAreaEnterHook.Observer += ObserveKorribanAreaScript;
