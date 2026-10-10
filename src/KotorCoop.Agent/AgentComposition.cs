@@ -441,6 +441,16 @@ internal static class AgentComposition
             dispatcher.Dispatch(new CoopCommand(
                 CoopCommandKind.Connect, Address: options.HostEndPoint.ToString()));
 
+            // A host still loading answers nothing; keep dialing until it does (JoinRedial).
+            string joinAddress = options.HostEndPoint.ToString();
+            _ = Task.Run(
+                () => JoinRedial.RunAsync(
+                    manager,
+                    () => dispatcher.Dispatch(new CoopCommand(CoopCommandKind.Connect, Address: joinAddress)),
+                    SayJoin,
+                    cts.Token),
+                cts.Token);
+
             // ⚠ The CLI join does NOT arm the dispatcher's menu auto-load — that is a
             // menu-BUTTON affordance, and `--join` has always left "get into a world" to the
             // caller (`agent load`, demo.ps1's own -Save). The character-creation and co-op-
@@ -567,11 +577,12 @@ internal static class AgentComposition
 
         try
         {
+            long started = Environment.TickCount64;
             int written = StuntStandInModels.Install(installDirectory, out int stunts);
-            if (written > 0)
-            {
-                Console.WriteLine($"scene stunts: wrote {written} stand-in track file(s) for {stunts} player stunt(s) - seen from the next launch");
-            }
+            long tookMs = Environment.TickCount64 - started;
+            Console.WriteLine(written > 0
+                ? $"scene stunts: wrote {written} stand-in track file(s) for {stunts} player stunt(s) in {tookMs} ms - seen from the next launch"
+                : $"scene stunts: {stunts} player stunt(s), stand-in tracks current ({tookMs} ms)");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
