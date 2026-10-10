@@ -13,6 +13,11 @@ public sealed record SessionSettings
     /// with every arena handshake; the host's own value decides whether it can take the party there.</summary>
     public bool PvpArenaReady { get; init; }
 
+    /// <summary>True when this install could also load the arena boss when the game started: his
+    /// row in appearance.2da and his blueprint were already in place (and the arena module too).
+    /// Said to the host with the same handshake, so nobody is taken to a fight they cannot draw.</summary>
+    public bool BossReady { get; init; }
+
     public string PlayerName { get; init; } = "player";
 
     /// <summary>

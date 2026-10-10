@@ -41,7 +41,9 @@ internal sealed class PvpPump(IGameBridge bridge, ICoopSession session, Action<s
         {
             log(phase == 0
                 ? $"duel: over - releasing the pin{(session.PvpLastEnding.Length > 0 ? $" ({session.PvpLastEnding})" : string.Empty)}"
-                : $"duel: round {round} is {(phase == 2 ? "live" : "counting down")} against peer {opponent}");
+                : view.Boss
+                    ? $"duel: boss round {round} - pinned at 1 hp minimum"
+                    : $"duel: round {round} is {(phase == 2 ? "live" : "counting down")} against peer {opponent}");
         }
 
         bridge.SetPvpUi(uiFlags, uiPeer);

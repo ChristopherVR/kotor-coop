@@ -196,7 +196,9 @@ public class PvpWireTests
     [Fact]
     public void EveryNoticeCodeHasAPlainLineThatNamesThePlayer()
     {
-        foreach (PvpNoticeCode code in Enum.GetValues<PvpNoticeCode>().Where(c => c != PvpNoticeCode.None))
+        // A boss power's line depends on which power it was (PvpText.FormatBossPower; ChungusBossTests).
+        foreach (PvpNoticeCode code in Enum.GetValues<PvpNoticeCode>()
+            .Where(c => c is not (PvpNoticeCode.None or PvpNoticeCode.BossPower)))
         {
             string line = PvpText.Format(code, "Aria");
 

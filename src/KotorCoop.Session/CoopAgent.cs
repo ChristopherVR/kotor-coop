@@ -91,6 +91,7 @@ public sealed partial class CoopAgent
     private readonly DeathPump _deathPump;
     private readonly PvpPump _pvpPump;
     private readonly ArenaPump _arenaPump;
+    private readonly ChungusPump _chungusPump;
     private readonly WorldStatePump _worldStatePump;
     private readonly LocalVarPump _localVarPump;
     private readonly ScriptItemGrantPump _scriptItemGrantPump;
@@ -200,6 +201,7 @@ public sealed partial class CoopAgent
         _deathPump = new DeathPump(bridge, session, _log);
         _pvpPump = new PvpPump(bridge, session, _log);
         _arenaPump = new ArenaPump(bridge, session, _log);
+        _chungusPump = new ChungusPump(bridge, session, _log);
         _worldStatePump = new WorldStatePump(bridge, session, settings, _recentlySyncedItems);
         _localVarPump = new LocalVarPump(bridge, session, _log);
         _scriptItemGrantPump = new ScriptItemGrantPump(bridge, session, settings, _recentlySyncedItems, _log);
@@ -635,6 +637,7 @@ public sealed partial class CoopAgent
                 _bridge.ClearCoopState();
                 _pvpPump.Reset();
                 _arenaPump.Reset();
+                _chungusPump.Reset();
                 if (_session.HostAway)
                 {
                     // Same release, truthful wording: the link is fine, the host is parked at
@@ -840,6 +843,7 @@ public sealed partial class CoopAgent
         // the wipe vote reads the same round (a duel defeat is never a campaign wipe).
         _pvpPump.Pump();
         _arenaPump.Pump(local);
+        _chungusPump.Pump(local);
         _deathPump.PumpDeath(local, peers);
 
         // Client-only, every tick: keep the player's input locked to their own PC (a cheap id

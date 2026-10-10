@@ -54,6 +54,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\CompanionHealSampleRule.cs" Link="Plugin\CompanionHealSampleRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\MirrorHealthRule.cs" Link="Plugin\MirrorHealthRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\EnemyScalingRule.cs" Link="Plugin\EnemyScalingRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\ChungusRule.cs" Link="Plugin\ChungusRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\CreatureObjectTableRule.cs" Link="Plugin\CreatureObjectTableRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\DownBlock.cs" Link="Plugin\DownBlock.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\Vec3.cs" Link="Plugin\Vec3.cs" />

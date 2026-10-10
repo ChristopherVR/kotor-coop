@@ -31,6 +31,34 @@ public static class PvpText
     /// <summary>The line a notice becomes. <paramref name="otherName"/> is the player the notice
     /// is about (<see cref="PvpNotice.Other"/>); <paramref name="aboutSelf"/> is true when that
     /// player is the reader (the "you are too hurt" case).</summary>
+    public const string BossNotInstalledLine =
+        "Chungus is not installed in this game yet. Run the kotor-coop setup again, then restart the game.";
+
+    public const string BossUsageLine =
+        "chungus takes every player to the arena to fight Chungus together. Type yield to call it off.";
+
+    /// <summary>The line for one of the boss's powers. <paramref name="targetName"/> is who it is
+    /// aimed at ("you" for the reader); it is ignored by the powers that hit everyone.</summary>
+    public static string FormatBossPower(BossCue cue, string targetName, bool aimedAtReader) => cue.Power switch
+    {
+        BossPower.Snap => "Chungus snaps his fingers. Everyone loses half their health.",
+        BossPower.Blast => aimedAtReader
+            ? "Chungus fires the Power Stone at you."
+            : $"Chungus fires the Power Stone at {targetName}.",
+        BossPower.Lift => "Chungus bends space. Everyone is lifted off the floor.",
+        BossPower.Gizka => aimedAtReader
+            ? "Chungus rewrites reality. You are a gizka for a while."
+            : $"Chungus rewrites reality. {targetName} is a gizka for a while.",
+        BossPower.Fright => "Chungus stares into your minds. Everyone is frightened.",
+        BossPower.Drain => aimedAtReader
+            ? "Chungus grips your soul and heals himself."
+            : $"Chungus grips {targetName}'s soul and heals himself.",
+        BossPower.Slow => "Chungus slows time. Everyone moves at half speed.",
+        BossPower.Entrance => "Chungus has arrived.",
+        BossPower.Defeat => "Chungus falls over.",
+        _ => string.Empty,
+    };
+
     public static string Format(PvpNoticeCode code, string otherName, bool aboutSelf = false) => code switch
     {
         PvpNoticeCode.ChallengeSent =>
@@ -85,6 +113,26 @@ public static class PvpText
             "The arena fight is over. Taking everyone back to where they were. Hold on.",
         PvpNoticeCode.ArenaFailed =>
             $"Getting everyone into the arena took too long, so the fight with {otherName} was called off. Nothing was lost.",
+        PvpNoticeCode.BossEntering => aboutSelf
+            ? "You called for Chungus. Moving everyone to the arena now. Type yield to call it off."
+            : $"{otherName} called for Chungus. Moving everyone to the arena now. Type yield to call it off.",
+        PvpNoticeCode.BossNotReady => aboutSelf
+            ? "You cannot go to the arena right now. Finish what you are doing, stand with the host, and make sure the arena is installed (run the kotor-coop setup again)."
+            : $"{otherName} cannot go to the arena right now. They have to be in the host's area, not in a conversation, and have the arena installed.",
+        PvpNoticeCode.BossHostOnly =>
+            $"Only {otherName}, the host, can call for Chungus here. The host can let everyone do it with pvp = arena.",
+        PvpNoticeCode.BossCountdown =>
+            "Chungus arrives in 5. Nobody can die in this fight. Type yield at any time to stop.",
+        PvpNoticeCode.BossStarted => "Fight! Beat Chungus before he beats all of you.",
+        PvpNoticeCode.BossWon =>
+            "Chungus is beaten. You are back to how you were before the fight. Nothing was lost.",
+        PvpNoticeCode.BossLost =>
+            "Chungus beat everyone. You are back to how you were before the fight. Nothing was lost.",
+        PvpNoticeCode.BossCancelled => otherName.Length == 0 || otherName == "Someone"
+            ? "The fight with Chungus was called off. Nothing was lost."
+            : $"{otherName} called off the fight with Chungus. Nothing was lost.",
+        PvpNoticeCode.BossTimedOut =>
+            "The fight with Chungus went on too long, so it was called off. Nothing was lost.",
         _ => string.Empty,
     };
 }

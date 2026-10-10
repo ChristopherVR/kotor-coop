@@ -65,6 +65,10 @@ public sealed partial class CoopHost : ICoopSession
         /// (<see cref="PvpOp.AwareArena"/>, every two seconds).</summary>
         public long PvpArenaAwareUntilMs;
 
+        /// <summary>Until when this peer counts as able to load the arena boss: said in the same
+        /// handshake as the arena (bit 0 of the word a request would carry its target in).</summary>
+        public long BossAwareUntilMs;
+
         /// <summary>The last duel request serial acted on, so the repeats of one request do
         /// nothing. Wrap-safe compare; see <c>HandlePvpIntent</c>.</summary>
         public uint PvpLastSerial;

@@ -38,6 +38,20 @@ public enum PvpOp : byte
     /// that only ever says <see cref="Aware"/> (or is an older build) is turned away from an
     /// arena challenge with "does not have the arena".</summary>
     AwareArena = 9,
+
+    /// <summary><c>chungus</c>: take every player to the arena to fight the boss together
+    /// (docs/research/chungus-boss.md). No target.</summary>
+    Chungus = 10,
+}
+
+/// <summary>What else a game says about itself in an <see cref="PvpOp.Aware"/> /
+/// <see cref="PvpOp.AwareArena"/> packet, in the word a request would carry its target in (an
+/// older build always sends 0 there).</summary>
+public static class PvpAwareBits
+{
+    /// <summary>This game can load the arena boss (his model and blueprint were installed when
+    /// it started).</summary>
+    public const uint Boss = 1;
 }
 
 /// <summary>Where the host's single duel round is.</summary>
@@ -161,6 +175,41 @@ public enum PvpNoticeCode : byte
 
     /// <summary>To both: getting everyone into the arena took too long; called off.</summary>
     ArenaFailed = 29,
+
+    /// <summary>To everyone: the boss fight was asked for and the party is on the way to the arena.
+    /// <c>Other</c> is the player who asked.</summary>
+    BossEntering = 30,
+
+    /// <summary>To the asker: the boss fight cannot start; <c>Other</c> is the player who is
+    /// missing the arena, busy, or in another area than the host.</summary>
+    BossNotReady = 31,
+
+    /// <summary>To the asker: only the host may start the boss fight in this session.</summary>
+    BossHostOnly = 32,
+
+    /// <summary>To everyone: the countdown before the boss appears.</summary>
+    BossCountdown = 33,
+
+    /// <summary>To everyone: the boss is in the ring.</summary>
+    BossStarted = 34,
+
+    /// <summary>To everyone: the boss was beaten.</summary>
+    BossWon = 35,
+
+    /// <summary>To everyone: every player was beaten down at once.</summary>
+    BossLost = 36,
+
+    /// <summary>To everyone: the fight was called off; <c>Other</c> is who stopped it (0 when
+    /// it ended by itself).</summary>
+    BossCancelled = 37,
+
+    /// <summary>To everyone: the fight ran out of time.</summary>
+    BossTimedOut = 38,
+
+    /// <summary>To everyone (<c>ForPeer</c> 0): the boss uses a power. <c>Other</c> packs which
+    /// power, who it is aimed at and how hard it lands (<c>BossCue</c>). Each game plays the
+    /// sound and applies the result to its own character.</summary>
+    BossPower = 39,
 }
 
 /// <summary>One message for one player. <paramref name="Serial"/> numbers them in the host's
@@ -179,10 +228,12 @@ public sealed record PvpIntentPacket(uint HostSessionId, uint OriginPeerId, uint
 /// their own game from the phase (pin, snapshot, hostile body, restore) and show a notice once
 /// per serial. <paramref name="Arena"/> says the round is fought in the arena module (appended
 /// after the notices; an older sender simply omits it, which reads as a plain duel).
+/// <paramref name="Boss"/> says the round is the boss fight: every player takes part, on one
+/// side (it rides in the same trailing byte).
 /// </summary>
 public sealed record PvpStatePacket(
     uint HostSessionId, PvpPhase Phase, uint RoundId, uint Challenger, uint Target,
-    IReadOnlyList<PvpNotice> Notices, bool Arena = false)
+    IReadOnlyList<PvpNotice> Notices, bool Arena = false, bool Boss = false)
 {
     public const int MaxNotices = 8;
 }

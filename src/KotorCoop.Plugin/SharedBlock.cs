@@ -1563,4 +1563,10 @@ internal partial struct SharedBlock
 
     /// <summary>Security skill on a locked door (native UnlockObject input). See IGameBridge.</summary>
     public const uint CheatKindUnlockDoor = 111;
+
+    /// <summary>The arena boss (docs/research/chungus-boss.md): spawn him, start one of his
+    /// powers, land it, remove him. What is asked rides in the amount (ChungusRule.Op*), the
+    /// power and its strength in the target word, a spawn point in the position. See
+    /// CheatController.Chungus.cs.</summary>
+    public const uint CheatKindChungus = 112;
 }

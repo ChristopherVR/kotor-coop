@@ -1,3 +1,4 @@
+using KotorCoop.Memory;
 using KotorCoop.Protocol;
 using KotorCoop.Session;
 
@@ -82,6 +83,77 @@ public sealed partial class CoopCommandDispatcher
         session.RequestPvp(PvpOp.ChallengeArena, target.PeerId);
     }
 
+    /// <summary><c>chungus</c>: asks the host to take everyone to the arena for the boss fight.
+    /// The host's answer (who is not ready, or "moving everyone now") comes back as a line.</summary>
+    private void ChungusCommand(CoopCommand command)
+    {
+        if (command.Address is { Length: > 0 } piece)
+        {
+            ChungusStaging(piece, command);
+            return;
+        }
+
+        if (manager.Current is not { } session)
+        {
+            Reply("not connected - start or join a game first, then call for Chungus");
+            return;
+        }
+
+        if (!session.BossReady)
+        {
+            Reply(PvpText.BossNotInstalledLine);
+            return;
+        }
+
+        session.RequestPvp(PvpOp.Chungus);
+    }
+
+    /// <summary>The staging forms: one piece of the boss, on this game only, no session needed.</summary>
+    private void ChungusStaging(string piece, CoopCommand command)
+    {
+        switch (piece)
+        {
+            case "spawn":
+                if (!bridge.TryReadLocalState(out PlayerState local))
+                {
+                    Reply("no player loaded - load a save first");
+                    return;
+                }
+
+                SendCheat(new CheatRequest(
+                    CheatKinds.Chungus, Amount: ChungusCheat.OpSpawn,
+                    X: local.Position.X + 4f, Y: local.Position.Y, Z: local.Position.Z));
+                break;
+
+            case "remove":
+                SendCheat(new CheatRequest(CheatKinds.Chungus, Amount: ChungusCheat.OpDespawn));
+                break;
+
+            case "anim":
+                SendCheat(new CheatRequest(CheatKinds.Chungus, Target: (uint)command.Amount, Amount: ChungusCheat.OpAnimation));
+                break;
+
+            case "sound":
+                SendCheat(new CheatRequest(CheatKinds.Chungus, Amount: ChungusCheat.OpSound, Text: command.Password ?? string.Empty));
+                break;
+
+            case "power":
+            {
+                BossCue cue = new((BossPower)command.Amount, BossPowers.Strength((BossPower)command.Amount), 0);
+                if (!cue.IsKnown)
+                {
+                    Reply("chungus power takes a number from 1 to 9");
+                    return;
+                }
+
+                uint word = ChungusCheat.Word(cue, hitsLocalPlayer: true, isHost: true);
+                SendCheat(new CheatRequest(CheatKinds.Chungus, Target: word, Amount: ChungusCheat.OpWindUp));
+                SendCheat(new CheatRequest(CheatKinds.Chungus, Target: word, Amount: ChungusCheat.OpLand));
+                break;
+            }
+        }
+    }
+
     private void DuelAnswerCommand(PvpOp op)
     {
         if (manager.Current is not { } session)
@@ -112,6 +184,19 @@ public sealed partial class CoopCommandDispatcher
         IReadOnlyList<RemotePeer> peers = session.GetRemotePeers();
         foreach (PvpNotice notice in notices)
         {
+            if (notice.Code == PvpNoticeCode.BossPower)
+            {
+                BossCue cue = BossCue.Unpack(notice.Other);
+                string target = peers.FirstOrDefault(p => p.PeerId == cue.TargetPeer)?.Name ?? "someone";
+                string said = PvpText.FormatBossPower(cue, target, aimedAtReader: cue.TargetPeer == session.LocalPeerId);
+                if (said.Length > 0)
+                {
+                    Reply(said);
+                }
+
+                continue;
+            }
+
             string name = notice.Other == session.LocalPeerId
                 ? session.LocalName
                 : peers.FirstOrDefault(p => p.PeerId == notice.Other)?.Name ?? "Someone";

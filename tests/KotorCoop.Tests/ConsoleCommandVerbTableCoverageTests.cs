@@ -127,6 +127,7 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.JediChoice] = "jedichoice",
         [CoopCommandKind.Duel] = "duel Aria",
         [CoopCommandKind.DuelArena] = "arena Aria",
+        [CoopCommandKind.Chungus] = "chungus",
         [CoopCommandKind.DuelAccept] = "accept",
         [CoopCommandKind.DuelDecline] = "decline",
         [CoopCommandKind.DuelYield] = "yield",
