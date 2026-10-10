@@ -125,6 +125,7 @@ internal static unsafe partial class PluginHost
     private static AgentLivenessController? _agentLiveness;
     private static ConnectionIndicatorController? _connectionIndicator;
     private static MinigameNoticeController? _minigameNotice;
+    private static LoadSummaryDismissController? _loadSummaryDismiss;
     private static SoloSegmentController? _soloSegment;
     private static SoloSegmentSpectateController? _soloSegmentSpectate;
     private static MinigameLockController? _minigameLock;

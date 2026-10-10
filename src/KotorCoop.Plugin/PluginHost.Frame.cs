@@ -960,6 +960,9 @@ internal static unsafe partial class PluginHost
                 // to show a line — it never drives, spawns or destroys anything itself.
                 _minigameNotice?.OnFrame();
 
+                // A joiner's post-load "Item(s) Received" box, clicked away. See the controller.
+                _loadSummaryDismiss?.OnFrame();
+
                 _items?.OnFrame();
             }
             finally

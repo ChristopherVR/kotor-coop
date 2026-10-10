@@ -2867,3 +2867,18 @@ unpauses and resets the input class) plus `Odyssey.RestoreGameInputClass` after 
 plugin-forced close; `CloseFullScreenGuiForcibly` uses both. Full write-up, disassembly and the
 two live runs: docs/research/galaxy-map-and-party-select.md, the 2026-09-03 "LIVE, both
 directions" section. `popmodal`/`closegui` remain as the fallback and as staging verbs.
+
+## 2026-10-11 — the joiner's "Item(s) Received" box is now clicked away after a world change
+
+The box players reported after a host reload, a rejoin and an arena return is this Status
+Summary. Items a script hands the player outside a conversation arm it: a `giveloot` on the
+joiner raised it at once, on the K1 Full build. After a world change the shared inventory hands
+the joiner's items back that same way, so the joiner stood paused behind a list of items it
+already had. `LoadSummaryDismissController` now presses the box's own OK
+(`Odyssey.DismissStatusSummary`) on a joiner when the box comes up within 60 s of the world epoch
+moving and has been on screen for 750 ms. The host's box is left alone (coop.ini
+`dismiss_load_summary`, default ON). The 60 s window is set by a measurement: the epoch moves when
+the joiner's load starts and the box came 23 s later, at the end of the load. Live: a joiner
+`giveloot` followed by a host `loadgame` gave `load summary: ... came up 22985 ms after the world
+changed - dismissed`, with the input class back to 0. Two arena rounds on the same build raised no
+box at all.
