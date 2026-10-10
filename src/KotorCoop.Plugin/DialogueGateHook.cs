@@ -389,6 +389,18 @@ internal static unsafe class DialogueGateHook
                 return 0;
             }
 
+            // Or the scene's own owner standing right by this game's copy of the peer's partner,
+            // when neither side names a dialogue file: the Star Forge's Carth speaks his lines
+            // after the Bastila fight through the invisible sta_invis_bastila, 6 m from him, with
+            // the default conversation (2026-10-10: refused here, joined only on the engine's
+            // retry 4 s later). A different conversation that slips through this way is the
+            // lost race the follow machine already yields.
+            if (TargetNearPeersPartner(target))
+            {
+                _joinsAllowed++;
+                return 0;
+            }
+
             CaptureBlockedTarget(target);
             _blockedCount++;
             return 1;
@@ -495,6 +507,40 @@ internal static unsafe class DialogueGateHook
     /// partner. Raw reads with hard bounds — this runs on the engine's thread from a click,
     /// where a fault would be the game closing rather than an exception.
     /// </summary>
+    /// <summary>How near the peer's partner a scene's owner object must stand to count as the
+    /// same scene.</summary>
+    private const float SameSceneRadius = 10f;
+
+    private static bool TargetNearPeersPartner(nint target)
+    {
+        if (PeerPartnerTag == 0 || target is <= 0x10000 or >= 0x7FFF_0000)
+        {
+            return false;
+        }
+
+        Vec3 at = Odyssey.GetPosition(target);
+        const int Capacity = 512;
+        nint* creatures = stackalloc nint[Capacity];
+        int count = Odyssey.CollectCreaturesByObjectTable(creatures, Capacity);
+        for (int i = 0; i < count; i++)
+        {
+            if (creatures[i] == target || !TargetIsPeersPartner(creatures[i]))
+            {
+                continue;
+            }
+
+            Vec3 partner = Odyssey.GetPosition(creatures[i]);
+            float dx = partner.X - at.X;
+            float dy = partner.Y - at.Y;
+            if ((dx * dx) + (dy * dy) <= SameSceneRadius * SameSceneRadius)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static bool TargetIsPeersPartner(nint target)
     {
         nint expected = PeerPartnerTag;

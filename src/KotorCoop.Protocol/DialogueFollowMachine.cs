@@ -252,6 +252,49 @@ public sealed class DialogueFollowMachine(DialogueFollowTimings timings)
 
     private long _nextYieldCloseMs;
     private int _yieldCloseAttempts;
+
+    // ⚠ The owner's end is closed through, not just once. The polite close does not always
+    // take: on the Star Forge the joiner's copy of Carth's post-fight conversation stayed open
+    // on its last reply after the host's ended, and a joiner in a conversation never follows a
+    // level change, so the host went on to the ending alone (2026-10-11). Escalated exactly
+    // like a yield, but only for a short window after the owner's end, so a conversation the
+    // player starts afterwards is never touched.
+    private long? _ownerEndedAtMs;
+    private int _ownerEndedCloses;
+    private long _nextOwnerEndedCloseMs;
+
+    /// <summary>A new world: nothing of the last conversation is left to chase.</summary>
+    public void ForgetOwnerEnded() => _ownerEndedAtMs = null;
+
+    /// <summary>How long after the owner's end its conversation is still chased shut here.</summary>
+    public const long OwnerEndedCloseWindowMs = 12_000;
+
+    private DialogueFollowAction CloseAfterOwnerEnded(in DialogueFollowInputs input)
+    {
+        if (_ownerEndedAtMs is not long endedAt)
+        {
+            return DialogueFollowAction.None;
+        }
+
+        if (!input.LocalConversation || input.NowMs - endedAt > OwnerEndedCloseWindowMs)
+        {
+            _ownerEndedAtMs = null;
+            return DialogueFollowAction.None;
+        }
+
+        if (input.NowMs < _nextOwnerEndedCloseMs)
+        {
+            return DialogueFollowAction.None;
+        }
+
+        _ownerEndedCloses++;
+        _nextOwnerEndedCloseMs = input.NowMs + _t.YieldCloseRetryMs;
+        return _ownerEndedCloses <= _t.YieldCloseServerAttempts
+            ? DialogueFollowAction.CloseConversation
+            : _ownerEndedCloses <= _t.YieldClearActionsAttempts
+                ? DialogueFollowAction.ForceCloseUi
+                : DialogueFollowAction.ForceCloseUiAndClearActions;
+    }
     private long _nextUnstickMs;
     private long _backoffUntilMs;
 
@@ -293,10 +336,15 @@ public sealed class DialogueFollowMachine(DialogueFollowTimings timings)
         {
             bool wasFollowing = IsFollowing;
             Reset();
-            return new DialogueFollowDecision(
-                State,
-                wasFollowing ? DialogueFollowAction.CloseConversation : DialogueFollowAction.None,
-                wasFollowing ? DialogueFollowNote.OwnerEnded : DialogueFollowNote.None);
+            if (wasFollowing)
+            {
+                _ownerEndedAtMs = input.NowMs;
+                _ownerEndedCloses = 1;
+                _nextOwnerEndedCloseMs = input.NowMs + _t.YieldCloseRetryMs;
+                return new DialogueFollowDecision(State, DialogueFollowAction.CloseConversation, DialogueFollowNote.OwnerEnded);
+            }
+
+            return new DialogueFollowDecision(State, CloseAfterOwnerEnded(input), DialogueFollowNote.None);
         }
 
         if (IsFollowing)

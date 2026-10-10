@@ -154,6 +154,7 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
     public void Invalidate()
     {
         _machine.Reset();
+        _machine.ForgetOwnerEnded();
         _nodes.Reset();
 
         _hadDialogue = false;
