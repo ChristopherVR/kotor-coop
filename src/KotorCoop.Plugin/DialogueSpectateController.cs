@@ -205,6 +205,7 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         DialogueSkipHook.AllowSkips();
         DialogueGateHook.ReleaseForPeer();
         DialogueGateHook.PeerPartnerTag = 0;
+        DialogueGateHook.PeerDialogResref = 0;
     }
 
     public void OnFrame()
@@ -246,6 +247,7 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
             DialogueSkipHook.AllowSkips();
             DialogueGateHook.ReleaseForPeer();
             DialogueGateHook.PeerPartnerTag = 0;
+            DialogueGateHook.PeerDialogResref = 0;
             block.LocalDialogueReplySerial = DialogueReplyHook.Sequence;
             return;
         }
@@ -553,7 +555,9 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
         {
             _seenBlocked = DialogueGateHook.BlockedCount;
             _blockedNoticeUntilMs = Environment.TickCount64 + 2500;
-            LogFew("dialogue: blocked a local conversation start; a peer holds the token");
+            LogFew("dialogue: blocked a local conversation start; a peer holds the token "
+                + $"(ours: on '{DialogueGateHook.LastBlockedTargetTag}', file '{DialogueGateHook.LastStartResrefText}'; "
+                + $"peer's: partner '{Ascii(block.RemoteDialoguePartnerTag, 32)}', file '{Ascii(block.RemoteDialogueResref, 16)}')");
         }
 
         // Diagnostic for the joiner-cannot-talk defect: does the engine reach StartDialog at
@@ -631,11 +635,13 @@ internal sealed unsafe class DialogueSpectateController(SharedBlockView block)
 
             // A pointer into the shared block, which outlives every frame.
             DialogueGateHook.PeerPartnerTag = (nint)block.RemoteDialoguePartnerTag;
+            DialogueGateHook.PeerDialogResref = *block.RemoteDialogueResref != 0 ? (nint)block.RemoteDialogueResref : 0;
         }
         else
         {
             DialogueGateHook.ReleaseForPeer();
             DialogueGateHook.PeerPartnerTag = 0;
+            DialogueGateHook.PeerDialogResref = 0;
         }
 
         // The two engine reads the machine needs, taken once. IsConversationActive is the raw

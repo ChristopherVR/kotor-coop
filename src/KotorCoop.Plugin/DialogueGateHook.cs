@@ -250,6 +250,39 @@ internal static unsafe class DialogueGateHook
     /// </summary>
     public static volatile nint PeerPartnerTag;
 
+    /// <summary>The dialogue file of the peer's conversation, as a pointer into the shared block,
+    /// or null; set alongside <see cref="PeerPartnerTag"/>.</summary>
+    public static volatile nint PeerDialogResref;
+
+    /// <summary>Whether the conversation starting now is the peer's dialogue file. Called after
+    /// <see cref="LastStartResref"/> was read for this start.</summary>
+    private static bool StartResrefIsPeers()
+    {
+        nint expected = PeerDialogResref;
+        if (expected == 0 || LastStartResref[0] == 0)
+        {
+            return false;
+        }
+
+        byte* want = (byte*)expected;
+        for (int i = 0; i < LastStartResref.Length; i++)
+        {
+            byte a = LastStartResref[i];
+            byte w = want[i];
+            if (Lower(a) != Lower(w))
+            {
+                return false;
+            }
+
+            if (a == 0)
+            {
+                return true;
+            }
+        }
+
+        return true;
+    }
+
     /// <summary>CSWSObject + this = the object's tag (CExoString: char* @0, length @4).</summary>
     private const int ObjTag = 0x18;
 
@@ -344,6 +377,19 @@ internal static unsafe class DialogueGateHook
                 return 0;
             }
 
+            // The same conversation, started on the object that owns it rather than on the NPC
+            // the peer is talking to: a scene's conversation can hang off an invisible
+            // placeholder (the Star Forge's sta_invis_bastila) while the peer's partner tag names
+            // Carth. Both games starting the same dialogue file is the adopt case, not a
+            // competing conversation (2026-10-10: Carth's lines after the Bastila fight were
+            // refused on the joiner and played on the host alone).
+            if (StartResrefIsPeers())
+            {
+                _joinsAllowed++;
+                return 0;
+            }
+
+            CaptureBlockedTarget(target);
             _blockedCount++;
             return 1;
         }
@@ -484,6 +530,48 @@ internal static unsafe class DialogueGateHook
 
         // Both must end together: "carth" must not match "carthx".
         return want[length] == 0;
+    }
+
+    private static readonly byte[] BlockedTargetTag = new byte[33];
+
+    /// <summary>The tag of the object the last refused start was on, for the frame-hook log.</summary>
+    public static string LastBlockedTargetTag
+    {
+        get
+        {
+            int n = 0;
+            while (n < BlockedTargetTag.Length && BlockedTargetTag[n] != 0) n++;
+            return System.Text.Encoding.ASCII.GetString(BlockedTargetTag, 0, n);
+        }
+    }
+
+    /// <summary>The last start's dialogue file, for the frame-hook log.</summary>
+    public static string LastStartResrefText
+    {
+        get
+        {
+            int n = 0;
+            while (n < LastStartResref.Length && LastStartResref[n] != 0) n++;
+            return System.Text.Encoding.ASCII.GetString(LastStartResref, 0, n);
+        }
+    }
+
+    private static void CaptureBlockedTarget(nint target)
+    {
+        Array.Clear(BlockedTargetTag);
+        if (target is <= 0x10000 or >= 0x7FFF_0000)
+        {
+            return;
+        }
+
+        nint chars = *(nint*)(target + ObjTag);
+        int length = *(int*)(target + ObjTag + 4);
+        if (chars is <= 0x10000 or >= 0x7FFF_0000 || length is <= 0 or > MaxTagBytes)
+        {
+            return;
+        }
+
+        CreatureFinder.TryReadSelf(chars, (byte*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref BlockedTargetTag[0]), Math.Min(length, BlockedTargetTag.Length - 1));
     }
 
     private static byte Lower(byte c) => c is >= (byte)'A' and <= (byte)'Z' ? (byte)(c + 32) : c;
