@@ -139,6 +139,10 @@ internal static unsafe class AgentLauncher
     /// </summary>
     public static string? StartupFailure { get; private set; }
 
+    /// <summary>True once this launcher has started the agent process (see
+    /// <see cref="_startedGameDirectory"/>).</summary>
+    public static bool StartedAgent => _startedGameDirectory is not null;
+
     /// <summary>
     /// Launches the agent for this process, once. Safe to call from plugin startup on the
     /// game thread: CreateProcess returns immediately and both handles are closed. A later

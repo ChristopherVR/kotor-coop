@@ -93,6 +93,12 @@ internal sealed unsafe class AgentLivenessController(SharedBlockView block)
             AgentLivenessState.NeverLive when AgentLauncher.StartupFailure is { } reason =>
                 $"co-op agent did not start: {reason}",
 
+            // The agent we started has not beaten yet: it checks the game files before it
+            // answers anything, and the menu's Host and Connect wait for it. Without this line
+            // a click there looked ignored (beta 2, 2026-10-11).
+            AgentLivenessState.NeverLive when AgentLauncher.StartedAgent =>
+                "co-op helper is starting (checking game files) - Host and Connect will answer in a moment",
+
             _ => null,
         };
 
