@@ -517,6 +517,7 @@ public static partial class PackageInstaller
 
         InstallArena(game, log);
         InstallBoss(game, log);
+        PrimeContentCache(game, log);
 
         // coop.ini is the player's own config once it exists; never clobber it.
         string iniSource = Path.Combine(package, "coop.ini");
@@ -542,6 +543,19 @@ public static partial class PackageInstaller
         log(string.Empty);
         log("checking the install...");
         return Check(game, log);
+    }
+
+    /// <summary>
+    /// Hashes the game's files once now, into <see cref="ModContentManifest.CacheFileName"/>, so
+    /// the helper the game starts answers the menu's Host and Connect at once instead of reading
+    /// several GB first. Last of the file steps, after everything setup writes into the game.
+    /// </summary>
+    private static void PrimeContentCache(string game, Action<string> log)
+    {
+        log("checking the game files for the mod-compatibility check (only slow the first time)...");
+        var watch = Stopwatch.StartNew();
+        ModContentManifest manifest = ModContentManifest.Compute(game);
+        log($"checked {manifest.Files.Count} game files in {watch.Elapsed.TotalSeconds:0} s");
     }
 
     /// <summary>
@@ -888,7 +902,7 @@ public static partial class PackageInstaller
             log($"restored the other mod's dinput8.dll from {PreviousFileName}");
         }
 
-        foreach (string name in new[] { "kotorcoop-plugin.log", "dinput8-chain.log", "kotorcoop-last-address.txt" })
+        foreach (string name in new[] { "kotorcoop-plugin.log", "dinput8-chain.log", "kotorcoop-last-address.txt", ModContentManifest.CacheFileName })
         {
             string logFile = Path.Combine(game, name);
             if (File.Exists(logFile))

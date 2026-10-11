@@ -123,3 +123,27 @@ internal static partial class NativeMethods
         out ModuleInformation moduleInfo,
         uint size);
 }
+
+/// <summary>FILE_BASIC_INFO. <see cref="ChangeTime"/> moves on any write to the file's data or
+/// metadata, including a tool putting the write time back, which is why the content cache keys on
+/// it (ModContentManifest).</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct FileBasicInfo
+{
+    public long CreationTime;
+    public long LastAccessTime;
+    public long LastWriteTime;
+    public long ChangeTime;
+    public uint FileAttributes;
+}
+
+internal static partial class NativeMethods
+{
+    /// <summary>FILE_INFO_BY_HANDLE_CLASS.FileBasicInfo.</summary>
+    internal const int FileBasicInfoClass = 0;
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool GetFileInformationByHandleEx(
+        Microsoft.Win32.SafeHandles.SafeFileHandle file, int informationClass, out FileBasicInfo information, uint size);
+}

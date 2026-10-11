@@ -76,6 +76,31 @@ public sealed class ModSupportTests : IDisposable
     }
 
     [Fact]
+    public void AnUnchangedFileReusesItsCachedHashAndAChangedOneIsHashedAgain()
+    {
+        // The helper used to re-read every game file at each start (minutes on a full install)
+        // before the menu's Host button did anything; the cache keys each hash on size and write time.
+        Directory.CreateDirectory(Path.Combine(_directory, "Override"));
+        string script = Path.Combine(_directory, "Override", "recruit.ncs");
+        File.WriteAllText(script, "script A");
+        DateTime written = new(2026, 10, 11, 9, 0, 0, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(script, written);
+        var first = ModContentManifest.Compute(_directory);
+        Assert.True(File.Exists(Path.Combine(_directory, ModContentManifest.CacheFileName)));
+
+        // Same size and time: the cached hash is used, so a planted stale entry shows through.
+        string cachePath = Path.Combine(_directory, ModContentManifest.CacheFileName);
+        string realSha = first.Files.Single().Sha256;
+        string fakeSha = new('A', 64);
+        File.WriteAllText(cachePath, File.ReadAllText(cachePath).Replace(realSha, fakeSha));
+        Assert.Equal(fakeSha, ModContentManifest.Compute(_directory).Files.Single().Sha256);
+
+        // A new write time means the file is read again.
+        File.SetLastWriteTimeUtc(script, written.AddSeconds(5));
+        Assert.Equal(realSha, ModContentManifest.Compute(_directory).Files.Single().Sha256);
+    }
+
+    [Fact]
     public void TheGeneratedArenaModuleIsNotPartOfTheContentOrGameplayDigest()
     {
         // A gameplay mismatch switches off unsafe replication, so a player who has the generated

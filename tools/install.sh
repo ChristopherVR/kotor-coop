@@ -237,6 +237,7 @@ uninstall() {
     for f in kotorcoop-plugin.log dinput8-chain.log kotorcoop-last-address.txt; do
         [ -f "$game/$f" ] && { rm -f "$game/$f"; echo "removed $game/$f"; }
     done
+    [ -e "$game/kotorcoop-content.cache" ] && { rm -f "$game/kotorcoop-content.cache"; echo "removed $game/kotorcoop-content.cache"; }
     for f in "$game"/kotorcoop-agent*.log*; do
         [ -e "$f" ] && { rm -f "$f"; echo "removed $f"; }
     done

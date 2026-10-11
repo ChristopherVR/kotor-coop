@@ -19,8 +19,17 @@ public sealed record ModContentManifest(IReadOnlyList<ModContentFile> Files, IRe
         ".bik", ".avi", ".mve", ".mpg", ".mp4", ".wmv", ".wav", ".mp3", ".wma", ".ogg", ".flac", ".lip", ".mod",
     };
 
+    /// <summary>Beside the game: each hashed file's size, write time and SHA-256, so an unchanged
+    /// file is not read again. Without it every helper start re-read the whole install (BIFs,
+    /// movies, music, voice: several GB) before it answered the game at all, and the menu's Host
+    /// and Connect buttons waited 2-4 minutes with nothing on screen (beta 2, 2026-10-11). Setup
+    /// fills it, so the first game start is quick too. A file whose size, write time or change time
+    /// moved is hashed again, so an in-place edit that puts the write time back still shows.</summary>
+    public const string CacheFileName = "kotorcoop-content.cache";
+
     public static ModContentManifest Compute(string gameDirectory)
     {
+        var cache = HashCache.Load(Path.Combine(gameDirectory, CacheFileName));
         var files = new List<ModContentFile>();
         var errors = new List<string>();
         var hashedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -131,6 +140,7 @@ public sealed record ModContentManifest(IReadOnlyList<ModContentFile> Files, IRe
             }
         }
         files.Sort(static (a, b) => StringComparer.Ordinal.Compare(a.Path, b.Path));
+        cache.SaveIfChanged();
         return new(files, errors);
 
         void WalkMedia(string directory)
@@ -168,9 +178,18 @@ public sealed record ModContentManifest(IReadOnlyList<ModContentFile> Files, IRe
                 using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 128 * 1024, FileOptions.SequentialScan);
                 long size = stream.Length;
                 long modified = File.GetLastWriteTimeUtc(path).Ticks;
-                string sha = Convert.ToHexString(SHA256.HashData(stream));
-                if (stream.Length != size || File.GetLastWriteTimeUtc(path).Ticks != modified)
-                    throw new IOException("file changed during hashing; retry after mod installation finishes");
+                // The write time alone can be put back by a tool after an in-place edit; the
+                // change time cannot, so the cache only trusts an entry that matches both.
+                long changed = NativeMethods.GetFileInformationByHandleEx(
+                    stream.SafeFileHandle, NativeMethods.FileBasicInfoClass, out FileBasicInfo basic,
+                    (uint)System.Runtime.InteropServices.Marshal.SizeOf<FileBasicInfo>()) ? basic.ChangeTime : 0;
+                if (changed == 0 || !cache.TryGet(name, size, modified, changed, out string sha))
+                {
+                    sha = Convert.ToHexString(SHA256.HashData(stream));
+                    if (stream.Length != size || File.GetLastWriteTimeUtc(path).Ticks != modified)
+                        throw new IOException("file changed during hashing; retry after mod installation finishes");
+                    if (changed != 0) cache.Put(name, size, modified, changed, sha);
+                }
                 files.Add(new(name, size, sha, gameplay));
                 fileSnapshots.Add((path, size, modified));
             }
@@ -202,3 +221,78 @@ public sealed record ModContentManifest(IReadOnlyList<ModContentFile> Files, IRe
 }
 
 public sealed record ModContentFile(string Path, long Size, string Sha256, bool Gameplay);
+
+/// <summary><see cref="ModContentManifest.CacheFileName"/>: one line per file, path, size, write
+/// time (UTC ticks), NTFS change time and SHA-256, tab separated. Only entries this run looked at are written back,
+/// so removed files drop out. An unreadable or unwritable cache only costs the re-hash.</summary>
+internal sealed class HashCache
+{
+    private const string Header = "kotorcoop-content-cache 2";
+    private const char Separator = (char)9;
+    private readonly string _path;
+    private readonly Dictionary<string, (long Size, long Modified, long Changed, string Sha)> _old = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, (long Size, long Modified, long Changed, string Sha)> _seen = new(StringComparer.OrdinalIgnoreCase);
+    private bool _changed;
+
+    private HashCache(string path) => _path = path;
+
+    public static HashCache Load(string path)
+    {
+        var cache = new HashCache(path);
+        try
+        {
+            if (!File.Exists(path)) return cache;
+            using var reader = new StreamReader(path);
+            if (reader.ReadLine() != Header) return cache;
+            while (reader.ReadLine() is { } line)
+            {
+                string[] parts = line.Split(Separator);
+                if (parts.Length == 5 && long.TryParse(parts[1], out long size) && long.TryParse(parts[2], out long modified)
+                    && long.TryParse(parts[3], out long changed) && parts[4].Length == 64)
+                    cache._old[parts[0]] = (size, modified, changed, parts[4]);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            cache._old.Clear();
+        }
+        return cache;
+    }
+
+    public bool TryGet(string name, long size, long modified, long changed, out string sha)
+    {
+        if (_old.TryGetValue(name, out var entry) && entry.Size == size && entry.Modified == modified && entry.Changed == changed)
+        {
+            _seen[name] = entry;
+            sha = entry.Sha;
+            return true;
+        }
+        sha = string.Empty;
+        return false;
+    }
+
+    public void Put(string name, long size, long modified, long changed, string sha)
+    {
+        _seen[name] = (size, modified, changed, sha);
+        _changed = true;
+    }
+
+    public void SaveIfChanged()
+    {
+        if (!_changed && _seen.Count == _old.Count) return;
+        try
+        {
+            string temporary = _path + ".tmp";
+            using (var writer = new StreamWriter(temporary))
+            {
+                writer.WriteLine(Header);
+                foreach (var (name, entry) in _seen.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+                    writer.WriteLine(string.Join(Separator, name, entry.Size, entry.Modified, entry.Changed, entry.Sha));
+            }
+            File.Move(temporary, _path, overwrite: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
+}
