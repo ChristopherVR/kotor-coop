@@ -3,7 +3,7 @@ namespace KotorCoop.Plugin;
 /// <summary>
 /// Quality-of-life for the ~ console while it is open: Up/Down recall submitted lines from
 /// <see cref="FuncInterpHook.History"/>, Tab completes the first token (repeated Tab cycles
-/// the candidates), Escape dismisses the hint, and one hint line — the candidate list, or the
+/// the candidates, Shift+Tab backward), Escape dismisses the hint, and one hint line — the candidate list, or the
 /// verb's usage with the argument being typed called out — is drawn just below the console's
 /// input rows via the queued text path.
 ///
@@ -151,7 +151,10 @@ internal sealed unsafe class ConsoleAssistController
                 _hintBytes = [];
                 _dismissed = true;
             }
-            else if (tabEdge && _completion.Complete(Odyssey.ReadConsoleLine()) is { } completed)
+            else if (tabEdge
+                && (NativeMethods.IsKeyDownHere(NativeMethods.VkShift)
+                    ? _completion.CompleteReverse(Odyssey.ReadConsoleLine())
+                    : _completion.Complete(Odyssey.ReadConsoleLine())) is { } completed)
             {
                 Odyssey.SetConsoleLine(completed);
                 _dismissed = false;

@@ -101,6 +101,9 @@ internal static partial class NativeMethods
     /// <summary>Tab, edge-detected while the ~ console is open, cycles verb completion.</summary>
     public const int VkTab = 0x09;
 
+    /// <summary>Either Shift key, read alongside Tab: Shift+Tab cycles completion backward.</summary>
+    public const int VkShift = 0x10;
+
     /// <summary>
     /// Physical key state, independent of the message queue. The high bit is set while the
     /// key is down. Reads no engine state and cannot affect the game.
@@ -156,6 +159,7 @@ internal static partial class NativeMethods
         VkSpace => 0x39,
         VkEscape => 0x01,
         VkTab => 0x0F,
+        VkShift => 0x2A, // DIK_LSHIFT
         VkUp => 0xC8,
         VkDown => 0xD0,
         VkPageUp => 0xC9,
