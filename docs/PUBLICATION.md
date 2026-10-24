@@ -90,3 +90,17 @@ definitions 1.461.175.0, at 2026-10-24T03:16:00.5675250Z. Candidate SHA-256:
 `bc2ada00de4ca2f78e4ae3d7b60c9b36b91dccf323a43e2d2675e214ba9b595f`.
 The report is in ignored `artifacts/publication-scan/scan-report.json`; this candidate
 has not been uploaded as a public player release. It is not signed or legally cleared.
+
+The full local non-soak suite completed with **6,307 passed, zero failed, zero
+skipped**, in 15 minutes 1 second (`publication-integration.trx`). This run used
+the integrated boss/Steam build from before unrelated concurrent menu-layout
+work; that separate work is not covered by this result. The later installer
+message-only change was compiled in the packaged build and exercised by the
+50 installer checks. The NuGet audit with transitive dependencies reported no
+known vulnerable packages from its configured sources.
+
+Private GitHub CI run `40057914816` could not start: GitHub's annotation says an
+Actions budget is preventing further use. No workflow steps ran. Billing was not
+changed; local results above are the validation evidence. The manual public-release
+workflow also needs its target-scoped environment token before remote use. The
+public repository currently has one root commit and no player releases.
