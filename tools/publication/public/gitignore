@@ -1,0 +1,7 @@
+/support/
+*.log
+*.dmp
+*.zip
+*.exe
+*.dll
+.env*

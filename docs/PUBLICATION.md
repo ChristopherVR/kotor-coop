@@ -7,15 +7,23 @@ Check `git remote -v` before pushing. Never mirror private refs to the public re
 
 ## Boundary
 
-The public repository starts with new Git history and only the explicit files in
-`tools/Prepare-PublicRepository.ps1`. It includes an original illustrative overview,
-not gameplay recordings. Neither deleted WAV recordings nor legacy trailer inputs,
-source, research databases, build symbols, support bundles or private Actions
-history are copied. Historical research stays in the private repository.
+The public repository has separate Git history. Approved player information and the
+website are exported by `tools/Prepare-PublicRepository.ps1` using the exact mappings in
+`tools/publication/public-export.json`. Canonical public writing lives in `site/public/`
+and `tools/publication/public/`; the original project license is also exported.
+No wildcard copying is permitted. Private research, development source, historical
+recordings, databases, build symbols and support bundles remain private.
 
-`tools/Prepare-PublicRepository.ps1 -Destination <new-directory>` creates the curated
-tree without creating a repository or pushing anything. Review it, then initialize
-a new Git repository in that directory. Do not use a clone of development.
+The rejected illustrative overview is not part of the approved export. Its five former
+public media paths are the only legacy paths the first managed export may explicitly
+remove after adoption of a clean public checkout. New gameplay media must be reviewed,
+committed and explicitly added to the mapping before it can be exported.
+
+The exporter supports an existing public checkout, reads immutable Git blobs from one
+commit, and records the source commit plus each exported file's SHA-256 in
+`.publication-manifest.json`. It never copies `.git`, commits, changes remotes or pushes.
+See [repeatable public documentation sync](PUBLIC-DOCS-SYNC.md) for preview, adoption,
+apply, drift checking and the separate review/commit/push steps.
 
 At the owner's request, two old private releases, six remote/local tags, 632
 historical Actions runs and 43 artifacts were inventoried and removed. All 683
