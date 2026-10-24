@@ -240,6 +240,13 @@ public sealed record AgentOptions
     public bool FirewallAdd { get; init; }
     public bool UpdateDefaults { get; init; }
 
+    /// <summary>install: <c>--set key=value</c> pairs written into the game's coop.ini after
+    /// the copy (repeatable). What the graphical setup passes for its options page.</summary>
+    public IReadOnlyList<KeyValuePair<string, string>> IniSettings { get; init; } = [];
+
+    /// <summary>install: leave Windows Firewall alone (no rule added, no note).</summary>
+    public bool NoFirewall { get; init; }
+
     /// <summary>install/setup: skip InstallScanCache and do a full drive/registry/Steam-library
     /// sweep, e.g. after installing a new copy of the game the cache does not know about yet.</summary>
     public bool Rescan { get; init; }
@@ -320,6 +327,8 @@ public sealed record AgentOptions
         bool firewallAdd = false;
         bool rescan = false;
         bool updateDefaults = false;
+        List<KeyValuePair<string, string>> iniSettings = [];
+        bool noFirewall = false;
         bool windowed = false;
         bool viaSteam = false;
         int instance = 1;
@@ -435,8 +444,23 @@ public sealed record AgentOptions
                     updateDefaults = true;
                     break;
 
+                case "--set":
+                {
+                    // Malformed (no "=") keeps an empty key so install can refuse it by name.
+                    string pair = Next() ?? string.Empty;
+                    int equals = pair.IndexOf('=');
+                    iniSettings.Add(equals > 0
+                        ? new(pair[..equals].Trim(), pair[(equals + 1)..].Trim())
+                        : new(string.Empty, pair));
+                    break;
+                }
+
                 case "--rescan":
                     rescan = true;
+                    break;
+
+                case "--no-firewall":
+                    noFirewall = true;
                     break;
 
                 case "--via-steam":
@@ -649,6 +673,8 @@ public sealed record AgentOptions
             FirewallAdd = firewallAdd,
             Rescan = rescan,
             UpdateDefaults = updateDefaults,
+            IniSettings = iniSettings,
+            NoFirewall = noFirewall,
             ViaSteam = viaSteam,
             Instance = instance,
             LoadSave = loadSave,
@@ -736,6 +762,11 @@ public sealed record AgentOptions
                     kept dinput8.dll. Run from the extracted zip, not the game directory.
           logs      Zip the co-op logs, crash record and a redacted coop.ini into one file for a bug report.
           support   Interactive log collection; also available through KotorCoop.CollectLogs.cmd.
+          install --windowed --set key=value ...
+                    After installing, switch swkotor.ini to windowed (backed up first) and
+                    write each key=value into coop.ini (repeatable). The graphical setup uses
+                    these for its options page, e.g. --set name=Revan --set agent_window=hidden.
+                    --no-firewall skips the Windows Firewall rule for hosting.
           install --update-defaults
                     Back up coop.ini and apply settings matching older defaults from the incoming template.
           install --check

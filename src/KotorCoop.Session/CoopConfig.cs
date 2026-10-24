@@ -912,7 +912,7 @@ public sealed record CoopConfig
         "chat_overlay_opacity", "chat_overlay_anchor", "chat_overlay_lines",
         "chat_overlay_fade_ms", "steam_invites", "exe_mismatch", "stun_servers", "upnp",
         "world_transfer_udp_fallback", "log_max_mb",
-        "log_keep", "auto_start_agent", "dinput8_next", "gamepad", "gamepad_cursor_speed",
+        "log_keep", "auto_start_agent", "agent_window", "dinput8_next", "gamepad", "gamepad_cursor_speed",
     ];
 
     /// <summary>Every other key either reader (this one, or PluginConfig.Read/ReadBool/ReadInt/

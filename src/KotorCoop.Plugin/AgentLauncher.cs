@@ -101,14 +101,25 @@ internal static unsafe class AgentLauncher
     }
 
     /// <summary>
-    /// No console at all. A console window — even one asked to open minimised and inactive —
-    /// takes the foreground away from the game as it appears, and KOTOR discards every mouse
-    /// message while it is not the active window, so the first clicks after launch are eaten.
-    /// That was measured: the click-based save loader started failing the moment the plugin
-    /// began launching the agent itself. The agent's output goes to a log beside the game
-    /// instead, and the player's real status readout is the in-game overlay and ~ console.
+    /// <c>agent_window = hidden</c>: no console at all, output redirected to the log beside the
+    /// game. The original reason was that a console appearing takes the foreground and KOTOR
+    /// discards mouse messages while it is not active; the commit that made this windowless
+    /// (f227aefe) measured that the click-based save loader failed with or without the console,
+    /// so the console was not the cause there. Kept as the opt-out for automation and for
+    /// players who never want to see the helper.
     /// </summary>
     private const uint CreateNoWindow = 0x08000000;
+
+    /// <summary>
+    /// <c>agent_window = minimized</c> (the default): the helper gets its own console, shown
+    /// minimised and not activated (<see cref="SwShowMinNoActive"/>), so its dashboard sits in
+    /// the taskbar behind the game. Its stdout is the real console then, so the log beside
+    /// the game is written through the agent's own <c>--log</c> file instead of the redirect.
+    /// </summary>
+    private const uint CreateNewConsole = 0x00000010;
+
+    private const int UseShowWindow = 0x00000001;
+    private const short SwShowMinNoActive = 7;
 
     /// <summary>
     /// Born suspended so <see cref="AgentJob"/> can put it in the game-lifetime job before
@@ -229,45 +240,62 @@ internal static unsafe class AgentLauncher
             string modeArguments = string.Join(" ", startArguments.Select(arg => $"\"{arg}\""));
             StringBuilder commandLine = new($"\"{agentPath}\" run --pid {pid} --kotor {modeArguments}{nameArgument}");
 
-            // The agent's dashboard writes to stdout; send it to a log beside the game. With
-            // stdout redirected the dashboard takes its "redirected" path, so it neither
-            // queries the console width nor polls for keys — both of which would throw
-            // without a console.
+            // Hidden (agent_window = hidden): the dashboard writes to stdout, sent to a log
+            // beside the game. With stdout redirected the dashboard takes its "redirected"
+            // path, so it neither queries the console width nor polls for keys — both of which
+            // would throw without a console. Minimised (the default): a console of its own,
+            // and the dashboard writes the same lines to --log itself.
             string logPath = Path.Combine(gameDirectory, "kotorcoop-agent.log");
             RotateAgentLogIfNeeded(gameDirectory, logPath);
-            commandLine.Append($" --console-log \"{logPath}\"")
-                .Append(" --console-log-mb ").Append(ReadLogCapMb(gameDirectory))
-                .Append(" --console-log-keep ").Append(ReadLogKeep(gameDirectory));
-
-            SecurityAttributes inheritable = new()
-            {
-                Length = Marshal.SizeOf<SecurityAttributes>(),
-                SecurityDescriptor = 0,
-                InheritHandle = 1,
-            };
-
-            nint log = CreateFileW(
-                logPath, GenericWrite, FileShareReadWriteDelete, ref inheritable,
-                CreateAlways, FileAttributeNormal, 0);
-
+            bool visible = WantsVisibleWindow();
             StartupInfo startup = default;
             startup.Cb = sizeof(StartupInfo);
+            nint log = 0;
+            bool haveLog = false;
+            uint creationFlags = CreateSuspended;
 
-            // kotorcoop-agent.log is capped mid-session by the AGENT, not by us: this handle is a
-            // raw inherited OS handle that follows the file wherever it is renamed, so only the
-            // writing process can close it, shift the generations and reopen the path. We hand
-            // it --console-log/-mb/-keep below; the agent then routes Console.Out/Error through
-            // RotatingLogWriter (same cap/generations as the plugin log). This handle stays as
-            // the fallback for the agent's first moments and for an agent that cannot open the
-            // file; it is opened with FILE_SHARE_DELETE so the agent's rename is never blocked.
-            // RotateLogFilesOverCap still skips this file by name (the agent owns it).
-            bool haveLog = log != InvalidHandle && log != 0;
-            if (haveLog)
+            if (visible)
             {
-                startup.Flags = UseStdHandles;
-                startup.StdInput = 0;
-                startup.StdOutput = log;
-                startup.StdError = log;
+                commandLine.Append($" --log \"{logPath}\"");
+                startup.Flags = UseShowWindow;
+                startup.ShowWindow = SwShowMinNoActive;
+                creationFlags |= CreateNewConsole;
+            }
+            else
+            {
+                commandLine.Append($" --console-log \"{logPath}\"")
+                    .Append(" --console-log-mb ").Append(ReadLogCapMb(gameDirectory))
+                    .Append(" --console-log-keep ").Append(ReadLogKeep(gameDirectory));
+
+                SecurityAttributes inheritable = new()
+                {
+                    Length = Marshal.SizeOf<SecurityAttributes>(),
+                    SecurityDescriptor = 0,
+                    InheritHandle = 1,
+                };
+
+                log = CreateFileW(
+                    logPath, GenericWrite, FileShareReadWriteDelete, ref inheritable,
+                    CreateAlways, FileAttributeNormal, 0);
+
+                // kotorcoop-agent.log is capped mid-session by the AGENT, not by us: this handle is a
+                // raw inherited OS handle that follows the file wherever it is renamed, so only the
+                // writing process can close it, shift the generations and reopen the path. We hand
+                // it --console-log/-mb/-keep above; the agent then routes Console.Out/Error through
+                // RotatingLogWriter (same cap/generations as the plugin log). This handle stays as
+                // the fallback for the agent's first moments and for an agent that cannot open the
+                // file; it is opened with FILE_SHARE_DELETE so the agent's rename is never blocked.
+                // RotateLogFilesOverCap still skips this file by name (the agent owns it).
+                haveLog = log != InvalidHandle && log != 0;
+                if (haveLog)
+                {
+                    startup.Flags = UseStdHandles;
+                    startup.StdInput = 0;
+                    startup.StdOutput = log;
+                    startup.StdError = log;
+                }
+
+                creationFlags |= CreateNoWindow;
             }
 
             bool started = CreateProcessW(
@@ -276,7 +304,7 @@ internal static unsafe class AgentLauncher
                 0,
                 0,
                 haveLog,           // inherit handles only when there is one to inherit
-                CreateNoWindow | CreateSuspended,
+                creationFlags,
                 0,
                 gameDirectory,
                 ref startup,
@@ -309,6 +337,7 @@ internal static unsafe class AgentLauncher
             PluginHost.Log(
                 $"agent: started {Path.GetFileName(agentPath)} as pid {info.ProcessId}"
                 + (joined ? " (tied to the game's lifetime)" : string.Empty)
+                + (visible ? " in a minimised window" : string.Empty)
                 + $"; log -> {Path.GetFileName(logPath)}");
         }
         catch (Exception ex)
@@ -406,6 +435,11 @@ internal static unsafe class AgentLauncher
                 || value.Equals("no", StringComparison.OrdinalIgnoreCase)
                 || value.Equals("off", StringComparison.OrdinalIgnoreCase));
     }
+
+    /// <summary><c>agent_window</c>: <c>minimized</c> (the default, also when unset or
+    /// unrecognised) or <c>hidden</c>.</summary>
+    private static bool WantsVisibleWindow() =>
+        !string.Equals(PluginConfig.Read("agent_window"), "hidden", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Reads one key from coop.ini. A deliberately tiny parser rather than a shared one: the
