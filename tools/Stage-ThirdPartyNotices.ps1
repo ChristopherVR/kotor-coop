@@ -18,7 +18,7 @@ if ($difference.Count) {
     throw ('Published dependency versions changed; update the notice audit: ' + ($difference.InputObject -join ', '))
 }
 $plugin = Get-Content -LiteralPath $PluginAssetsPath -Raw | ConvertFrom-Json -AsHashtable
-if (-not $plugin.libraries.ContainsKey('runtime.win-x86.Microsoft.DotNet.ILCompiler/10.0.12')) {
+if (-not $plugin.libraries.ContainsKey('runtime.win-x86.Microsoft.DotNet.ILCompiler/10.0.13')) {
     throw 'NativeAOT runtime version changed; update its notices.'
 }
 Copy-Item -LiteralPath (Join-Path $noticeRoot 'NOTICES.txt') -Destination $Destination

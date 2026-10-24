@@ -50,9 +50,9 @@ public static class SteamConnectStringRule
     public const string Prefix = "kc1/";
 
     /// <summary>Steam's own cap on a rich-presence value. A string that would exceed it is
-    /// refused at <see cref="Format"/> time rather than published and silently truncated into
-    /// something that decodes to the wrong port.</summary>
-    public const int MaxLength = 256;
+    /// refused at <see cref="Format"/> time rather than passed to an API that rejects it or
+    /// a callback buffer that cannot carry it with its terminator.</summary>
+    public const int MaxLength = 255; // Reserve the final byte of Steam's char[256] for NUL.
 
     /// <summary>
     /// Builds the connect string for a session, or null when it cannot be represented — an
@@ -76,7 +76,7 @@ public static class SteamConnectStringRule
         // A host that itself contains the separator or a colon-that-is-not-an-IPv6-literal
         // would produce a string that does not round-trip. Rather than escape, refuse: every
         // legitimate value here is an IP literal or a DNS name, and neither contains '/'.
-        if (trimmed.Contains('/') || trimmed.Contains(' '))
+        if (trimmed.Contains('/') || trimmed.Any(c => char.IsWhiteSpace(c) || char.IsControl(c)))
         {
             return null;
         }
@@ -103,7 +103,8 @@ public static class SteamConnectStringRule
             result = $"{result}/{EncodeToken(password)}";
         }
 
-        return result.Length <= MaxLength ? result : null;
+        return Encoding.UTF8.GetByteCount(result) <= MaxLength
+            && TryParse(result, out _, out _, out _) ? result : null;
     }
 
     /// <summary>
@@ -124,7 +125,7 @@ public static class SteamConnectStringRule
         }
 
         string text = value.Trim();
-        if (text.Length > MaxLength || !text.StartsWith(Prefix, StringComparison.Ordinal))
+        if (Encoding.UTF8.GetByteCount(text) > MaxLength || !text.StartsWith(Prefix, StringComparison.Ordinal))
         {
             return false;
         }
@@ -187,6 +188,11 @@ public static class SteamConnectStringRule
             }
 
             host = endpoint[1..close];
+            if (!IPAddress.TryParse(host, out IPAddress? address)
+                || address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetworkV6)
+            {
+                return false;
+            }
             colon = close + 1;
 
             if (colon >= endpoint.Length || endpoint[colon] != ':')
@@ -212,12 +218,15 @@ public static class SteamConnectStringRule
             }
         }
 
-        if (host.Length == 0 || host.Contains(' '))
+        if (host.Length == 0 || host.Any(c => char.IsWhiteSpace(c) || char.IsControl(c))
+            || Uri.CheckHostName(host) == UriHostNameType.Unknown)
         {
             return false;
         }
 
-        return int.TryParse(endpoint[(colon + 1)..], out port) && port is >= 1 and <= 65535;
+        string portText = endpoint[(colon + 1)..];
+        return portText.Length > 0 && portText.All(char.IsAsciiDigit)
+            && int.TryParse(portText, out port) && port is >= 1 and <= 65535;
     }
 
     /// <summary>URL-safe base64 with the padding removed: the alphabet Steam, command lines
@@ -229,6 +238,11 @@ public static class SteamConnectStringRule
     private static bool TryDecodeToken(string token, out string password)
     {
         password = string.Empty;
+
+        if (token.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not '-' and not '_'))
+        {
+            return false;
+        }
 
         string unpadded = token.Replace('-', '+').Replace('_', '/');
 
@@ -250,10 +264,14 @@ public static class SteamConnectStringRule
 
         try
         {
-            password = Encoding.UTF8.GetString(Convert.FromBase64String(padded));
+            password = new UTF8Encoding(false, true).GetString(Convert.FromBase64String(padded));
             return true;
         }
         catch (FormatException)
+        {
+            return false;
+        }
+        catch (DecoderFallbackException)
         {
             return false;
         }

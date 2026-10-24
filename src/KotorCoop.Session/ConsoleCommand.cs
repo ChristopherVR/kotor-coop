@@ -1331,7 +1331,7 @@ public static partial class ConsoleCommand
         new(["jedichoice"], ParseJediChoice),
         new(["duel"], ParseDuel),
         new(["arena"], ParseArena),
-        new(["chungus"], ParseChungus),
+        new(["sentinel", "chungus"], ParseChungus),
         new(["accept"], ParseDuelAccept),
         new(["decline"], ParseDuelDecline),
         new(["yield"], ParseDuelYield),

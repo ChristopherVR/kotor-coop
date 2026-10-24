@@ -29,14 +29,14 @@ dotnet build KotorCoop.slnx
 dotnet test KotorCoop.slnx
 ```
 
-`KotorCoop.slnx` deliberately omits `KotorCoop.Plugin` — it is NativeAOT win-x86 and cannot
+`KotorCoop.slnx` deliberately omits `KotorCoop.Plugin` â€” it is NativeAOT win-x86 and cannot
 be referenced from the x64 solution, so a green root build says nothing about plugin code.
 Build the plugin separately (below) before trusting a plugin-touching change.
 
 Tests are xUnit, parallelisation disabled assembly-wide (some suites self-attach to the
 test process; see `docs/ARCHITECTURE.md`'s Testing section for why). Some suites bind real
 UDP ports, so two concurrent `dotnet test` runs on one machine can flake
-`CoopCommandDispatcherTests` — rerun that class alone before treating it as a regression.
+`CoopCommandDispatcherTests` â€” rerun that class alone before treating it as a regression.
 
 ### The soak
 
@@ -44,7 +44,7 @@ UDP ports, so two concurrent `dotnet test` runs on one machine can flake
 reordering, duplicating loopback sockets for ten minutes, with one client leaving and
 rejoining twice and the host vanishing for eight seconds, and then asserts every replicated
 store converges by content digest and no peer identity or serial was left inconsistent. It is
-opt-in twice over — CI filters `Category=Soak` out, and the test itself does nothing unless
+opt-in twice over â€” CI filters `Category=Soak` out, and the test itself does nothing unless
 `KOTORCOOP_SOAK=1` is set:
 
 ```powershell
@@ -68,14 +68,14 @@ pwsh src\KotorCoop.Plugin\build.ps1 -Install -GameDir 'D:\Games\swkotor-gog-p2' 
 builds `dinput8.dll`; with it, the plugin, a freshly built (Debug) agent, the `k_coop_`
 override assets and a `coop.ini` template (only if none exists) all go into the game
 directory through the agent's own installer (`KotorCoop.Agent.exe install`,
-`src/KotorCoop.Agent/PackageInstaller.cs`) — the same code the packaged zip's double-click
+`src/KotorCoop.Agent/PackageInstaller.cs`) â€” the same code the packaged zip's double-click
 setup and `install.ps1` use, so there is one install implementation and no separate "copy the
 agent" step. The zip itself is a game-directory image (`tools/package.ps1` documents the
 layout): extracting it into the game folder is a complete install. `demo.ps1` itself does **not** deploy the plugin, so run this
 for every game copy the rig uses before trusting a live result. `-Uninstall` removes what
 `-Install` placed (and only that: the installer recognises its own `dinput8.dll` by a marker
 and leaves any other mod's alone). `-WarnAsError` turns compiler/analyzer warnings into
-build failures — CI passes it, so run it before pushing plugin changes.
+build failures â€” CI passes it, so run it before pushing plugin changes.
 
 Both native builds dot-source `tools/devenv.ps1`, which locates Visual Studio through
 `vswhere` (Community, Enterprise or Build Tools) and imports the x86 developer environment;
@@ -89,7 +89,7 @@ pwsh src\KotorCoop.Loader\build.ps1     # -> src\KotorCoop.Loader\bin\dinput8.dl
 
 A single C file compiled with `cl.exe`, no CRT. It exists so a player whose `dinput8.dll`
 slot is already taken by another mod can run both. `install.ps1`/`KotorCoop.Agent.exe install`
-detect a foreign `dinput8.dll` automatically and install as a chain with no flag needed —
+detect a foreign `dinput8.dll` automatically and install as a chain with no flag needed â€”
 `ForeignDinputIdentity` (in `PackageInstaller`) names what was found (ReShade, Ultimate ASI
 Loader, a fallback "another dinput8 mod (<FileDescription>)", or "the system dinput8.dll" for
 a plain copy of Windows' own file, which is just overwritten instead since it isn't a mod);
@@ -107,22 +107,22 @@ it wholesale, so a line a player added by hand survives a reinstall.
 `KotorCoop.Agent.exe install --check` (`install.ps1 -Check`) reports the install layout found
 (plain/chain/foreign-only/none) and verifies every chain entry exists and both markers are
 present, without changing anything; every ordinary install ends with the same report.
-Live-verified 2026-08-27 with the loader → plugin → a renamed copy of the system DLL: every
+Live-verified 2026-08-27 with the loader â†’ plugin â†’ a renamed copy of the system DLL: every
 hook installed, all three modules visible in the process.
 
 ## CI and releases
 
 `.github/workflows/ci.yml` runs on every push and pull request: `dotnet build -warnaserror`,
-the test suite (`--filter "Category!=Soak"` — everything except the opt-in ten-minute soak,
+the test suite (`--filter "Category!=Soak"` â€” everything except the opt-in ten-minute soak,
 below; no test is excluded for flakiness), then
 `tools/package.ps1 -WarnAsError`, which builds the NativeAOT plugin, the C loader and the
-agent (a self-contained single-file `win-x64` publish — the runtime is inside the exe, so a
+agent (a self-contained single-file `win-x64` publish â€” the runtime is inside the exe, so a
 player needs no .NET and a Proton prefix needs nothing added; `dotnet build` and the rig stay
 framework-dependent, see `KotorCoop.Agent.csproj` and [research/proton.md](research/proton.md)
-§2) and uploads two packages (~33 MB each) as the run's artifact — `kotor-coop-<git describe>-windows.zip`
+Â§2) and uploads two packages (~33 MB each) as the run's artifact â€” `kotor-coop-<git describe>-windows.zip`
 and `kotor-coop-<git describe>-linux.tar.gz`, the same game-folder image with `install.ps1` or
 `install.sh` respectively (the tarball is written through `System.Formats.Tar` so `install.sh`
-arrives `0755`; `*.sh` is `eol=lf` in `.gitattributes`) — so every green run has a ready-to-use
+arrives `0755`; `*.sh` is `eol=lf` in `.gitattributes`) â€” so every green run has a ready-to-use
 build attached. A second job, `linux-install`, runs on Ubuntu, extracts the tarball and puts
 `install.sh` through plain install, `--check`, chaining behind a foreign `dinput8.dll`, the
 in-place upgrade, `--uninstall` and Steam-library auto-detection against a stub game folder;
@@ -141,23 +141,18 @@ pwsh tools/verify-package.ps1 -PackageDirectory <extracted-package>
 The latest local release-verification results and remaining live gates are in
 [RELEASE-READINESS.md](RELEASE-READINESS.md).
 
-CI validates branch pushes and pull requests. Releases require explicit manual promotion
-and reuse the exact two packages from a successful push CI run; they never rebuild.
-There is no automatically recreated rolling release. **The release number is the
-`VERSION` file at the repo root.** A VERSION bump alone never publishes a release.
-`tools/package.ps1` names a build exactly `<VERSION>` on the commit that changed
-the file and `<VERSION>-<commits since>-g<sha>` after it. Tag the VERSION-changing
-commit that already passed CI; tag pushes do not repeat that same test suite. After
-reviewing the [release scope and remaining gates](RELEASE-READINESS.md), manually run the Release workflow
-on that tag with `promote_release` enabled. The tag, packaged version and VERSION must
-agree; tag the VERSION-changing commit so its package has the exact numbered version. Promotion
-uses that commit's successful CI artifacts. Beta/RC tags remain prereleases; only stable
-versions are marked Latest. It uses
-`docs/release-notes/v<VERSION>.md` when present, otherwise GitHub's generated notes. Manual runs
-on `main` do not publish. Both packages contain
-a `README.txt` (`tools/package-README.txt`,
-version-stamped by `package.ps1`) that explains install, play, chain mode and troubleshooting
-to someone who has never seen this repo.
+CI validates branch pushes and pull requests in the private `kotor-coop-dev`
+repository. Public distribution uses the separate `ChristopherVR/kotor-coop`
+repository, with fresh history and curated files only. See [PUBLICATION.md](PUBLICATION.md)
+for the exact procedure. The former tested-tag promotion workflow is retired.
+
+The manual **Public release candidate** workflow runs build/tests, then freshly
+packages and scans the Windows ZIP and creates a draft in the public repository.
+It requires reviewed release notes and a target-scoped `PUBLIC_RELEASE_TOKEN` in
+its `public-release` environment. The local equivalent is
+`tools/Publish-PublicRelease.ps1`. Neither path publishes source, recordings,
+symbols or private Actions logs. `VERSION` is the numbered release version;
+private development snapshots may still have a commit suffix.
 
 ## Running the live rig
 
@@ -168,18 +163,18 @@ pwsh tools\demo.ps1 -Stop         # tear down
 ```
 
 `verify.ps1` prints one `PASS`/`FAIL` line per feature, reading real engine state (logs,
-`blockpoke.ps1`, live memory reads) rather than trusting the agent's own bookkeeping — "the
+`blockpoke.ps1`, live memory reads) rather than trusting the agent's own bookkeeping â€” "the
 agent believes X" is not the same claim as "X is true", and every check here is built to
 tell the two apart. A `FAIL` names what it actually observed; treat a `FAIL` with no
 detail as a check bug before treating it as a feature regression. `docs/live-verification.md`
-is the narrative log of what live-verification passes have found, session by session — skim
+is the narrative log of what live-verification passes have found, session by session â€” skim
 its most recent entries before a live round so you know what is already confirmed and what
 is still open.
 
 Two traps worth knowing before your first live run: `-Save 2` targets the game's second
 save slot, but the engine's own load-menu list skips the autosave, so `-Save 2` silently
 lands on the *third* file on disk (see the memory note "save slot off-by-one"); and to check
-whether the demo is actually up, use `Get-Process swkotor,KotorCoop.Agent`, not `pgrep` —
+whether the demo is actually up, use `Get-Process swkotor,KotorCoop.Agent`, not `pgrep` â€”
 two of `verify.ps1`'s own checks are environment-flaky and are called out in its output when
 they are.
 
@@ -208,7 +203,7 @@ tools/                   RE helpers, live probes, demo/verify scripts, the symbo
 
 - **Small partials by concern.** A class over a few hundred lines is split into
   `<Class>.<Concern>.cs` files, one concern per file, each with a short header comment
-  saying what it owns. Verbatim moves only when splitting an existing file — no drive-by
+  saying what it owns. Verbatim moves only when splitting an existing file â€” no drive-by
   logic changes riding along with a file split.
 - **Events are additive and synchronous.** `PluginEvents`/`AgentEvents`-style hubs raise on
   the same thread and from the exact point a condition is already detected; a new event adds
@@ -217,14 +212,14 @@ tools/                   RE helpers, live probes, demo/verify scripts, the symbo
   one throwing subscriber cannot take the game down.
 - **Pumps, not god methods.** Per-feature work in `KotorCoop.Session` lives in one
   `Pumps/<Feature>Pump.cs` per feature, called from `CoopAgent.PumpOnce`'s three cadences
-  (every tick / ~150 ms / ~1 Hz — see `docs/ARCHITECTURE.md`). A new channel gets its own
+  (every tick / ~150 ms / ~1 Hz â€” see `docs/ARCHITECTURE.md`). A new channel gets its own
   pump method, not a growing branch in an existing one.
 - **Registries over switches where the shape repeats.** `ConsoleCommand`'s `VerbSpec` table,
   `CoopCommandDispatcher`'s `Dictionary<CoopCommandKind, Action<CoopCommand>>`, and
   `CoopHost`/`CoopClient`'s `Dictionary<PacketType, PacketHandler>` are the pattern: a
   declarative table built once, indexed by an enum, with each entry's actual logic living in
   a small method in the file for its area.
-- **Keep every hazard comment.** A `⚠` warning, a "do not" note, or an explanation of *why*
+- **Keep every hazard comment.** A `âš ` warning, a "do not" note, or an explanation of *why*
   a value/order/offset is what it is exists because getting it wrong cost real time once.
   Move it verbatim with the code it documents; never delete one while refactoring nearby
   code.
@@ -245,18 +240,18 @@ Most features cross all five projects. Using a new wire-synced flag or object st
 running example, in order:
 
 1. **Packet.** Add the record to `Packets/<Feature>Packets.cs` in `KotorCoop.Protocol`, and
-   its encode/decode to `PacketCodec.<Feature>.cs`. Add the type to `PacketType.cs` — reuse
+   its encode/decode to `PacketCodec.<Feature>.cs`. Add the type to `PacketType.cs` â€” reuse
    no existing value, and never fill a deliberately-skipped number (some are reserved on
    paper for parallel work in flight). Guard the datagram budget if the new packet can appear
    in a full-lobby snapshot (`FullPeerSnapshotFitsInOneDatagram`-style test).
 2. **Host/client handler.** Add a case to `CoopHost.<Feature>.cs`/`CoopClient.<Feature>.cs`
    and register it in the `Dictionary<PacketType, PacketHandler>` built in the constructor.
 3. **Pump.** Add (or extend) a `Pumps/<Feature>Pump.cs` in `KotorCoop.Session`, called from
-   `CoopAgent.PumpOnce` at whichever of the three cadences the feature needs — position-like
+   `CoopAgent.PumpOnce` at whichever of the three cadences the feature needs â€” position-like
    data goes on the fast path, a full scan goes on the heavy pass.
 4. **Bridge role interface.** Add the member to the relevant `I<Concern>Bridge` interface in
    `KotorCoop.Memory` (or a new one, added to `IGameBridge`'s composite list) with a default
-   body gated by a `Supports*` flag if not every bridge can implement it — never remove or
+   body gated by a `Supports*` flag if not every bridge can implement it â€” never remove or
    rename an existing member, since `IGameBridge` is hand-implemented by test fakes.
    Implement it in `KotorGameBridge.<Concern>.cs` (real game) and, if relevant,
    `ProfileGameBridge`/`KotorCoop.MockGame` (mock harness).
@@ -264,7 +259,7 @@ running example, in order:
    relevant `SharedBlock.<Concern>.cs`/`SharedBlockView.<Concern>.cs` pair in
    `KotorCoop.Plugin`, bump `SharedBlock.Version` with a one-line comment saying what the new
    number carries, and mirror the exact same offset in
-   `KotorGameBridge.PluginBlock.cs` on the agent side — the two are transcribed by hand and a
+   `KotorGameBridge.PluginBlock.cs` on the agent side â€” the two are transcribed by hand and a
    mismatch is a silent "plugin not found." `ItemHarnessTests`/`CheatKindSyncTests`-style
    tests exist to catch a half-bumped version; add one if the feature introduces a new
    parallel-numbering scheme (cheat kinds, packet types) rather than a plain field.
@@ -275,7 +270,7 @@ running example, in order:
    feature has host/client interaction; a bridge/memory test if it reads or writes real
    memory. If the plugin-side logic is pure arithmetic (a ledger, a rule, a table with no
    `Odyssey`/`SharedBlockView` dependency), add it to `KotorCoop.Tests.csproj`'s
-   `<Compile Include>` list instead of re-implementing the rule in the test — see
+   `<Compile Include>` list instead of re-implementing the rule in the test â€” see
    `docs/ARCHITECTURE.md`'s "plugin compile-include trick".
 
 Not every feature needs all seven steps (a local-only console verb skips the packet/handler
@@ -287,22 +282,24 @@ what the feature actually needs, but keep the same file-per-concern discipline a
 `docs/research/*.md` are **append-only logs**: a doc gets a new dated section every time a
 round of work touches its subject, rather than being rewritten in place, so the history of
 what was tried and found stays readable. Tag every claim: **VERIFIED** (read out of the
-binary, or asserted by a test), **NEEDS-LIVE** (reasoned but not yet observed running — every
+binary, or asserted by a test), **NEEDS-LIVE** (reasoned but not yet observed running â€” every
 one of these fails safe), or **INFERRED** (a reasonable deduction, not directly proven). A
-doc that is superseded by a later one stays — mark it superseded and point at the doc that
+doc that is superseded by a later one stays â€” mark it superseded and point at the doc that
 replaced it, but do not delete it or treat its earlier claims as current.
+When replacing a design or asset set, retain its earlier evidence, add a dated replacement
+section and a superseded pointer at the top, and state which live checks must be repeated.
 
 After writing or extending one, add or update its row in `docs/research/README.md`'s index
 (one line: doc name, subject, current status read off the doc's own most recent section) and,
 if the feature's user-facing status changed, its row in `docs/status-engineering.md` (the
-evidence: dates, counts, rule names — including Appendix A's feature table) AND the matching
+evidence: dates, counts, rule names â€” including Appendix A's feature table) AND the matching
 plain-language line in `docs/limitations.md`, which must stay free of addresses, rule names
 and dates-as-evidence; `README.md`'s "Status at a glance" only changes when the headline
 player-facing picture does.
 
 ## Parallel-session hazards
 
-More than one agent or session can work this repo at once — worktrees included. Before
+More than one agent or session can work this repo at once â€” worktrees included. Before
 trusting a fresh worktree or a "clean" `dev` commit:
 
 - **A worktree may not branch from where you expect.** `isolation: "worktree"` can cut from
@@ -323,7 +320,7 @@ trusting a fresh worktree or a "clean" `dev` commit:
   `SharedBlock.Version`, the agent-side `PluginSignature`/`CheatKinds` mirrors, and
   `PacketType` values are all separately-incrementing, hand-transcribed numbers. When
   integrating more than one branch that touches any of them, grep every constant and
-  reconcile by hand rather than trusting a clean auto-merge — two branches can each claim the
+  reconcile by hand rather than trusting a clean auto-merge â€” two branches can each claim the
   same next number, and git merges the resulting text conflict-free while leaving both halves
   broken.
 - **A clean merge is not proof of a working merge.** Two branches can each be individually

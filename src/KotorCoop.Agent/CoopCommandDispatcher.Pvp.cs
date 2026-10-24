@@ -95,7 +95,7 @@ public sealed partial class CoopCommandDispatcher
 
         if (manager.Current is not { } session)
         {
-            Reply("not connected - start or join a game first, then call for Chungus");
+            Reply("not connected - start or join a game first, then call for Cairn Sentinel");
             return;
         }
 
@@ -142,7 +142,7 @@ public sealed partial class CoopCommandDispatcher
                 BossCue cue = new((BossPower)command.Amount, BossPowers.Strength((BossPower)command.Amount), 0);
                 if (!cue.IsKnown)
                 {
-                    Reply("chungus power takes a number from 1 to 10");
+                    Reply("sentinel power takes a number from 1 to 10");
                     return;
                 }
 

@@ -602,6 +602,7 @@ public sealed class ChungusBossTests : IDisposable
 
     [Theory]
     [InlineData("chungus", null, 0)]
+    [InlineData("sentinel", null, 0)]
     [InlineData("chungus spawn", "spawn", 0)]
     [InlineData("chungus remove", "remove", 0)]
     [InlineData("chungus anim 10263", "anim", 10263)]
@@ -815,47 +816,23 @@ public sealed class ChungusBossTests : IDisposable
     }
 
     [Fact]
-    public void TheBodyIsSkinnedAndNoSkinNamesMoreBonesThanTheEngineAllows()
+    public void TheSentinelUsesRigidArticulatedMeshesWithoutSkinBoneLimits()
     {
         byte[] mdl = File.ReadAllBytes(FindShipped("k_coop_chungus.mdl"));
-        int nodeCount = (int)U32(mdl, 12 + 44);
-        int skins = 0;
-
+        int meshes = 0;
         void Walk(int offset)
         {
             ushort flags = BinaryPrimitives.ReadUInt16LittleEndian(mdl.AsSpan(12 + offset));
-            if ((flags & 0x40) != 0)
-            {
-                // The skin's header follows the 332-byte mesh header: its bone map has one
-                // entry per node of the model, a bone number or -1.
-                int skin = offset + 80 + 332;
-                int bonemap = (int)U32(mdl, 12 + skin + 20);
-                Assert.Equal(nodeCount, (int)U32(mdl, 12 + skin + 24));
-                int bones = 0;
-                for (int i = 0; i < nodeCount; i++)
-                {
-                    if (BitConverter.ToSingle(mdl, 12 + bonemap + (4 * i)) >= 0f)
-                    {
-                        bones++;
-                    }
-                }
-
-                Assert.InRange(bones, 1, 16);
-                // 64 bytes a vertex: position, normal, texture coordinate, four weights, four bones.
-                Assert.Equal(64u, U32(mdl, 12 + offset + 80 + 252));
-                skins++;
-            }
-
+            Assert.Equal(0, flags & 0x40); // Plates are rigid; no skin bone table is needed.
+            if ((flags & 0x20) != 0) meshes++;
             int children = (int)U32(mdl, 12 + offset + 44);
-            int childCount = (int)U32(mdl, 12 + offset + 48);
-            for (int i = 0; i < childCount; i++)
-            {
-                Walk((int)U32(mdl, 12 + children + (4 * i)));
-            }
+            int count = (int)U32(mdl, 12 + offset + 48);
+            for (int i = 0; i < count; i++) Walk((int)U32(mdl, 12 + children + 4 * i));
         }
-
         Walk((int)U32(mdl, 12 + 40));
-        Assert.Equal(5, skins);
+        Assert.InRange(meshes, 15, 40);
+        Assert.Equal("Cairn Sentinel", ChungusBlueprint.Name);
+        Assert.Equal(ushort.MaxValue, ChungusBlueprint.SoundSet);
     }
 
     [Fact]

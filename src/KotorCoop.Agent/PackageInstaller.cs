@@ -596,7 +596,7 @@ public static partial class PackageInstaller
         {
             ChungusInstallOutcome.Installed => $"installed the arena boss ({result.Message})",
             ChungusInstallOutcome.UpToDate => $"arena boss already current ({result.Message})",
-            _ => $"arena boss not installed ({result.Message}); the chungus cheat will not be available",
+            _ => $"arena boss not installed ({result.Message}); the sentinel cheat will not be available",
         });
     }
 
@@ -774,8 +774,8 @@ public static partial class PackageInstaller
         if (missingPlugin is not null)
         {
             log($"NOTE: {missingPlugin} is missing but other kotor-coop files are still here - antivirus software has probably "
-                + "removed it. Add the game folder as an exclusion in your antivirus (Windows Security > Virus & threat "
-                + $"protection > Manage settings > Exclusions), then run KotorCoop.Agent.exe setup again to restore it.");
+                + "removed it. Stop and report the detection, package SHA-256 and scanner version for investigation. "
+                + "Do not disable protection or add exclusions to suppress the detection.");
         }
 
         string iniPath = Path.Combine(game, "coop.ini");

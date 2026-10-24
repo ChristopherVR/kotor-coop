@@ -72,7 +72,7 @@ internal static class ChungusRule
     // in the comments are the animations in his model.
     public const ushort AnimTaunt = 10028;     // -> row 263 ctaunt: the snap
     public const ushort AnimVictory = 10044;   // -> row 260 cvictory: the laugh
-    public const ushort AnimBlast = 10118;     // -> row 270 disabled (looping): the power stone's blast
+    public const ushort AnimBlast = 10118;     // -> row 270 disabled (looping): resonator blast
     public const ushort AnimSlam = 10125;      // -> row 43 usecomp: the hammer blow (reality)
     public const ushort AnimSpin = 10053;      // -> row 258 chturnl: the open hand raised (space, time)
     public const ushort AnimCharge = 10054;    // -> row 259 chturnr: the reach and clench (soul)
@@ -119,11 +119,9 @@ internal static class ChungusRule
         _ => 0,
     };
 
-    // His voice is the game's Hutt voice set (the blueprint names it, so the engine plays his
-    // attack grunts, his pain and his death by itself), and his powers use the Force powers' own
-    // sounds and effects. Only the snap is a sound of the mod's own (k_coop_chsnap.wav).
+    // No creature voice is borrowed. Original discharge/chime files ship; other effect
+    // sounds resolve from the player's own installed game.
 
-    /// <summary>The sound as he starts a power (empty for none): a file of the game's, by name.</summary>
     public static string WindUpSound(int power) => power switch
     {
         Snap or Blast => "v_pro_frcaura",
@@ -201,7 +199,7 @@ internal static class ChungusRule
             // Half of what is left, never the last point: the pin holds at 1 anyway.
             Snap => new BossLanding(hitPoints > 1 ? hitPoints / 2 : 0, EffectForcePush),
             Blast => new BossLanding(share, EffectForcePush),
-            // Thrown down where the space stone put them (the agent moves them just before).
+            // Thrown down where the displacement field put them (the agent moves them just before).
             Lift => new BossLanding(0, EffectForcePush),
             Gizka => new BossLanding(0, EffectDisguise, 12_000, GizkaAppearanceRow, EffectSlow, 12_000, 50),
             Fright => new BossLanding(0, EffectFrightened, 5_000),
@@ -218,7 +216,7 @@ internal static class ChungusRule
     /// <summary>The effect played on him where he arrives when he blinks.</summary>
     public const uint BlinkEffect = VfxForceAura;
 
-    /// <summary>How much the boss heals when the soul stone lands: a twelfth of his maximum,
+    /// <summary>How much the boss heals when the energy drain lands: a twelfth of his maximum,
     /// inside what one heal effect may carry.</summary>
     public static int DrainHeal(int bossMaxHitPoints) => Math.Clamp(bossMaxHitPoints / 12, 1, 999);
 }

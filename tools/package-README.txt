@@ -79,9 +79,9 @@ The files are not code-signed, so Windows SmartScreen may say "Windows protected
 Click More info, then Run anyway. To check the download, compare its SHA-256 with the one
 on the release page.
 
-Some antivirus programs quarantine dinput8.dll after install. Then the Co-op button does not
-appear. Add the game folder as an exclusion (Windows Security > Virus & threat protection >
-Manage settings > Exclusions) and run KotorCoop.Agent.exe again to restore the file.
+If antivirus quarantines dinput8.dll, stop and report the detection, release version,
+archive SHA-256 and scanner definition version. Do not disable protection or add exclusions
+to suppress a detection. A maintainer must investigate before recommending installation.
 KotorCoop.Agent.exe install --check says when the file is missing.
 
 What the mod changes
@@ -450,4 +450,4 @@ Something is wrong
   attach that to a bug report. Turn it back off with
   .\install.ps1 -GameDir "..." -DisableCrashDumps; it does not undo itself automatically.
 
-Full documentation, source and issue tracker: https://github.com/ChristopherVR/kotor-coop
+Public project information, downloads and issue tracker: https://github.com/ChristopherVR/kotor-coop

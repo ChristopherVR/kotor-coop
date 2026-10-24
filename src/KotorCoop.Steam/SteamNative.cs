@@ -68,6 +68,7 @@ public sealed unsafe class SteamNative : IDisposable
     private nint _library;
     private nint _friends;
     private nint _user;
+    private bool _initialized;
 
     private delegate* unmanaged[Cdecl]<void> _shutdown;
     private delegate* unmanaged[Cdecl]<int> _getPipe;
@@ -229,6 +230,7 @@ public sealed unsafe class SteamNative : IDisposable
         {
             return false;
         }
+        _initialized = true;
 
         // Manual dispatch must be armed after init and before the first RunFrame.
         if (NativeLibrary.TryGetExport(_library, "SteamAPI_ManualDispatch_Init", out nint dispatchInit))
@@ -254,7 +256,6 @@ public sealed unsafe class SteamNative : IDisposable
         {
             log("steam: could not obtain ISteamFriends - the redistributable is a version this "
                 + $"build does not know ({string.Join(", ", FriendsAccessors)})");
-            _shutdown();
             return false;
         }
 
@@ -307,11 +308,11 @@ public sealed unsafe class SteamNative : IDisposable
     /// <c>connect</c> rich-presence key — the string Steam shows a friend a "Join Game" button
     /// for and hands back verbatim when they press it.
     /// </summary>
-    public void SetConnectString(string? value)
+    public bool SetConnectString(string? value)
     {
         if (!IsReady)
         {
-            return;
+            return false;
         }
 
         try
@@ -319,19 +320,20 @@ public sealed unsafe class SteamNative : IDisposable
             if (string.IsNullOrEmpty(value))
             {
                 _clearRichPresence(_friends);
-                return;
+                return true;
             }
 
             fixed (byte* key = Utf8("connect"))
             fixed (byte* text = Utf8(value))
             {
-                _setRichPresence(_friends, key, text);
+                return _setRichPresence(_friends, key, text) != 0;
             }
         }
         catch (Exception)
         {
             // A fault inside Steam's own DLL must not take the session with it.
             IsReady = false;
+            return false;
         }
     }
 
@@ -399,7 +401,7 @@ public sealed unsafe class SteamNative : IDisposable
                     // The connect string is a NUL-terminated char array 8 bytes in. Bounded by
                     // the reported payload size rather than by trusting the 256 — a short or
                     // hostile payload must not read past what Steam actually handed us.
-                    int available = message.ParamSize - sizeof(ulong);
+                    int available = Math.Min(message.ParamSize - sizeof(ulong), 256);
                     string connect = ReadUtf8(message.Param + sizeof(ulong), available);
 
                     if (connect.Length > 0)
@@ -440,7 +442,6 @@ public sealed unsafe class SteamNative : IDisposable
             try
             {
                 _clearRichPresence(_friends);
-                _shutdown();
             }
             catch (Exception)
             {
@@ -453,8 +454,17 @@ public sealed unsafe class SteamNative : IDisposable
 
     private void Unload()
     {
+        if (_initialized)
+        {
+            try { _shutdown(); }
+            catch (Exception) { /* Best effort, including failed initialization/dispatch. */ }
+            _initialized = false;
+        }
+
         IsReady = false;
         _friends = 0;
+        _user = 0;
+        SteamId = 0;
 
         if (_library != 0)
         {

@@ -9,7 +9,7 @@ namespace KotorCoop.Memory.GameFiles;
 /// tools/chungus/build.py). The blueprint cannot ship ready-made, because it names a row of
 /// appearance.2da and that row's number depends on the player's own table (a mod may have added
 /// rows): <see cref="ChungusInstaller"/> adds the row and writes this file with its number.
-/// (Two textures: the body's, and the gauntlet's with a .txi beside it that tells the engine to
+/// (Two textures: the body's, and the mineral seams' with a .txi beside it that tells the engine to
 /// mirror its stock metal reflection in it, as its droids' textures do.)
 ///
 /// The field set follows the game's own hostile creatures (g_kathhound01, g_rancor01): the
@@ -25,13 +25,12 @@ public static class ChungusBlueprint
 
     public const string Tag = "k_coop_chungus";
 
-    public const string Name = "Chungus";
+    public const string Name = "Cairn Sentinel";
 
     public const short HitPoints = 800;
 
-    /// <summary>soundset.2da row 15, "Hutt" (c_hutt): the game's own deep Huttese voice set, which
-    /// the engine plays by itself when he attacks, is hit and dies.</summary>
-    public const ushort SoundSet = 15;
+    /// <summary>No borrowed creature voice; the resonator uses original synthesized audio.</summary>
+    public const ushort SoundSet = ushort.MaxValue;
 
     /// <summary>repute.2da row 1, Hostile_1: hostile to the player, as every stock enemy is.</summary>
     public const ushort Faction = 1;
@@ -78,7 +77,7 @@ public static class ChungusBlueprint
         root.SetByte("Disarmable", 0);
         root.SetString("Subrace", "");
         root.SetString("Deity", "");
-        root.SetWord("SoundSetFile", SoundSet); // the Hutt's voice: his grunts, his pain, his death
+        root.SetWord("SoundSetFile", SoundSet); // no stock voice set
         root.SetByte("Plot", 0);               // a plot creature is never mirrored to joiners
         root.SetByte("Interruptable", 1);
         root.SetByte("NoPermDeath", 0);

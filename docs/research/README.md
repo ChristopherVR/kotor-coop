@@ -50,6 +50,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 
 | Doc | Subject | Status |
 | --- | --- | --- |
+| [chungus-boss.md](chungus-boss.md#2026-10-24-cairn-sentinel-replacement) | Cairn Sentinel arena boss; historical design retained below the superseded notice | 2026-10-24: original procedural replacement, reproducible assets and 368 focused tests VERIFIED; replacement rendering, motion, audio and two-player replication NEEDS-LIVE. Older boss playtests do not clear the new assets. |
 | [combat-participation.md](combat-participation.md) | Making owner-side enemies threaten the phantom safely | Design + implemented, live-verified; some §7 items remain NEEDS-LIVE. §10 (2026-08-28) root-caused the "client can't hit an Endar Spire Sith" report with exact `faction`-verb reads: `end_sith2` genuinely starts in a FRIENDLY faction — not a client/host asymmetry, not a co-op bug. §11 (2026-09-02) widens `local_combat` to up to 3 simultaneous slots (`local_combat_slots`); built and unit-tested, NEEDS-LIVE |
 | [combat-when-apart.md](combat-when-apart.md) | What happens when the two players are not together | Reviewed; encounters-only-fire-for-host gap intentionally NOT fixed (structural) |
 | [enemy-presence-sync.md](enemy-presence-sync.md) | One visible fight instead of two private ones | Design over verified research; implemented, live-verified |

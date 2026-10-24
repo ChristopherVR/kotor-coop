@@ -1,36 +1,12 @@
-# Publishes site/ to GitHub Pages. Plain static files, no build step: the folder is uploaded
-# as-is whenever something under it changes on main (or on demand from the Actions tab).
-#
-# One-time setup on the repository: Settings -> Pages -> Source: "GitHub Actions". Pages on a
-# private repository needs a paid GitHub plan; on a public repository it is free.
-name: Pages
-
+# Legacy site media includes game-derived material. Never deploy it automatically.
+# The separate public repository has a curated README and original trailer.
+name: Private site boundary
 on:
-  push:
-    branches: [main]
-    paths: ['site/**', '.github/workflows/pages.yml']
   workflow_dispatch:
-
 permissions:
   contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: pages
-  cancel-in-progress: true
-
 jobs:
-  deploy:
+  boundary:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: site
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - run: echo 'Legacy site and recordings are private development material. Use the separate public repository.'
