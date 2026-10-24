@@ -88,10 +88,9 @@ internal static class RunCommand
             // Refusing here is what made `run --join` exit 2 before a first-time joiner could
             // do anything at all — the exact player the mode exists for. Only join_mode = save
             // still requires a world of the caller's own.
-            bool menuJoin = options.Mode == CoopMode.Join
-                && TryReadJoinMode(memory.ProcessId) != JoinMode.Save;
-
-            if (!options.MenuConnect && !menuJoin)
+            // A Steam startup invite has its own one-shot world-entry action even in save
+            // mode. Do not reject it before composition gets a chance to arm that action.
+            if (!options.CanStartWithoutLoadedWorld(TryReadJoinMode(memory.ProcessId)))
             {
                 Console.Error.WriteLine($"could not locate player state: {diagnostic}");
                 return 2;

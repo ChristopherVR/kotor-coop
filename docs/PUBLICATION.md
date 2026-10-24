@@ -35,8 +35,9 @@ will create new runs and artifacts; these are not public distribution.
 ## Player build publication
 
 1. Finish the legal and gameplay gates in `LEGAL.md` and `RELEASE-READINESS.md`.
-   The original boss redesign still needs live verification; optional Steam invite
-   success needs a licensed library and two-account test. Repository separation
+   The original boss redesign has bounded two-instance live evidence; ordinary
+   balance/victory and complete animations remain unverified. Optional Steam friend
+   delivery still needs a licensed library and two-account test. Repository separation
    does not resolve underlying game/store rights or the custom license review.
 2. Update `VERSION` and write reviewed notes in `docs/release-notes/v<VERSION>.md`.
    Notes must stand alone for public readers and must not link private evidence.
@@ -111,4 +112,8 @@ Private GitHub CI run `40057914816` could not start: GitHub's annotation says an
 Actions budget is preventing further use. No workflow steps ran. Billing was not
 changed; local results above are the validation evidence. The manual public-release
 workflow also needs its target-scoped environment token before remote use. The
-public repository currently has one root commit and no player releases.
+public repository now serves the curated Pages site and player guides, with no
+player releases. The rejected overview is absent from its current tree. The local
+exporter has 29 passing policy tests and records exact source/file provenance.
+The newer Steam startup fixes have 157 focused passing tests; the previous package
+hash/scan above does not cover these subsequent source changes.

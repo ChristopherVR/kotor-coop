@@ -257,6 +257,11 @@ public sealed record AgentOptions
     /// </summary>
     public string? SteamConnect { get; init; }
 
+    /// <summary>Menu actions and invitations can enter the world after connecting. A plain
+    /// scripted save-mode join still expects its caller to have loaded a save first.</summary>
+    public bool CanStartWithoutLoadedWorld(JoinMode joinMode) => MenuConnect
+        || (Mode == CoopMode.Join && (SteamConnect is not null || joinMode != JoinMode.Save));
+
     public static AgentOptions Parse(string[] args)
     {
         if (args.Length == 0)

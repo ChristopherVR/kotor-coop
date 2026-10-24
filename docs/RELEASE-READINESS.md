@@ -3,17 +3,20 @@
 ## Publication split — 24 October 2026
 
 Private development moved to `ChristopherVR/kotor-coop-dev`; the new public
-`ChristopherVR/kotor-coop` contains curated information and an original illustrative
-overview only. Old releases/tags/Actions records were removed at the owner's
+`ChristopherVR/kotor-coop` contains curated player documentation and a GitHub
+Pages site, exported from an exact private source commit. The rejected illustrative
+overview has been removed. Old releases/tags/Actions records were removed at the owner's
 request, not promoted. [PUBLICATION.md](PUBLICATION.md) supersedes the historical
 tag-promotion process below: a reviewed clean checkout is rebuilt and scanned
 before a draft is created in the public repository. There is no current public
 player build. No legal or general-playability sign-off is implied.
 
 New targeted checks cover the original Cairn Sentinel assets, Steam invite parsing
-and privacy fixes, and the public-package allowlist. The replacement boss still
-requires live rendering/audio/multiplayer checks; real two-account Steam invites
-remain unverified. Existing gameplay/legal gates below remain open.
+and privacy fixes, and the public-package allowlist. The replacement boss now has bounded two-instance rendering,
+recorded game audio, repeated arena entry, loss/return and yield/return evidence;
+full animation, balance and ordinary victory checks remain open. The startup join
+path now enters a real GOG co-op world from a game command-line token. Real
+two-account Steam friend delivery remains unverified. Existing gameplay/legal gates below remain open.
 
 ## Historical beta readiness
 

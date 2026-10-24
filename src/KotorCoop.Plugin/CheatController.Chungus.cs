@@ -46,7 +46,7 @@ internal sealed unsafe partial class CheatController
                 bool seen = boss != 0 && gathering != 0 && OdysseyEffects.ApplyVisualEffect(bossId, gathering, 0, out _);
                 Answer(
                     SharedBlock.CheatStatusApplied,
-                    $"chungus: power {power} begins (boss 0x{bossId:X}, {animated}, sound {(heard ? "played" : "none")}, "
+                    $"sentinel: power {power} begins (boss 0x{bossId:X}, {animated}, sound {(heard ? "played" : "none")}, "
                     + $"effect {gathering} {(seen ? "shown" : "none")})");
                 break;
             }
@@ -60,7 +60,7 @@ internal sealed unsafe partial class CheatController
                 uint id = _chungusId;
                 _chungusId = 0;
                 bool gone = id != 0 && Odyssey.ResolveServerObject(id) != 0 && Odyssey.DestroyObjectById(id, out _);
-                Answer(SharedBlock.CheatStatusApplied, gone ? $"chungus: 0x{id:X} removed" : "chungus: nothing to remove");
+                Answer(SharedBlock.CheatStatusApplied, gone ? $"sentinel: 0x{id:X} removed" : "sentinel: nothing to remove");
                 break;
             }
 
@@ -76,7 +76,7 @@ internal sealed unsafe partial class CheatController
                     : Odyssey.PlayOneShotAnimation(boss, (ushort)word));
                 Answer(
                     played ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusRefused,
-                    $"chungus: animation {word} on 0x{bossId:X} {(played ? "played" : $"not played ({failure})")}");
+                    $"sentinel: animation {word} on 0x{bossId:X} {(played ? "played" : $"not played ({failure})")}");
                 break;
             }
 
@@ -86,7 +86,7 @@ internal sealed unsafe partial class CheatController
                 bool heard = Odyssey.PlaySound(name);
                 Answer(
                     heard ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusRefused,
-                    $"chungus: sound '{name}' {(heard ? "played" : "not played")}");
+                    $"sentinel: sound '{name}' {(heard ? "played" : "not played")}");
                 break;
             }
 
@@ -104,12 +104,12 @@ internal sealed unsafe partial class CheatController
 
                 Answer(
                     moved ? SharedBlock.CheatStatusApplied : SharedBlock.CheatStatusRefused,
-                    $"chungus: blink to ({to.X:F1}, {to.Y:F1}, {to.Z:F1}) {(moved ? "done" : "refused")} (boss 0x{bossId:X})");
+                    $"sentinel: blink to ({to.X:F1}, {to.Y:F1}, {to.Z:F1}) {(moved ? "done" : "refused")} (boss 0x{bossId:X})");
                 break;
             }
 
             default:
-                Answer(SharedBlock.CheatStatusRefused, $"chungus: unknown request {block.CheatAmount}");
+                Answer(SharedBlock.CheatStatusRefused, $"sentinel: unknown request {block.CheatAmount}");
                 break;
         }
     }
@@ -132,7 +132,7 @@ internal sealed unsafe partial class CheatController
         {
             Answer(
                 SharedBlock.CheatStatusEngineRefused,
-                $"chungus: could not spawn '{ChungusRule.Template}' (failure {failure}; 9 = the blueprint is not installed)");
+                $"sentinel: could not spawn '{ChungusRule.Template}' (failure {failure}; 9 = the blueprint is not installed)");
             return;
         }
 
@@ -141,7 +141,7 @@ internal sealed unsafe partial class CheatController
         nint boss = Odyssey.ResolveServerObject(id);
         int hitPoints = boss != 0 ? Odyssey.GetCurrentHitPoints(boss) : 0;
         PluginHost.Log(
-            $"chungus: spawned 0x{id:X} at ({at.X:F1}, {at.Y:F1}), {hitPoints} hp, hostile {(hostile ? "yes" : "NO")}");
+            $"sentinel: spawned 0x{id:X} at ({at.X:F1}, {at.Y:F1}), {hitPoints} hp, hostile {(hostile ? "yes" : "NO")}");
         Answer(SharedBlock.CheatStatusApplied, $"boss 0x{id:X}");
     }
 
@@ -200,7 +200,7 @@ internal sealed unsafe partial class CheatController
             }
         }
 
-        Answer(SharedBlock.CheatStatusApplied, $"chungus: power {power} lands - {result}");
+        Answer(SharedBlock.CheatStatusApplied, $"sentinel: power {power} lands - {result}");
     }
 
     /// <summary>

@@ -34,6 +34,7 @@ public class SteamConnectStringRuleTests
     [InlineData("2001:db8::1", 27140, "")]
     [InlineData("2001:db8::1", 27140, "hunter2")]
     [InlineData("::1", 1, "éèê")]      // non-ASCII survives the UTF-8 round trip
+    [InlineData("::ffff:127.0.0.1", 27140, "")]
     [InlineData("10.0.0.1", 65535, "/+=")]            // base64's own special characters
     public void EveryEncodedFormRoundTrips(string host, int port, string password)
     {
@@ -109,6 +110,11 @@ public class SteamConnectStringRuleTests
     [InlineData("kc1/host:27140/_w")] // invalid UTF-8 must not change the password to U+FFFD
     [InlineData("kc1/host:27140/Y Q")]
     [InlineData("kc1/host:27140/YQ==")]
+    [InlineData("kc1/0.0.0.0:27140")]
+    [InlineData("kc1/[::]:27140")]
+    [InlineData("kc1/255.255.255.255:27140")]
+    [InlineData("kc1/[::ffff:0.0.0.0]:27140")]
+    [InlineData("kc1/[::ffff:255.255.255.255]:27140")]
     public void MalformedStringsAreRejectedRatherThanPartlyBelieved(string? value)
     {
         Assert.False(SteamConnectStringRule.TryParse(
@@ -153,6 +159,11 @@ public class SteamConnectStringRuleTests
     [InlineData("[example.com]", 27140)]
     [InlineData("host\nname", 27140)]
     [InlineData("host\0name", 27140)]
+    [InlineData("0.0.0.0", 27140)]
+    [InlineData("::", 27140)]
+    [InlineData("255.255.255.255", 27140)]
+    [InlineData("::ffff:0.0.0.0", 27140)]
+    [InlineData("::ffff:255.255.255.255", 27140)]
     public void UnrepresentableSessionsPublishNothingRatherThanSomethingWrong(string? host, int port)
     {
         Assert.Null(SteamConnectStringRule.Format(host, port, string.Empty));

@@ -25,7 +25,8 @@ public sealed partial class CoopCommandDispatcher
     /// STUN has found a public one — a friend handed <c>192.168.1.20</c> gets a connection
     /// that can only ever time out, and would have no way to tell that from the mod being
     /// broken. So: the public endpoint when discovery has produced one, the listen endpoint
-    /// otherwise (correct for a LAN game, and honest about being nothing better).
+    /// otherwise only if it is a concrete destination. The usual wildcard listen address
+    /// is refused by the codec, so a host without a discovered endpoint publishes no invite.
     ///
     /// Called every 150 ms tick; <see cref="SteamInviteService.Publish"/> is a no-op unless
     /// the string actually changed, which is what keeps that safe.

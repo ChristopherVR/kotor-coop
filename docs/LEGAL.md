@@ -16,8 +16,8 @@ to distribute game copies, keys, cracks or bypass licensing/DRM.
 
 Development remains private at `ChristopherVR/kotor-coop-dev`. The separate public
 `ChristopherVR/kotor-coop` repository starts from fresh history and contains only
-curated information and an original animated overview. It has no player release
-yet. Legacy game-derived media and deleted recordings are excluded rather than
+curated player documentation and a GitHub Pages site. The rejected animated
+overview was removed from the current public tree. There is no player release yet. Legacy game-derived media and deleted recordings are excluded rather than
 copied through a Git mirror. See [PUBLICATION.md](PUBLICATION.md).
 
 The boss now uses the original procedural Cairn Sentinel design and synthesized
