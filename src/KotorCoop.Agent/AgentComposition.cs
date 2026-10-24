@@ -438,15 +438,25 @@ internal static class AgentComposition
                 return null;
             }
 
-            dispatcher.Dispatch(new CoopCommand(
-                CoopCommandKind.Connect, Address: options.HostEndPoint.ToString()));
+            void StartJoin()
+            {
+                if (options.SteamConnect is not null)
+                {
+                    dispatcher.JoinFromSteam(options.HostEndPoint.ToString(), options.Password);
+                }
+                else
+                {
+                    dispatcher.Dispatch(new CoopCommand(
+                        CoopCommandKind.Connect, Address: options.HostEndPoint.ToString()));
+                }
+            }
+            StartJoin();
 
             // A host still loading answers nothing; keep dialing until it does (JoinRedial).
-            string joinAddress = options.HostEndPoint.ToString();
             _ = Task.Run(
                 () => JoinRedial.RunAsync(
                     manager,
-                    () => dispatcher.Dispatch(new CoopCommand(CoopCommandKind.Connect, Address: joinAddress)),
+                    StartJoin,
                     SayJoin,
                     cts.Token),
                 cts.Token);
@@ -464,8 +474,8 @@ internal static class AgentComposition
             JoinMode joinMode = config?.JoinMode ?? JoinMode.Auto;
             bool autoAdopt = config?.AutoAdoptWorld ?? true;
 
-            if (JoinFlow.Decide(joinDirectory, joinMode, autoAdopt, out _)
-                is JoinAction.CreateCharacterThenAdopt or JoinAction.AdoptWithCoopCharacter)
+            if (options.SteamConnect is null && JoinFlow.Decide(joinDirectory, joinMode, autoAdopt, out _)
+                is (JoinAction.CreateCharacterThenAdopt or JoinAction.AdoptWithCoopCharacter))
             {
                 _ = Task.Run(
                     () => MenuAutoLoad.RunAsync(

@@ -73,6 +73,15 @@ internal static unsafe class AgentLauncher
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CloseHandle(nint handle);
 
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern nint GetCommandLineW();
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern nint CommandLineToArgvW(nint commandLine, out int count);
+
+    [DllImport("kernel32.dll")]
+    private static extern nint LocalFree(nint memory);
+
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern nint CreateFileW(
         string fileName,
@@ -213,9 +222,12 @@ internal static unsafe class AgentLauncher
             string name = ReadSetting(gameDirectory, "name") ?? string.Empty;
             string nameArgument = name.Length > 0 ? $" --name \"{name}\"" : string.Empty;
 
-            // --menu: attach and wait at the main menu, feeding the server browser, rather
-            // than connecting immediately. The player chooses in-game.
-            StringBuilder commandLine = new($"\"{agentPath}\" run --pid {pid} --kotor --menu{nameArgument}");
+            // Steam starts the retail game, not this helper. Forward one validated invite
+            // on initial startup; ordinary launches and helper restarts keep menu behavior.
+            string[] startArguments = KotorCoop.Session.SteamLaunchRule.AgentArguments(
+                ReadGameArguments(), firstLaunch: _startedGameDirectory is null);
+            string modeArguments = string.Join(" ", startArguments.Select(arg => $"\"{arg}\""));
+            StringBuilder commandLine = new($"\"{agentPath}\" run --pid {pid} --kotor {modeArguments}{nameArgument}");
 
             // The agent's dashboard writes to stdout; send it to a log beside the game. With
             // stdout redirected the dashboard takes its "redirected" path, so it neither
@@ -304,6 +316,25 @@ internal static unsafe class AgentLauncher
             StartupFailure = $"auto-start failed: {ex.Message}";
             PluginHost.Log($"agent: {StartupFailure}");
         }
+    }
+
+    private static string[] ReadGameArguments()
+    {
+        nint argv = CommandLineToArgvW(GetCommandLineW(), out int count);
+        if (argv == 0)
+        {
+            return [];
+        }
+        try
+        {
+            string[] args = new string[count];
+            for (int i = 0; i < count; i++)
+            {
+                args[i] = Marshal.PtrToStringUni(Marshal.ReadIntPtr(argv, i * nint.Size)) ?? string.Empty;
+            }
+            return args;
+        }
+        finally { LocalFree(argv); }
     }
 
     /// <summary>
