@@ -315,6 +315,20 @@ public class ConsoleCompletionEngineTests
         }
     }
 
+    [Fact]
+    public void EveryCompletedVerbIsRoutedToTheAgent()
+    {
+        // The other half of the sync demand: a verb that completes and parses but is missing
+        // from the detour's list never reaches the agent; the retail FuncInterp answers it with
+        // "function not found" (steam_status and pooladd both shipped that way).
+        HashSet<string> routed = [.. ConsoleRoutedVerbs.All];
+        string[] missing = [.. ConsoleVerbCatalog.Entries.Select(e => e.Verb).Where(v => !routed.Contains(v))];
+
+        Assert.True(
+            missing.Length == 0,
+            $"these catalog verbs are not in ConsoleRoutedVerbs, so the console never routes them: {string.Join(", ", missing)}");
+    }
+
     /// <summary>
     /// The verbs KOTOR itself registers in the developer console, read out of the retail
     /// binary's string table (the block at file offset 0x34F058..0x34F210 in the GOG 1.0.3
@@ -346,7 +360,7 @@ public class ConsoleCompletionEngineTests
         HashSet<string> retail = [.. RetailConsoleVerbs];
         List<string> shadowed = [];
 
-        foreach ((string verb, _) in ConsoleVerbCatalog.Entries)
+        foreach (string verb in ConsoleVerbCatalog.Entries.Select(e => e.Verb).Concat(ConsoleRoutedVerbs.All).Distinct())
         {
             if (retail.Contains(verb) && verb != "warp")
             {
