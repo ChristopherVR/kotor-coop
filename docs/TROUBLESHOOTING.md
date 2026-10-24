@@ -235,6 +235,12 @@ GOG   content digest: exe image C6962619, ... [exe file 8B8EC44D (DrmFree)]
 Steam content digest: exe image C6962619, ... [exe file 220AC31D (SteamStub)]
 ```
 
+If the two `exe image` values differ because one player uses an exe patch (a widescreen hex
+edit, for example), the host can set `exe_mismatch = allow` in its `coop.ini`. The joiner is
+then let in, and both screens show a `W_EXE` warning. The mod uses fixed engine addresses, so
+a patch that changed one of them can still misbehave or crash. Mention `W_EXE` in a bug report.
+The 4GB (large-address) patch does not change the `exe image` value.
+
 If a session logs `executable identity unchecked: one side published no live image digest`, one
 peer's plugin did not publish one (an older plugin, or a plugin that failed to read its own
 image — its log says which). The session still runs; the executable check is simply not in

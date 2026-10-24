@@ -180,7 +180,9 @@ public sealed partial class CoopClient
             // same capability set (so both ends gate the same channels) and the same
             // warnings to show. Computed identically, so the two agree without negotiating.
             ContentCompatibility.RequireIdenticalSave = _settings.RequireIdenticalSave;
-            _installVerdict = ContentCompatibility.Compare(_settings.Digest, welcome.Digest);
+            // allowExeMismatch: a Welcome means the host already ruled on the executable (a
+            // host that refuses never sends one), so a differing exe here is its W_EXE warning.
+            _installVerdict = ContentCompatibility.Compare(_settings.Digest, welcome.Digest, allowExeMismatch: true);
             _compatibility = _installVerdict;
             // A fresh Welcome means a fresh crossing to judge — any settle timer left running
             // from before this (re)connect named a peer/world this client is not comparing

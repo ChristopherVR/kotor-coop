@@ -125,6 +125,9 @@ public static partial class PlainLanguage
             CompatibilityCode.Gameplay =>
                 "Your game archives or campaign content differ from the host's, so shared world, dialogue, "
                 + "combat, party and item syncing is off. Install matching content to get it back.",
+            CompatibilityCode.Executable =>
+                "Your game executable differs from the host's (a patched or modded swkotor.exe?). The host "
+                + "allows this, but co-op may misbehave or crash. Mention it in any bug report.",
             _ => note.Text,
         };
     }

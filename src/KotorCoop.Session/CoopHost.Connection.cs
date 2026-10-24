@@ -101,7 +101,8 @@ public sealed partial class CoopHost
         // different save when that is not allowed) is sent as a typed Reject so the client
         // stops retrying and can tell the player why, rather than hanging on a silent host.
         ContentCompatibility.RequireIdenticalSave = _settings.RequireIdenticalSave;
-        CompatibilityVerdict verdict = ContentCompatibility.Compare(_settings.Digest, hello.Digest);
+        CompatibilityVerdict verdict = ContentCompatibility.Compare(
+            _settings.Digest, hello.Digest, _settings.AllowExeMismatch);
         _compatibility = verdict;
 
         // Behaviour-flag negotiation (docs/roadmap-seamless.md Tier 1 item 7): unlike content,

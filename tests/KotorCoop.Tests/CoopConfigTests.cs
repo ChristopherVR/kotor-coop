@@ -117,6 +117,29 @@ public class CoopConfigTests
         Assert.Null(CoopConfig.TryLoad(Path.Combine(Path.GetTempPath(), "definitely-not-there.ini")));
     }
 
+    // ---- exe_mismatch ----------------------------------------------------------------------
+
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData("refuse", false)]
+    [InlineData("allow", true)]
+    [InlineData("ALLOW", true)]
+    [InlineData("1", false)] // only the word turns the one fatal check off, never a stray truthy
+    public void ExeMismatchRefusesUnlessTheHostSaysAllow(string? value, bool allowed)
+    {
+        string path = WriteTemp(value is null ? "mode = host" : $"mode = host\nexe_mismatch = {value}");
+        try
+        {
+            CoopConfig? c = CoopConfig.TryLoad(path);
+            Assert.NotNull(c);
+            Assert.Equal(allowed, c.AllowExeMismatch);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     // ---- roadmap item 24: public address discovery / UPnP -------------------------------
 
     [Fact]
