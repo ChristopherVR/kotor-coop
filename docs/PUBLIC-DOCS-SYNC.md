@@ -22,6 +22,7 @@ source commit. Current approved sources are:
 | `LICENSE` | `LICENSE` |
 | `site/public/index.html`, `style.css`, `favicon.svg` | `docs/` with the same filenames |
 | `site/public/install.html`, `play.html`, `limitations.html` | `docs/` with the same filenames |
+| The seven explicitly listed files in `site/public/media/` | `docs/media/`: trailer, poster, transcript, provenance, music credits/license and font license |
 
 GitHub Pages serves `main:/docs`. Source `site/public/README.md` is maintainer guidance
 and is not exported. Private research/evidence is not public documentation. To publish
@@ -33,9 +34,12 @@ This disables newline conversion for every exported file, including the provenan
 inventory, so hashes survive Windows clones with `core.autocrlf=true`. Do not replace
 it with `text=auto` or add per-file conversion rules.
 
-Gameplay assets are absent until approved canonical inputs and their explicit mappings
-are committed. The exporter rejects Git LFS pointer text rather than publishing a pointer
-as a movie. It does not download remote content or infer any new approval from filenames.
+The gameplay trailer is exported only through its seven explicit file mappings. The
+raw gameplay takes and standalone music recording stay private. Preserve music
+attribution, the applicable full license, font notices and exact final-media hashes
+when replacing a trailer. The exporter rejects Git LFS pointer text rather than
+publishing a pointer as a movie. It does not download remote content or infer any
+new approval from filenames.
 
 ## Review, preview and apply
 

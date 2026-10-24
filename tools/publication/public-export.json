@@ -45,6 +45,34 @@
     {
       "source": "site/public/limitations.html",
       "target": "docs/limitations.html"
+    },
+    {
+      "source": "site/public/media/trailer.mp4",
+      "target": "docs/media/trailer.mp4"
+    },
+    {
+      "source": "site/public/media/trailer-poster.jpg",
+      "target": "docs/media/trailer-poster.jpg"
+    },
+    {
+      "source": "site/public/media/transcript.txt",
+      "target": "docs/media/transcript.txt"
+    },
+    {
+      "source": "site/public/media/provenance.json",
+      "target": "docs/media/provenance.json"
+    },
+    {
+      "source": "site/public/media/music-credits.txt",
+      "target": "docs/media/music-credits.txt"
+    },
+    {
+      "source": "site/public/media/music-license.txt",
+      "target": "docs/media/music-license.txt"
+    },
+    {
+      "source": "site/public/media/DejaVu-LICENSE.txt",
+      "target": "docs/media/DejaVu-LICENSE.txt"
     }
   ]
 }
