@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -268,6 +269,10 @@ public sealed class ServerDiscovery : IDisposable
     private const int AdvertiseIntervalMs = 1000;
     private const int SioUdpConnReset = unchecked((int)0x9800000C);
 
+    /// <summary>Beacons between re-reading the adapter list, so an adapter that comes up
+    /// mid-session (a VPN connecting) is picked up within this many seconds.</summary>
+    private const int TargetRefreshTicks = 10;
+
     private readonly int _port;
     private readonly ServerList _list = new();
     private readonly CancellationTokenSource _cts = new();
@@ -297,6 +302,83 @@ public sealed class ServerDiscovery : IDisposable
                 name, gamePort, maxPlayers, playerCount, locked, module, portraits, _cts.Token));
     }
 
+    /// <summary>
+    /// Where each beacon is sent: the limited broadcast first, then every adapter's own
+    /// directed broadcast. Windows sends <c>255.255.255.255</c> out of ONE adapter only (the
+    /// best route), so a host whose virtual LAN (Hamachi's 25.0.0.0/8, ZeroTier, Radmin) is not
+    /// that adapter was invisible to browsers on it; a directed broadcast routes out of the
+    /// adapter that owns its subnet. Loopback, link-local and single-address (/31, /32) entries
+    /// are skipped: none of them has peers to reach. Pure, so it is unit-tested.
+    /// </summary>
+    public static IReadOnlyList<IPAddress> BroadcastTargets(IEnumerable<(IPAddress Address, IPAddress Mask)> adapters)
+    {
+        List<IPAddress> targets = [IPAddress.Broadcast];
+        foreach ((IPAddress address, IPAddress mask) in adapters)
+        {
+            if (address.AddressFamily != AddressFamily.InterNetwork
+                || mask.AddressFamily != AddressFamily.InterNetwork)
+            {
+                continue;
+            }
+
+            byte[] a = address.GetAddressBytes();
+            byte[] m = mask.GetAddressBytes();
+            if (a[0] == 127 || (a[0] == 169 && a[1] == 254))
+            {
+                continue;
+            }
+
+            // A /31 or /32 (and a zero mask) has no broadcast address worth sending to.
+            uint hostBits = ~(((uint)m[0] << 24) | ((uint)m[1] << 16) | ((uint)m[2] << 8) | m[3]);
+            if (hostBits < 3 || hostBits == uint.MaxValue)
+            {
+                continue;
+            }
+
+            IPAddress directed = new([
+                (byte)(a[0] | ~m[0]), (byte)(a[1] | ~m[1]), (byte)(a[2] | ~m[2]), (byte)(a[3] | ~m[3])]);
+            if (!targets.Contains(directed))
+            {
+                targets.Add(directed);
+            }
+        }
+
+        return targets;
+    }
+
+    /// <summary>This machine's up, non-loopback IPv4 adapters for <see cref="BroadcastTargets"/>.
+    /// Never throws: an unreadable adapter list (seen under Wine) leaves the limited broadcast
+    /// alone, which is the behaviour before directed broadcasts existed.</summary>
+    private static IReadOnlyList<IPAddress> CurrentBroadcastTargets()
+    {
+        List<(IPAddress, IPAddress)> adapters = [];
+        try
+        {
+            foreach (NetworkInterface adapter in NetworkInterface.GetAllNetworkInterfaces())
+            {
+                if (adapter.OperationalStatus != OperationalStatus.Up
+                    || adapter.NetworkInterfaceType == NetworkInterfaceType.Loopback)
+                {
+                    continue;
+                }
+
+                foreach (UnicastIPAddressInformation unicast in adapter.GetIPProperties().UnicastAddresses)
+                {
+                    if (unicast.Address.AddressFamily == AddressFamily.InterNetwork && unicast.IPv4Mask is { } mask)
+                    {
+                        adapters.Add((unicast.Address, mask));
+                    }
+                }
+            }
+        }
+        catch (Exception ex) when (ex is NetworkInformationException or PlatformNotSupportedException or SocketException)
+        {
+            adapters.Clear();
+        }
+
+        return BroadcastTargets(adapters);
+    }
+
     /// <summary>Starts listening for host beacons and building the server list.</summary>
     public void StartListening()
     {
@@ -313,14 +395,21 @@ public sealed class ServerDiscovery : IDisposable
             EnableBroadcast = true,
         };
 
-        IPEndPoint broadcast = new(IPAddress.Broadcast, _port);
         byte[] buffer = new byte[ServerBeacon.MaxBytes];
+        IReadOnlyList<IPAddress> targets = [];
+        int sinceRefresh = TargetRefreshTicks;
 
         try
         {
             using PeriodicTimer timer = new(TimeSpan.FromMilliseconds(AdvertiseIntervalMs));
             do
             {
+                if (++sinceRefresh >= TargetRefreshTicks)
+                {
+                    targets = CurrentBroadcastTargets();
+                    sinceRefresh = 0;
+                }
+
                 int count = Math.Clamp(playerCount(), 0, 255);
                 string where;
                 try
@@ -348,14 +437,18 @@ public sealed class ServerDiscovery : IDisposable
                 int length = beacon.Write(buffer);
                 if (length > 0)
                 {
-                    try
+                    foreach (IPAddress target in targets)
                     {
-                        await socket.SendToAsync(buffer.AsMemory(0, length), broadcast, token).ConfigureAwait(false);
-                    }
-                    catch (SocketException)
-                    {
-                        // A transient network error (no route, interface down) must not kill
-                        // the loop; the next tick tries again.
+                        try
+                        {
+                            await socket.SendToAsync(
+                                buffer.AsMemory(0, length), new IPEndPoint(target, _port), token).ConfigureAwait(false);
+                        }
+                        catch (SocketException)
+                        {
+                            // A transient network error (no route, interface down) must not kill
+                            // the loop or skip the other adapters; the next tick tries again.
+                        }
                     }
                 }
             }
