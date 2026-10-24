@@ -20,7 +20,8 @@ $installerExe = Join-Path $packageRoot 'KotorCoop.Agent.exe'
 foreach ($required in @('KotorCoop.Agent.exe', 'dinput8.dll', 'chain-loader\dinput8.dll',
                        'coop.ini', 'install.ps1', 'README.txt',
                        'Override\k_coop_phantom.utc', 'KotorCoop.LICENSE.txt',
-                       'KotorCoop.LEGAL.txt', 'KotorCoop.THIRD-PARTY-NOTICES.txt')) {
+                       'KotorCoop.LEGAL.txt', 'KotorCoop.THIRD-PARTY-NOTICES.txt',
+                       'KotorCoop.KOTOR-LINKING-EXCEPTION.txt')) {
     if (-not (Test-Path -LiteralPath (Join-Path $packageRoot $required))) {
         throw "Missing package file: $required"
     }
@@ -58,7 +59,7 @@ try {
             [IO.File]::WriteAllText((Join-Path $game 'dinput8.dll'), $foreign)
         }
         Invoke-Installer "$layout-install" @('install', '--game-path', $game)
-        foreach ($notice in @('KotorCoop.LICENSE.txt', 'KotorCoop.LEGAL.txt', 'KotorCoop.THIRD-PARTY-NOTICES.txt', 'KotorCoop.THIRD-PARTY-INVENTORY.md')) {
+        foreach ($notice in @('KotorCoop.LICENSE.txt', 'KotorCoop.LEGAL.txt', 'KotorCoop.THIRD-PARTY-NOTICES.txt', 'KotorCoop.THIRD-PARTY-INVENTORY.md', 'KotorCoop.KOTOR-LINKING-EXCEPTION.txt')) {
             Assert-Check ((Get-FileHash -LiteralPath (Join-Path $game $notice)).Hash -eq
                 (Get-FileHash -LiteralPath (Join-Path $packageRoot $notice)).Hash) "$layout installs $notice unchanged"
         }
@@ -127,6 +128,7 @@ try {
         Assert-Check ([IO.File]::ReadAllText((Join-Path $game 'coop.ini')) -ceq $customIni) "$layout uninstall preserves settings"
         Assert-Check (-not (Test-Path -LiteralPath (Join-Path $game 'KotorCoop.Agent.exe'))) "$layout agent removed"
         Assert-Check (-not (Test-Path -LiteralPath (Join-Path $game 'KotorCoop.CollectLogs.cmd'))) "$layout log shortcut removed"
+        Assert-Check (-not (Test-Path -LiteralPath (Join-Path $game 'KotorCoop.KOTOR-LINKING-EXCEPTION.txt'))) "$layout linking permission removed on uninstall"
         if ($layout -eq 'chain') {
             Assert-Check ([IO.File]::ReadAllText((Join-Path $game 'dinput8.dll')) -ceq $foreign) 'foreign DLL restored'
             Assert-Check (Test-Path -LiteralPath (Join-Path $game 'extra.dll')) 'custom chain DLL retained'

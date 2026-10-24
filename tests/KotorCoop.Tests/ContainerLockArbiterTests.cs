@@ -13,6 +13,35 @@ public class ContainerLockArbiterTests
     private const uint ContainerId = 0x131;
     private const uint RequestSerial = 42;
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void OnlyAPositiveGrantInvokesTheNativeResumeBoundary(bool answered, bool granted)
+    {
+        ContainerLockPollOutcome expected = !answered ? ContainerLockPollOutcome.TimedOut
+            : granted ? ContainerLockPollOutcome.Granted : ContainerLockPollOutcome.Denied;
+        ContainerLockArbiter arbiter = new();
+        arbiter.BeginRequest(ContainerId, RequestSerial, 1000);
+        List<uint> resumed = [];
+        Assert.Equal(expected, arbiter.PollAndResume(1000 + ContainerLockArbiter.TimeoutMs,
+            answered, granted, resumed.Add));
+        Assert.Equal(expected == ContainerLockPollOutcome.Granted ? new[] { ContainerId } : [], resumed);
+        arbiter.PollAndResume(3000, true, true, resumed.Add);
+        Assert.Equal(expected == ContainerLockPollOutcome.Granted ? 1 : 0, resumed.Count);
+    }
+
+    [Fact]
+    public void CancelledRequestAndItsLateGrantNeverResume()
+    {
+        ContainerLockArbiter arbiter = new();
+        arbiter.BeginRequest(ContainerId, RequestSerial, 1000);
+        arbiter.Reset();
+        int calls = 0;
+        arbiter.PollAndResume(1001, true, true, _ => calls++);
+        Assert.Equal(0, calls);
+    }
+
     [Fact]
     public void StartsIdle()
     {

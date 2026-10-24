@@ -226,4 +226,110 @@ class ExportTests(unittest.TestCase):
         self.export()
         self.assertEqual(0,subprocess.run(command+['--check'],capture_output=True).returncode)
 
+    def source_policy(self):
+        self.policy.update(schema=2, mode='open-source')
+        files = {
+            'Directory.Build.props': b'<Project />\n',
+            'KotorCoop.slnx': b'<Solution />\n',
+            'VERSION': b'1.2.3\n',
+            'src/KotorCoop.Agent/Program.cs': b'// current original source\n',
+            'src/KotorCoop.Agent/Assets/icon.ico': b'\0\0binary\nasset\0',
+            'src/KotorCoop.Loader/dinput8_loader.c': b'// native loader\n',
+            'tests/KotorCoop.Tests/ExampleTests.cs': b'// tests\n',
+            'profiles/coop.ini.example': b'host =\n',
+            'profiles/override/k_coop_spawn.utw': b'UTW binary\0\n',
+            'tools/package.ps1': b'# packaging\n',
+            'tools/publication/package_policy.py': b'# package boundary\n',
+            'third-party/NOTICES.txt': b'Full upstream license body\n',
+        }
+        for path,data in files.items():
+            self.write(path,data)
+            self.policy['files'].append({'source':path,'target':path})
+        self.save_policy();self.commit()
+        return files
+
+    def test_open_source_export_contains_exact_current_build_inputs_only(self):
+        files=self.source_policy()
+        result=self.export()
+        for path,data in files.items():
+            self.assertEqual(data,(self.target/path).read_bytes())
+        self.assertFalse((self.target/'.git').exists())
+        self.assertFalse((self.target/'site/public').exists())
+        self.assertFalse((self.target/'private-recording.wav').exists())
+        inventory=json.loads((self.target/e.INVENTORY).read_bytes())
+        self.assertEqual(2,inventory['schema'])
+        self.assertEqual('open-source',inventory['mode'])
+        self.assertEqual([],self.plan()['writes'])
+
+    def test_open_source_mode_must_be_explicit_and_schema_one_stays_docs_only(self):
+        self.source_policy()
+        for schema,mode in ((1,None),(2,None),(2,'mirror'),(1,'open-source')):
+            policy=dict(self.policy,schema=schema)
+            if mode is None:policy.pop('mode',None)
+            else:policy['mode']=mode
+            with self.subTest(schema=schema,mode=mode),self.assertRaises(e.PolicyError):
+                e.parse_policy(json.dumps(policy))
+
+    def test_open_source_policy_refuses_private_history_media_and_unknown_paths(self):
+        self.policy.update(schema=2,mode='open-source')
+        for path in ('artifacts/recording.mp4','media/trailer/audio/opening.wav','tools/kotor1_0_3.db',
+                     'docs/research/private.md','src/KotorCoop.Agent/bin/Release/secret.cs',
+                     'src/Unknown/Program.cs','src/KotorCoop.Agent/vendor.dll',
+                     'profiles/kotor1-session.json','tools/crashlog.ps1','tools/publication/export_public.py',
+                     'src/KotorCoop.Agent/*.cs','.git/config'):
+            policy=dict(self.policy,files=self.policy['files']+[{'source':path,'target':path}])
+            with self.subTest(path=path),self.assertRaises(e.PolicyError):
+                e.parse_policy(json.dumps(policy))
+
+    def test_open_source_mapping_cannot_rename_source_into_another_allowed_target(self):
+        self.policy.update(schema=2,mode='open-source')
+        self.policy['files'].append({'source':'src/KotorCoop.Agent/Program.cs','target':'docs/program.txt'})
+        with self.assertRaisesRegex(e.PolicyError,'boundary'):e.parse_policy(json.dumps(self.policy))
+
+    def test_source_credentials_private_machine_paths_and_internal_urls_still_refused(self):
+        for payload in (b'// token ghp_'+b'a'*35,b'// C:\\Users\\real-owner\\private',
+                        b'// https://github.com/ChristopherVR/kotor-coop-dev',b'// file://private/path'):
+            with self.subTest(payload=payload[:20]),self.assertRaises(e.PolicyError):
+                e.validate_content({'src/KotorCoop.Agent/Program.cs':payload})
+        e.validate_content({'tests/KotorCoop.Tests/PackageInstallerTests.cs':b'// C:\\Users\\x\\Downloads\\archive.zip'})
+        with self.assertRaises(e.PolicyError):
+            e.validate_content({'tests/KotorCoop.Tests/PackageInstallerTests.cs':b'// C:\\Users\\real-owner\\private'})
+
+    def test_source_export_upgrades_docs_manifest_without_copying_history(self):
+        self.export()
+        self.source_policy()
+        result=self.plan()
+        self.assertIn('src/KotorCoop.Agent/Program.cs',result['writes'])
+        e.apply(result)
+        self.assertEqual([],self.plan()['writes'])
+        self.assertFalse((self.target/'.git').exists())
+
+    def test_source_edits_require_committing_reviewed_snapshot(self):
+        self.source_policy()
+        self.write('src/KotorCoop.Agent/Program.cs',b'// pending source\n')
+        with self.assertRaisesRegex(e.PolicyError,'uncommitted'):self.plan()
+
+    def test_secret_patterns_checked_in_binary_members_too(self):
+        with self.assertRaisesRegex(e.PolicyError,'credential'):
+            e.validate_content({'src/KotorCoop.Agent/Assets/icon.ico':b'\0'+b'ghp_'+b'a'*35})
+
+    def test_source_ci_requires_exact_curated_template_mapping(self):
+        self.source_policy()
+        source='tools/publication/public/ci.yml';target='.github/workflows/ci.yml'
+        workflow=b'name: Contribution CI\non: [push, pull_request]\npermissions:\n  contents: read\n'
+        self.write(source,workflow)
+        self.policy['files'].append({'source':source,'target':target})
+        self.save_policy();self.commit();self.export()
+        self.assertEqual(workflow,(self.target/target).read_bytes())
+        for schema,source,target in ((1,source,target),
+                (2,'.github/workflows/ci.yml','.github/workflows/ci.yml'),
+                (2,source,'.github/workflows/release.yml'),
+                (2,'tools/publication/public/unreviewed.yml','.github/workflows/ci.yml')):
+            policy=dict(self.policy,schema=schema,files=self.policy['files'][:-1]+[{'source':source,'target':target}])
+            if schema==1:policy.pop('mode')
+            with self.subTest(schema=schema,source=source,target=target),self.assertRaises(e.PolicyError):
+                e.parse_policy(json.dumps(policy))
+        with self.assertRaisesRegex(e.PolicyError,'Private development'):
+            e.validate_content({'.github/workflows/ci.yml':b'# file://private-build'})
+
 if __name__=='__main__':unittest.main()

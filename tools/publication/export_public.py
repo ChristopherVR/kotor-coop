@@ -19,6 +19,23 @@ RETIRED = frozenset(('media/kotor-coop-overview.mp4', 'media/poster.jpg',
                      'media/provenance.json', 'media/transcript.txt', 'media/DejaVu-LICENSE.txt'))
 TEXT_TYPES = {'.md', '.txt', '.html', '.css', '.svg', '.json'}
 EXTENSIONS = TEXT_TYPES | {'.png', '.jpg', '.mp4'}
+SOURCE_TEXT_TYPES = {'.cs', '.csproj', '.props', '.slnx', '.ps1', '.py', '.c', '.def', '.example', '.sh', '.cmd', '.ini', '.txi', '.yml'}
+SOURCE_TOP = frozenset(('Directory.Build.props', 'KotorCoop.slnx', 'VERSION', 'THIRD-PARTY-NOTICES.md', 'KOTOR-LINKING-EXCEPTION.txt'))
+SOURCE_TOOLS = frozenset(('tools/devenv.ps1', 'tools/package.ps1', 'tools/Stage-ThirdPartyNotices.ps1',
+    'tools/install.ps1', 'tools/install.sh', 'tools/KotorCoop.CollectLogs.cmd', 'tools/package-README.txt',
+    'tools/verify-package.ps1', 'tools/test-fast.ps1', 'tools/Scan-PublicPackage.ps1',
+    'tools/Publish-PublicRelease.ps1', 'tools/publication/package_policy.py',
+    'tools/publication/test_package_policy.py', 'tools/publication/corresponding-source.json',
+    'tools/publication/prepare_corresponding_source.py', 'tools/publication/test_prepare_corresponding_source.py'))
+SOURCE_PROFILES = frozenset(('profiles/coop.ini.example', 'profiles/kotor1.json', 'profiles/plugin.json',
+    'profiles/mockgame.json', 'profiles/mods/README.md', 'profiles/mods/brotherhood-of-shadow-solomons-revenge.json',
+    'profiles/mods/jedi-from-the-start.json', 'profiles/mods/super-skip-taris.json',
+    *('profiles/override/' + x for x in ('k_coop_chline.wav', 'k_coop_chsnap.wav', 'k_coop_chungus.mdl',
+    'k_coop_chungus.mdx', 'k_coop_chungus.tga', 'k_coop_chungusg.tga', 'k_coop_chungusg.txi',
+    'k_coop_jediclass.dlg', 'k_coop_phantom.utc', 'k_coop_spawn.utw'))))
+SOURCE_NOTICES = frozenset('third-party/' + x for x in ('NOTICES.txt', 'manifest.json', 'grammar-origins.json',
+    'embedded-resource-provenance.json', 'package-provenance.json', 'Kotor-Patch-Manager.LICENSE.txt',
+    'address-database-provenance.json'))
 SECRET = re.compile(rb'(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,}|AKIA[0-9A-Z]{16}|sk-proj-[A-Za-z0-9_-]{30,}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|https?://[^\s/:]+:[^\s/@]+@)')
 
 class PolicyError(ValueError):
@@ -47,9 +64,31 @@ def source_allowed(value):
     return value == 'LICENSE' or value.startswith(('site/public/', 'tools/publication/public/'))
 
 def target_allowed(value):
-    if value in ('README.md', 'SECURITY.md', 'LICENSE', '.gitignore', '.gitattributes'):
+    if value in ('README.md', 'SECURITY.md', 'LICENSE', '.gitignore', '.gitattributes', 'CONTRIBUTING.md'):
         return True
     return value.startswith('docs/') and PurePosixPath(value).suffix.lower() in EXTENSIONS and not any(x.startswith('.') for x in PurePosixPath(value).parts)
+
+def open_source_allowed(value):
+    p = PurePosixPath(value)
+    if any(x.startswith('.') or x.lower() in ('bin', 'obj', '__pycache__', 'testresults') for x in p.parts):
+        return False
+    if value in SOURCE_TOP | SOURCE_TOOLS | SOURCE_PROFILES | SOURCE_NOTICES:
+        return True
+    if re.fullmatch(r'src/KotorCoop\.(Agent|Memory|MockGame|Plugin|Protocol|Session|Steam)/.+', value):
+        return p.suffix in {'.cs', '.csproj', '.ico', '.ps1'}
+    if value.startswith('src/KotorCoop.Loader/'):
+        return value in ('src/KotorCoop.Loader/build.ps1', 'src/KotorCoop.Loader/dinput8_loader.c',
+                         'src/KotorCoop.Loader/dinput8.def', 'src/KotorCoop.Loader/dinput8.chain.example')
+    if value.startswith('tests/KotorCoop.Tests/'):
+        return p.suffix in {'.cs', '.csproj'}
+    return bool(re.fullmatch(r'tools/chungus/[A-Za-z0-9_-]+\.py', value))
+
+
+def mapping_allowed(source, target, schema):
+    return ((source_allowed(source) and target_allowed(target)) or
+            (schema == 2 and source == 'tools/publication/public/ci.yml' and target == '.github/workflows/ci.yml') or
+            (schema == 2 and source == target and open_source_allowed(source)))
+
 
 def linked(path):
     if not path.exists() and not path.is_symlink():
@@ -71,19 +110,73 @@ def blob(root, commit, path):
         raise PolicyError('Publication input is not a regular Git file: ' + path)
     return git(root, 'cat-file', 'blob', oid.decode())
 
+def blobs(root, commit, paths):
+    """Load one committed tree and one binary-safe batch for a large source export."""
+    entries = {}
+    for entry in git(root, 'ls-tree', '-r', '-z', commit).split(b'\0'):
+        if not entry:
+            continue
+        metadata, name = entry.split(b'\t', 1)
+        entries[name.decode()] = metadata.split()
+    selected = {}
+    for path in paths:
+        clean_path(path)
+        entry = entries.get(path)
+        if entry is None:
+            raise PolicyError('Committed publication input is missing: ' + path)
+        mode, kind, oid = entry
+        if kind != b'blob' or mode not in (b'100644', b'100755'):
+            raise PolicyError('Publication input is not a regular Git file: ' + path)
+        selected[path] = oid
+    unique = list(dict.fromkeys(selected.values()))
+    result = subprocess.run(['git', '-C', str(root), 'cat-file', '--batch'],
+        input=b''.join(oid + b'\n' for oid in unique), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode:
+        raise PolicyError('Git batch blob read failed')
+    payloads = {}; offset = 0
+    for oid in unique:
+        end = result.stdout.find(b'\n', offset)
+        header = result.stdout[offset:end].split()
+        if end < offset or len(header) != 3 or header[:2] != [oid, b'blob']:
+            raise PolicyError('Invalid Git batch blob header')
+        size = int(header[2]); start = end + 1; offset = start + size + 1
+        if offset > len(result.stdout) or result.stdout[offset - 1:offset] != b'\n':
+            raise PolicyError('Truncated Git batch blob')
+        payloads[oid] = result.stdout[start:start + size]
+    return {path: payloads[oid] for path, oid in selected.items()}
+
+
+def dirty_selected(root, selected):
+    # Avoid a Windows command line containing thousands of source pathspecs.
+    entries = iter(git(root, 'status', '--porcelain', '-z', '--untracked-files=all').split(b'\0'))
+    selected = set(selected)
+    for entry in entries:
+        if not entry:
+            continue
+        if entry[3:].decode() in selected:
+            return True
+        if b'R' in entry[:2] or b'C' in entry[:2]:
+            if next(entries, b'').decode() in selected:
+                return True
+    return False
+
+
 def parse_policy(data):
     try:
         value = json.loads(data)
     except (ValueError, UnicodeError) as exc:
         raise PolicyError('Invalid publication policy JSON') from exc
-    if value.get('schema') != 1 or value.get('target_repository') != PUBLIC_REPO or not isinstance(value.get('files'), list):
+    if (value.get('schema') not in (1, 2) or value.get('target_repository') != PUBLIC_REPO or
+        not isinstance(value.get('files'), list) or
+        (value['schema'] == 2 and value.get('mode') != 'open-source') or
+        (value['schema'] == 1 and 'mode' in value)):
         raise PolicyError('Unsupported publication policy')
     seen = set()
     for entry in value['files']:
         if set(entry) != {'source', 'target'}:
             raise PolicyError('Each mapping must have exactly source and target')
         source, target = clean_path(entry['source']), clean_path(entry['target'])
-        if not source_allowed(source) or not target_allowed(target):
+        if not mapping_allowed(source, target, value['schema']):
             raise PolicyError('Mapping crosses the public boundary: ' + source + ' -> ' + target)
         if target.casefold() in seen:
             raise PolicyError('Duplicate public target: ' + target)
@@ -97,13 +190,18 @@ def validate_content(contents):
     for target, data in contents.items():
         if data.startswith(b'version https://git-lfs.github.com/spec/v1'):
             raise PolicyError('LFS pointers are not publication content: ' + target)
-        if PurePosixPath(target).suffix not in TEXT_TYPES and target not in ('LICENSE', '.gitignore', '.gitattributes'):
-            continue
         if SECRET.search(data):
             raise PolicyError('Potential credential in approved content: ' + target)
+        if PurePosixPath(target).suffix not in TEXT_TYPES | SOURCE_TEXT_TYPES and target not in ('LICENSE', 'VERSION', '.gitignore', '.gitattributes'):
+            continue
         text = data.decode('utf-8-sig')
-        if re.search(r'kotor-coop-dev|(?:[A-Z]:[\\/](?:Users|Development)\b)|file://', text, re.I):
+        private_check = text
+        if target == 'tests/KotorCoop.Tests/PackageInstallerTests.cs':
+            private_check = private_check.replace('C:\\Users\\x\\', 'SYNTHETIC/')
+        if re.search(r'kotor-coop-dev|(?:[A-Z]:[\\/](?:Users|Development)\b)|file://', private_check, re.I):
             raise PolicyError('Private development reference in public content: ' + target)
+        if PurePosixPath(target).suffix not in TEXT_TYPES:
+            continue
         links = re.findall(r'(?:href|src)\s*=\s*[\"\x27]([^\"\x27]+)', text, re.I)
         links += re.findall(r'!?\[[^\]]*\]\(([^\s)]+)(?:\s+[^)]*)?\)', text)
         links += re.findall(r'url\(\s*[\"\x27]?([^\s)\"\x27]+)', text, re.I)
@@ -145,29 +243,32 @@ def plan(source, destination, source_ref=None, adopt_existing=False):
     policy_bytes = blob(source, commit, POLICY)
     policy = parse_policy(policy_bytes)
     selected = [POLICY, *IMPLEMENTATION] + [x['source'] for x in policy['files']]
-    if git(source, 'status', '--porcelain', '--untracked-files=all', '--', *selected):
+    if dirty_selected(source, selected):
         raise PolicyError('Approved publication sources, policy or exporter implementation have uncommitted changes; commit reviewed inputs first')
     contents = {}; file_rows = []
+    committed = blobs(source, commit, [x['source'] for x in policy['files']])
     for row in policy['files']:
-        data = blob(source, commit, row['source'])
+        data = committed[row['source']]
         contents[row['target']] = data
         file_rows.append({**row, 'sha256': digest(data), 'bytes': len(data)})
     if contents.get('.gitattributes') != b'* -text\n':
         raise PolicyError('Public .gitattributes must be exactly * -text with an LF newline')
     validate_content(contents)
-    inventory = {'schema': 1, 'source_commit': commit,
+    inventory = {'schema': policy['schema'], 'source_commit': commit,
                  'policy_sha256': digest(policy_bytes), 'files': sorted(file_rows, key=lambda x:x['target'])}
+    if policy['schema'] == 2:
+        inventory['mode'] = 'open-source'
     contents[INVENTORY] = (json.dumps(inventory, indent=2, ensure_ascii=True) + '\n').encode()
     prior = {}
     if (destination / INVENTORY).exists():
         raw = (destination / INVENTORY).read_bytes()
         try:
             previous = json.loads(raw)
-            if previous['schema'] != 1:
+            if previous['schema'] not in (1, 2) or (previous['schema'] == 2 and previous.get('mode') != 'open-source'):
                 raise ValueError()
             for entry in previous['files']:
                 path = clean_path(entry['target'])
-                if not target_allowed(path) or not source_allowed(clean_path(entry['source'])) or not re.fullmatch(r'[0-9a-f]{64}', entry['sha256']):
+                if not mapping_allowed(clean_path(entry['source']), path, previous['schema']) or not re.fullmatch(r'[0-9a-f]{64}', entry['sha256']):
                     raise ValueError()
                 prior[path] = entry['sha256']
         except (ValueError, KeyError, TypeError):

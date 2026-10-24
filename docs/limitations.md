@@ -152,14 +152,28 @@ through the game's own scripts and conversations.
   to update them, after making a backup; decline to keep yours. If something this page says is on
   seems off, compare with the packaged `KotorCoop.DEFAULTS.ini`.
 
-## Not yet tried on real hardware
+## Still incomplete or not fully verified
 
-Built and tested automatically, but nobody has watched them on a running game:
+These still need live testing or have unresolved failures from the checks so far:
 
 - A friend on a different internet connection joining through the automatic port opening.
 - The Windows firewall rule making the difference on a second real PC.
 - Very long sessions: the longest was about three and a half hours with two copies.
-- Wide-screen resolutions (1280x720 and 1920x1080 fell back to the game's own 800x600 when tried).
+- Full widescreen and replacement-menu compatibility. Co-op now follows the live button
+  column and chooses a visible, non-overlapping slot. The supplied KOTOR Enhanced Menu and
+  Controller Support v3.0 archive was checked on this PC with GOG 1.03. Cold 1280x720,
+  1920x1080, 2560x1440 and 3840x2160 now retain their requested size, render Co-op, and accept clicks
+  on the drawn Co-op, browser Cancel and Options/Graphics controls. The early resolution
+  fallback and isolated-background mouse offsets are fixed. Co-op also rebinds when a
+  resolution reload restores its old label. The 4K startup crash is fixed by preserving
+  requested windowed mode. The 1024x768 → 1280x720 → 1024x768 round trip now keeps controls
+  visible and clickable. This is **not full compatibility**: Enhanced still needs a restart
+  to regenerate layout/fonts, so large reductions can leave old controls outside the viewport.
+  The full 4K client check used a borderless window on a private desktop; ordinary decorated
+  windows can be constrained by Windows. This PC does not advertise 3440x1440, which still
+  falls back to 800x600. Steam, normal foreground input, exclusive fullscreen and physical controllers
+  remain unverified. Geometry tests through 5120x1440 do not establish rendering there.
+  If the button cannot fit, try **F9**. See the [evidence and remaining checks](research/menu-widescreen-compatibility.md).
 - Parts of the story that were skipped when testing: the Manaan star map and control-station puzzle, the Leviathan command deck and escape, and a story script locking a door or chest again (the Sith base).
 - A complete two-player campaign past Taris and through the ending.
 

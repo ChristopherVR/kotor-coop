@@ -223,9 +223,8 @@ public sealed partial class KotorGameBridge
     }
 
     /// <summary>
-    /// Hands the plugin the arbiter's answer to one request. The granted bit is written LAST,
-    /// after the serial it answers — same ordering rule as every other agent-&gt;plugin pair in
-    /// this file (e.g. <see cref="WriteRemoteDialogue"/>'s active flag): the plugin must never
+    /// Hands the plugin the arbiter's answer to one request. The serial is written LAST,
+    /// after the granted bit it publishes: the plugin must never
     /// see a matching serial with a stale granted bit still sitting behind it.
     /// </summary>
     public bool WriteContainerLockResponse(uint requestSerial, bool granted)
@@ -235,9 +234,8 @@ public sealed partial class KotorGameBridge
             return false;
         }
 
-        bool ok = _memory.TryWrite(_pluginBlock + BlockContainerLockResponseSerial, requestSerial);
-        ok &= _memory.TryWrite(_pluginBlock + BlockContainerLockResponseGranted, granted ? 1u : 0u);
-        return ok;
+        return _memory.TryWrite(_pluginBlock + BlockContainerLockResponseGranted, granted ? 1u : 0u)
+            && _memory.TryWrite(_pluginBlock + BlockContainerLockResponseSerial, requestSerial);
     }
 
     /// <summary>

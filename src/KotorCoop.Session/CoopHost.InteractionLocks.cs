@@ -18,6 +18,7 @@ public sealed partial class CoopHost
     // lease rather than a claim/release handshake.
 
     private readonly InteractionLockStore _interactionLocks = new();
+    private readonly ContainerClaimEpochs _containerClaimEpochs = new();
 
     /// <summary>The host's own claim goes through the same store as a client's, so ownership
     /// is decided in exactly one place — the same discipline as the dialogue token.
@@ -37,8 +38,12 @@ public sealed partial class CoopHost
             return;
         }
 
+        uint releaseSerial;
+        lock (_gate)
+            releaseSerial = !active && kind == InteractionKind.Container
+                ? _containerClaimEpochs.ForRelease(_interactionModule, targetId) : 0;
         _interactionLocks.Claim(
-            new InteractionClaimPacket(HostPeerId, _interactionModule, tag, kind, active, targetId),
+            new InteractionClaimPacket(HostPeerId, _interactionModule, tag, kind, active, targetId, releaseSerial),
             SessionClock.NowMs);
     }
 
@@ -94,6 +99,9 @@ public sealed partial class CoopHost
 
         _interactionModule = module ?? string.Empty;
 
+        lock (_gate)
+            _containerClaimEpochs.Record(_interactionModule, targetId, requestSerial);
+
         bool granted = _interactionLocks.Claim(
             new InteractionClaimPacket(
                 HostPeerId, _interactionModule, string.Empty, InteractionKind.Container, true,
@@ -140,13 +148,13 @@ public sealed partial class CoopHost
 
         bool granted = _interactionLocks.Claim(claim, SessionClock.NowMs);
 
-        // An explicit arbitration request (RequestSerial != 0, protocol version 44) gets an
+        // An active explicit arbitration request (RequestSerial != 0) gets an
         // immediate, UNICAST answer instead of waiting for the requester to notice its claim
         // did or did not land on the next InteractionLockPacket broadcast — see
         // docs/research/container-sync.md's container_lock_arbitration section. The ordinary
-        // per-tick republish (RequestSerial == 0) is unaffected: no response is ever sent for
-        // it, exactly as before this feature existed.
-        if (claim.RequestSerial != 0)
+        // active per-tick republish (RequestSerial == 0) is unaffected. Inactive levels
+        // carry the epoch being released and must not overwrite a grant with a reply.
+        if (claim.Active && claim.RequestSerial != 0)
         {
             // Private buffer: this runs on the receive loop while Tick() is encoding broadcasts
             // into _sendBuffer on the tick thread — see CoopClient.RequestContainerLock.

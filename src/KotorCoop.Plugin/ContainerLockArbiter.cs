@@ -50,19 +50,16 @@ internal enum ContainerLockPollOutcome
     /// does NOT re-issue.</summary>
     Denied,
 
-    /// <summary>No answer arrived before the deadline. The caller falls back to "proceed as
-    /// before this feature existed" — see <see cref="ContainerLockArbiter.TimeoutMs"/>'s own
-    /// remarks for why that is the safe default rather than a refusal.</summary>
+    /// <summary>No answer arrived before the deadline. Refuse this click; a new click may
+    /// retry. Silence cannot authorize an open when a denial and broadcast were both lost.</summary>
     TimedOut,
 }
 
 internal sealed class ContainerLockArbiter
 {
     /// <summary>
-    /// How long a request waits for a host answer before giving up and falling back to the
-    /// pre-arbitration behaviour (proceed as if nothing were held — <c>ContainerUseHook</c>'s
-    /// own peer-held check still runs on the re-issued click either way, so a fallback can never
-    /// steal an object a peer genuinely holds).
+    /// How long a request waits for a host answer before refusing this click. Only a positive
+    /// grant authorizes resumption; the user can retry and abandoned reservations expire.
     ///
     /// 1000ms, raised from 300ms on 2026-08-28: the reply is not one LAN round trip but
     /// plugin -> shared block -> agent pump tick -> UDP -> host -> UDP -> agent pump tick ->
@@ -138,6 +135,17 @@ internal sealed class ContainerLockArbiter
         }
 
         return ContainerLockPollOutcome.Waiting;
+    }
+
+    /// <summary>The only resumption gate: silence is never permission to open. Kept here
+    /// so timeout, denial and cancellation are exercised with the actual callback boundary.</summary>
+    public ContainerLockPollOutcome PollAndResume(long nowMs, bool responseArrived, bool granted,
+        Action<uint> resume)
+    {
+        uint target = _targetId;
+        ContainerLockPollOutcome outcome = Poll(nowMs, responseArrived, granted);
+        if (outcome == ContainerLockPollOutcome.Granted) resume(target);
+        return outcome;
     }
 
     /// <summary>Drops any in-flight request without acting on it — a module change reassigns

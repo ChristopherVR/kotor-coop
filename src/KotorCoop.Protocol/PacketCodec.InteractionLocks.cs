@@ -15,7 +15,7 @@ public static partial class PacketCodec
         w.WriteUInt8((byte)packet.Kind);
         w.WriteUInt8(packet.Active ? (byte)1 : (byte)0);
         w.WriteUInt32(packet.TargetId); // version 37: InteractionKind.Container's placeable id
-        w.WriteUInt32(packet.RequestSerial); // TODO(version): 0 = the ordinary per-tick level
+        w.WriteUInt32(packet.RequestSerial); // active: arbitration request; inactive: released reservation
         return w.Failed ? 0 : w.Position;
     }
 

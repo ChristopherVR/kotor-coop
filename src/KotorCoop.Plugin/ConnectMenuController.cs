@@ -43,11 +43,13 @@ internal sealed unsafe class ConnectMenuController
     /// can reach the block. There is a single plugin instance per process.</summary>
     private static ConnectMenuController? _instance;
 
-    private bool _bound;
+    private nint _boundButton;
+    private int _boundWidth, _boundHeight;
+    private bool _reportedUnsafeSlot;
     private int _logged;
 
     /// <summary>Rebind on a return to the menu (a load tears the menu down).</summary>
-    public void Invalidate() => _bound = false;
+    public void Invalidate() => _boundButton = 0;
 
     public void OnFrame()
     {
@@ -58,7 +60,7 @@ internal sealed unsafe class ConnectMenuController
         // a server means we are in a world, where the main menu — and BTN_WARP — is gone.
         if ((!_configEnabled && !_block.ConnectMenuEnabled) || Odyssey.HasServer)
         {
-            _bound = false;
+            Invalidate();
             return;
         }
 
@@ -69,14 +71,14 @@ internal sealed unsafe class ConnectMenuController
         // re-shown and re-bound from scratch.
         if (NativeBrowserController.IsOpen)
         {
-            _bound = false;
+            Invalidate();
             return;
         }
 
         nint button = Odyssey.GetCoopMenuButton();
         if (button == 0)
         {
-            _bound = false;
+            Invalidate();
             return; // logo movies still playing, or not on the menu
         }
 
@@ -84,14 +86,30 @@ internal sealed unsafe class ConnectMenuController
         // (0x0067C669 clears bit 0x2 of control+0x44), so the visible bit must be re-asserted —
         // that single bit gates BOTH drawing and mouse hit-testing. The control is otherwise
         // fully constructed: its flags differ from a working button's by exactly this bit, and
-        // its extent already places it one row below Quit.
-        Odyssey.SetControlVisible(button);
-        AlignWithMenuColumn(button);
-
-        if (!_bound)
+        // the stock 800x600 extent already places it one row below Quit.
+        // A replacement can rebuild the menu between frames, including at the same address.
+        // The constructor's hidden flag detects that case before we unhide it again.
+        // Changing resolution reloads the .gui on the SAME visible object, restoring
+        // "Warp" without running the constructor. Pointer/visibility alone miss it.
+        int width = Odyssey.ScreenWidth, height = Odyssey.ScreenHeight;
+        bool needsBinding = _boundButton != button || !Odyssey.IsControlVisible(button)
+            || _boundWidth != width || _boundHeight != height;
+        if (!AlignWithMenuColumn(button))
         {
-            _bound = true;
+            Odyssey.SetControlHidden(button);
+            Invalidate();
+            if (!_reportedUnsafeSlot)
+            {
+                LogOnce("menu: no safe Co-op button slot; press F9 to open the server browser");
+                _reportedUnsafeSlot = true;
+            }
+            return;
+        }
+        _reportedUnsafeSlot = false;
+        Odyssey.SetControlVisible(button);
 
+        if (needsBinding)
+        {
             // Relabel the stock dev text ("Warp") through the engine's own SetText, which also
             // refreshes the linked text object and pins str_ref to -1 so the literal wins. Safe
             // now that the control address is right — the earlier "relabel crash" was the same
@@ -100,32 +118,36 @@ internal sealed unsafe class ConnectMenuController
 
             Odyssey.BindControlClick(
                 button, 0x1, (nint)(delegate* unmanaged[Thiscall]<nint, nint, void>)&OnCoopClicked);
+            _boundButton = button;
+            _boundWidth = width;
+            _boundHeight = height;
             LogOnce("menu: Co-op button shown, labelled and bound");
         }
     }
 
     /// <summary>
-    /// Puts the Co-op button one row under the menu's own buttons, the slot the stock 800x600
-    /// layout gives it. A menu mod that lays the menu out for the player's resolution moves the
-    /// real buttons and leaves BTN_WARP behind (see <see cref="MenuColumnRule"/>). Only writes
+    /// Places Co-op beside the live menu column (see <see cref="MenuColumnRule"/>). Only writes
     /// when the button is somewhere else, so a steady menu costs a scan and a compare per frame,
     /// and a menu the engine rebuilds at the same address is put right again.
     /// </summary>
-    private void AlignWithMenuColumn(nint button)
+    private bool AlignWithMenuColumn(nint button)
     {
-        if (!MenuColumnRule.TrySlotBelowColumn(Odyssey.GetMainMenuButtonExtents(button), Odyssey.ScreenHeight, out MenuColumnRule.Extent slot))
+        List<MenuColumnRule.Extent> buttons = Odyssey.GetMainMenuButtonExtents(button);
+        MenuColumnRule.Extent current = Odyssey.GetControlExtent(button);
+        int width = Odyssey.ScreenWidth, height = Odyssey.ScreenHeight;
+        if (!MenuColumnRule.TryFindSlot(buttons, width, height, out MenuColumnRule.Extent slot))
         {
-            return;
+            return MenuColumnRule.IsAvailable(current, buttons, width, height);
         }
 
-        MenuColumnRule.Extent current = Odyssey.GetControlExtent(button);
         if (current == slot)
         {
-            return;
+            return true;
         }
 
         Odyssey.SetButtonExtent(button, slot);
-        LogOnce($"menu: Co-op button moved from ({current.Left},{current.Top},{current.Width}x{current.Height}) to ({slot.Left},{slot.Top},{slot.Width}x{slot.Height}) under the menu's buttons");
+        LogOnce($"menu: Co-op button moved from ({current.Left},{current.Top},{current.Width}x{current.Height}) to ({slot.Left},{slot.Top},{slot.Width}x{slot.Height}); viewport={width}x{height}");
+        return true;
     }
 
     /// <summary>

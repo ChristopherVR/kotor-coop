@@ -8,6 +8,7 @@
   <ItemGroup>
     <Compile Include="..\..\src\KotorCoop.Plugin\ReviveEffectEventRule.cs" Link="Plugin\ReviveEffectEventRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\NativeProbeContextRule.cs" Link="Plugin\NativeProbeContextRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\EnhancedMenuFontRule.cs" Link="Plugin\EnhancedMenuFontRule.cs" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.0" />
@@ -85,6 +86,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\PlaceableDesiredStateTracker.cs" Link="Plugin\PlaceableDesiredStateTracker.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PlaceableLocalChangeTracker.cs" Link="Plugin\PlaceableLocalChangeTracker.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\ContainerUseAttemptRule.cs" Link="Plugin\ContainerUseAttemptRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\ContainerCloseRelease.cs" Link="Plugin\ContainerCloseRelease.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\ChatInputLatch.cs" Link="Plugin\ChatInputLatch.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\DeferredContainerOpen.cs" Link="Plugin\DeferredContainerOpen.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PausePresentationRule.cs" Link="Plugin\PausePresentationRule.cs" />
@@ -130,6 +132,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\PvpMenuRule.cs" Link="Plugin\PvpMenuRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SceneStagingRule.cs" Link="Plugin\SceneStagingRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\MenuColumnRule.cs" Link="Plugin\MenuColumnRule.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\EnhancedMenuLayoutRule.cs" Link="Plugin\EnhancedMenuLayoutRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\StuntStandInName.cs" Link="Plugin\StuntStandInName.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\LoadSummaryDismissRule.cs" Link="Plugin\LoadSummaryDismissRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\PhantomBodyIdentityRule.cs" Link="Plugin\PhantomBodyIdentityRule.cs" />

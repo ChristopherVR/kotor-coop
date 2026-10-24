@@ -50,6 +50,12 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- Keep the real PDB beside the build output, but disclose only its basename
+         in the player DLL's CodeView record, never the developer checkout path. -->
+    <LinkerArg Include="/PDBALTPATH:dinput8.pdb" />
+  </ItemGroup>
+
   <!--
     Shared by SOURCE, not by reference. The plugin has no assembly dependencies on purpose —
     it is a NativeAOT x86 DLL loaded into a 2003 game — but this rule must be identical on

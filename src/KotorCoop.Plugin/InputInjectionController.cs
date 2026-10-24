@@ -254,6 +254,7 @@ internal static class InputInjectionController
     /// </summary>
     private static void EnsureUnfocusedDelivery()
     {
+        EnhancedMenuInputBridge.EnsureInstalled();
         if (Odyssey.EnsureInputActive())
         {
             PluginHost.Log("input: engine input re-activated for an unfocused window");

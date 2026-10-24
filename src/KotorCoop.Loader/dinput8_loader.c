@@ -21,8 +21,9 @@
  *   - If nothing in the chain exports DirectInput8Create, or the file is missing entirely,
  *     the system dinput8.dll is used, so a stray copy of this loader is harmless.
  *
- * No CRT dependency and nothing done inside DllMain (the loader lock forbids LoadLibrary
- * there); the chain is resolved lazily on the first export call, exactly like the plugin.
+ * No CRT dependency; the chain is resolved lazily on the first export call, outside
+ * DllMain. DllMain only prepares synchronization and a one-shot executable import shim
+ * for Enhanced's early display hook; no module loads or renderer calls under loader lock.
  * Diagnostics go to dinput8-chain.log beside the game.
  *
  * Built by build.ps1 with cl.exe (see the .def next to this file for the export names).
@@ -41,6 +42,10 @@ typedef HRESULT (WINAPI *DllGetClassObject_t)(REFCLSID, REFIID, LPVOID *);
 typedef HRESULT (WINAPI *DllRegisterServer_t)(void);
 typedef HRESULT (WINAPI *DllUnregisterServer_t)(void);
 typedef LPVOID  (WINAPI *GetdfDIJoystick_t)(void);
+/* Enhanced's OpenGL proxy looks these up on the module named dinput8.dll. Keep the
+ * queries reachable after its input DLL is renamed into the chain. Both exports are
+ * zero-argument 32-bit counters; an absent provider returns zero. */
+typedef DWORD (WINAPI *EnhancedInputCounter_t)(void);
 
 static HMODULE g_self;
 static HMODULE g_target;
@@ -54,6 +59,8 @@ static DllGetClassObject_t    p_DllGetClassObject;
 static DllRegisterServer_t    p_DllRegisterServer;
 static DllUnregisterServer_t  p_DllUnregisterServer;
 static GetdfDIJoystick_t      p_GetdfDIJoystick;
+static EnhancedInputCounter_t p_EnhancedInputDeviceCount;
+static EnhancedInputCounter_t p_EnhancedPhysicalMouseSerial;
 
 static WCHAR g_gameDir[MAX_PATH];
 static WCHAR g_logPath[MAX_PATH];
@@ -227,6 +234,13 @@ static void resolve_chain(void)
 
             m = load_entry(start, (size_t)(end - start), &isProxy);
             if (m && isProxy && !target) target = m;
+            if (m)
+            {
+                if (!p_EnhancedInputDeviceCount)
+                    p_EnhancedInputDeviceCount = (EnhancedInputCounter_t)GetProcAddress(m, "KotorEnhancedInputDeviceCount");
+                if (!p_EnhancedPhysicalMouseSerial)
+                    p_EnhancedPhysicalMouseSerial = (EnhancedInputCounter_t)GetProcAddress(m, "KotorEnhancedPhysicalMouseSerial");
+            }
         }
         HeapFree(GetProcessHeap(), 0, chain);
     }
@@ -270,6 +284,122 @@ static void ensure_resolved(void)
     if (g_gateReady) LeaveCriticalSection(&g_gate);
 }
 
+/* The game validates its INI dimensions before its first EnumDisplaySettings call.
+ * Enhanced installs its widescreen patch on that enumeration, which is too late for
+ * a cold windowed launch. Defer a single enumeration until the executable first asks
+ * for its command line (outside DllMain), through Enhanced's OWN import wrapper.
+ * Priming uses the renderer's own wrapper; the separate windowed-mode guard below
+ * patches only its verified native branch, never third-party DLL bytes. */
+typedef LPSTR (WINAPI *GetCommandLineA_t)(void);
+typedef BOOL (WINAPI *EnumDisplaySettingsA_t)(LPCSTR, DWORD, DEVMODEA *);
+static GetCommandLineA_t p_StartupCommandLine;
+static PVOID *g_startupSlot;
+static PVOID *g_displaySlot;
+static LONG g_startupChecked;
+
+/* SetVideoMode coerces a window at least as large as the desktop into fullscreen,
+ * even with FullScreen=0. On a non-input desktop that mode switch fails, but startup
+ * continues into GUI texture loading without GL extensions initialized (EIP 0).
+ * Preserve the requested windowed branch; explicit fullscreen still follows its
+ * original path at 0x5F1956. Only apply after recognizing Enhanced and the exact code.
+ * No executable on disk is changed. */
+static void preserve_enhanced_windowed_mode(void)
+{
+    static const BYTE expected[] = {
+        0x3B,0xC6,0x7E,0x04,0x3B,0xD1,0x7F,0x0F,
+        0x33,0xD2,0x8A,0x15,0xE0,0xD1,0x78,0x00,
+        0x6A,0x01,0x6A,0x01,0x52,0xEB,0x0F,
+        0x8B,0x44,0x24,0x0C
+    };
+    BYTE *site = (BYTE *)0x005F198A;
+    MEMORY_BASIC_INFORMATION info;
+    DWORD old;
+    size_t i;
+    if (!VirtualQuery(site, &info, sizeof(info)) || info.Type != MEM_IMAGE ||
+        info.AllocationBase != GetModuleHandleW(NULL) || info.State != MEM_COMMIT ||
+        (info.Protect & (PAGE_GUARD | PAGE_NOACCESS)) ||
+        (BYTE *)info.BaseAddress + info.RegionSize < site + sizeof(expected)) return;
+    for (i = 0; i < sizeof(expected); i++) if (site[i] != expected[i]) return;
+    if (!VirtualProtect(site + 8, 2, PAGE_EXECUTE_READWRITE, &old)) return;
+    /* 0x5F1992 -> 0x5F19A1: recover the caller's mode flag instead of pushing 1. */
+    *(WORD *)(site + 8) = 0x0DEB;
+    FlushInstructionCache(GetCurrentProcess(), site + 8, 2);
+    VirtualProtect(site + 8, 2, old, &old);
+    log_line("Enhanced: preserved windowed mode at desktop-sized resolutions", NULL);
+}
+
+static LPSTR WINAPI startup_command_line(void)
+{
+    if (InterlockedCompareExchange(&g_startupChecked, 1, 0) == 0)
+    {
+        HMODULE renderer = GetModuleHandleW(L"opengl32.dll"), owner = NULL;
+        DWORD protect;
+        if (renderer && g_displaySlot &&
+            GetProcAddress(renderer, "KotorEnhancedMouseWheel") &&
+            GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)*g_displaySlot, &owner) &&
+            owner == renderer)
+        {
+            DEVMODEA mode;
+            size_t i;
+            for (i = 0; i < sizeof(mode); i++) ((volatile BYTE *)&mode)[i] = 0;
+            mode.dmSize = sizeof(mode);
+            ((EnumDisplaySettingsA_t)*g_displaySlot)(NULL, ENUM_CURRENT_SETTINGS, &mode);
+            init_paths();
+            preserve_enhanced_windowed_mode();
+            log_line("Enhanced: primed its display hook before startup resolution validation", NULL);
+        }
+        if (g_startupSlot && VirtualProtect(g_startupSlot, sizeof(PVOID), PAGE_READWRITE, &protect))
+        {
+            InterlockedCompareExchangePointer(g_startupSlot, (PVOID)p_StartupCommandLine,
+                (PVOID)startup_command_line);
+            VirtualProtect(g_startupSlot, sizeof(PVOID), protect, &protect);
+        }
+    }
+    return p_StartupCommandLine();
+}
+
+/* Loader-lock-safe: inspect the already mapped executable and redirect one import.
+ * Do not load modules, call Enhanced, or resolve the input chain from DllMain. */
+static void prepare_enhanced_startup(void)
+{
+    BYTE *base = (BYTE *)GetModuleHandleW(NULL);
+    IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)base;
+    IMAGE_NT_HEADERS32 *nt;
+    IMAGE_IMPORT_DESCRIPTOR *desc;
+    DWORD protect;
+    if (!base || dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew < 64 || dos->e_lfanew > 4096) return;
+    nt = (IMAGE_NT_HEADERS32 *)(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE || nt->FileHeader.Machine != IMAGE_FILE_MACHINE_I386 ||
+        nt->FileHeader.TimeDateStamp != 0x402BC2D9 ||
+        nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC ||
+        nt->OptionalHeader.ImageBase != 0x400000 ||
+        !nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress) return;
+    desc = (IMAGE_IMPORT_DESCRIPTOR *)(base + nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
+    for (; desc->Name; desc++)
+    {
+        IMAGE_THUNK_DATA32 *names, *slots;
+        if (!desc->OriginalFirstThunk) continue;
+        names = (IMAGE_THUNK_DATA32 *)(base + desc->OriginalFirstThunk);
+        slots = (IMAGE_THUNK_DATA32 *)(base + desc->FirstThunk);
+        for (; names->u1.AddressOfData; names++, slots++)
+        {
+            const char *name;
+            if (IMAGE_SNAP_BY_ORDINAL32(names->u1.Ordinal)) continue;
+            name = (const char *)((IMAGE_IMPORT_BY_NAME *)(base + names->u1.AddressOfData))->Name;
+            if (lstrcmpA(name, "GetCommandLineA") == 0) g_startupSlot = (PVOID *)&slots->u1.Function;
+            if (lstrcmpA(name, "EnumDisplaySettingsA") == 0) g_displaySlot = (PVOID *)&slots->u1.Function;
+        }
+    }
+    if (!g_startupSlot || !g_displaySlot) return;
+    p_StartupCommandLine = (GetCommandLineA_t)*g_startupSlot;
+    if (VirtualProtect(g_startupSlot, sizeof(PVOID), PAGE_READWRITE, &protect))
+    {
+        *g_startupSlot = (PVOID)startup_command_line;
+        VirtualProtect(g_startupSlot, sizeof(PVOID), protect, &protect);
+    }
+}
+
 /* --- exports (names come from dinput8.def) ------------------------------------------------- */
 
 HRESULT WINAPI Proxy_DirectInput8Create(HINSTANCE inst, DWORD version, REFIID riid, LPVOID *out, LPVOID outer)
@@ -308,6 +438,18 @@ LPVOID WINAPI Proxy_GetdfDIJoystick(void)
     return p_GetdfDIJoystick ? p_GetdfDIJoystick() : NULL;
 }
 
+DWORD WINAPI Proxy_KotorEnhancedInputDeviceCount(void)
+{
+    ensure_resolved();
+    return p_EnhancedInputDeviceCount ? p_EnhancedInputDeviceCount() : 0;
+}
+
+DWORD WINAPI Proxy_KotorEnhancedPhysicalMouseSerial(void)
+{
+    ensure_resolved();
+    return p_EnhancedPhysicalMouseSerial ? p_EnhancedPhysicalMouseSerial() : 0;
+}
+
 BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
 {
     (void)reserved;
@@ -317,6 +459,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
         DisableThreadLibraryCalls(inst);
         InitializeCriticalSection(&g_gate);
         g_gateReady = TRUE;
+        prepare_enhanced_startup();
     }
     return TRUE;
 }

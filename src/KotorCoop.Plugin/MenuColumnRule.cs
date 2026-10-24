@@ -1,58 +1,55 @@
 namespace KotorCoop.Plugin;
 
-/// <summary>
-/// Where the main menu's Co-op button goes. It is the menu's dormant BTN_WARP, and its .gui
-/// position only lines up with the real buttons in the stock 800x600 layout ("one row below
-/// Quit"). Menu mods that lay the menu out for the player's resolution (HR Menus in the K1 Full
-/// build, 2026-10-10) move the real buttons and leave BTN_WARP where it was: at 1920x1080 it sat
-/// at the far left, a different size, well away from the column. So the slot is worked out from
-/// the live buttons instead of the file: the column is the largest group of visible buttons
-/// sharing a left edge, and the Co-op button takes that column's width and usual height one row
-/// below its lowest button. Pure, so the tests compile it in.
-/// </summary>
+/// <summary>Places Co-op relative to the live menu, without replacing a mod's .gui files.
+/// Rectangles and viewport dimensions must use the engine's screen coordinate space.</summary>
 internal static class MenuColumnRule
 {
-    /// <summary>A screen rectangle in pixels, the engine's CSWGuiExtent order.</summary>
     internal readonly record struct Extent(int Left, int Top, int Width, int Height)
     {
-        public int Bottom => Top + Height;
+        public long Right => (long)Left + Width;
+        public long Bottom => (long)Top + Height;
     }
 
-    /// <summary>Buttons whose left edges differ by no more than this share a column (layouts
-    /// hand-tuned per resolution are a pixel or two off).</summary>
     public const int ColumnTolerance = 4;
-
-    /// <summary>A column needs at least this many buttons to be the menu's button stack.</summary>
     public const int MinimumColumn = 3;
 
-    /// <summary>
-    /// The Co-op button's slot under the menu's button column, or false when no column can be
-    /// found or the slot would leave the screen (the caller then leaves the .gui position alone).
-    /// </summary>
-    public static bool TrySlotBelowColumn(IReadOnlyList<Extent> buttons, int screenHeight, out Extent slot)
+    /// <summary>Prefer below the dominant column, then above, then beside its last row.
+    /// Never move another button, overlap one, or place Co-op outside the viewport.</summary>
+    public static bool TryFindSlot(IReadOnlyList<Extent> buttons, int screenWidth, int screenHeight, out Extent slot)
     {
         slot = default;
-
-        List<Extent> column = [];
-        foreach (Extent candidate in buttons)
+        if (screenWidth <= 0 || screenHeight <= 0)
         {
-            if (candidate.Width <= 0 || candidate.Height <= 0)
-            {
-                continue;
-            }
+            return false;
+        }
 
-            List<Extent> group = [];
-            foreach (Extent other in buttons)
+        // Offscreen controls and duplicate rectangles cannot manufacture a column.
+        List<Extent> visible = buttons.Where(b => OnScreen(b, screenWidth, screenHeight)).Distinct().ToList();
+        List<Extent> column = [];
+        int alignment = 0;
+        foreach (Extent candidate in visible)
+        {
+            // Prefer left alignment on a tie to preserve stock/HR Menus placement.
+            for (int edge = 0; edge < 3; edge++)
             {
-                if (other.Width > 0 && other.Height > 0 && Math.Abs(other.Left - candidate.Left) <= ColumnTolerance)
+                List<Extent> group = visible.Where(b => Math.Abs(Anchor(b, edge) - Anchor(candidate, edge)) <= ColumnTolerance * 2).ToList();
+                group.Sort(static (a, b) => a.Top.CompareTo(b.Top));
+                if (group.Count <= column.Count || group.Count < MinimumColumn)
                 {
-                    group.Add(other);
+                    continue;
                 }
-            }
 
-            if (group.Count > column.Count)
-            {
-                column = group;
+                // A stack has distinct, non-overlapping rows, not several controls on one row.
+                bool stacked = true;
+                for (int i = 1; i < group.Count; i++)
+                {
+                    stacked &= group[i - 1].Bottom <= group[i].Top;
+                }
+                if (stacked)
+                {
+                    column = group;
+                    alignment = edge;
+                }
             }
         }
 
@@ -61,45 +58,57 @@ internal static class MenuColumnRule
             return false;
         }
 
-        column.Sort(static (a, b) => a.Top.CompareTo(b.Top));
-
-        // The row pitch is the smallest gap between consecutive tops, so a taller last button
-        // (Quit is drawn taller in some layouts) does not stretch it.
+        int height = MostCommon(column, static b => b.Height);
+        int width = MostCommon(column, static b => b.Width);
         int pitch = int.MaxValue;
         for (int i = 1; i < column.Count; i++)
         {
-            int gap = column[i].Top - column[i - 1].Top;
-            if (gap > 0 && gap < pitch)
+            pitch = Math.Min(pitch, column[i].Top - column[i - 1].Top);
+        }
+        int gap = Math.Max(pitch - height, 0);
+        Extent first = column[0], last = column[^1];
+        long anchor = Anchor(first, alignment);
+        long left = alignment switch { 1 => (anchor - width) / 2, 2 => anchor / 2 - width, _ => anchor / 2 };
+
+        (long Left, long Top)[] candidates =
+        [
+            (left, last.Bottom + gap),
+            (left, (long)first.Top - gap - height),
+            (column.Max(static b => b.Right) + Math.Max(gap, ColumnTolerance), last.Top),
+            ((long)column.Min(static b => b.Left) - Math.Max(gap, ColumnTolerance) - width, last.Top),
+        ];
+        foreach (var position in candidates)
+        {
+            if (position.Left < 0 || position.Top < 0 || position.Left + width > screenWidth || position.Top + height > screenHeight)
             {
-                pitch = gap;
+                continue;
+            }
+            Extent proposed = new((int)position.Left, (int)position.Top, width, height);
+            if (IsAvailable(proposed, buttons, screenWidth, screenHeight))
+            {
+                slot = proposed;
+                return true;
             }
         }
-
-        if (pitch == int.MaxValue)
-        {
-            return false;
-        }
-
-        // The usual button size: the most common one, smallest on a tie.
-        int height = MostCommon(column, static b => b.Height);
-        int width = MostCommon(column, static b => b.Width);
-
-        Extent lowest = column[^1];
-        int gapBelow = Math.Max(pitch - height, 0);
-        int top = lowest.Bottom + gapBelow;
-
-        if (screenHeight > 0 && top + height > screenHeight)
-        {
-            return false;
-        }
-
-        slot = new Extent(column[0].Left, top, width, height);
-        return true;
+        return false;
     }
 
+    /// <summary>Also validates a mod's existing Co-op slot when no column can be inferred.</summary>
+    public static bool IsAvailable(Extent slot, IReadOnlyList<Extent> buttons, int screenWidth, int screenHeight) =>
+        OnScreen(slot, screenWidth, screenHeight) && !buttons.Any(b => b.Width > 0 && b.Height > 0
+            && slot.Left < b.Right && slot.Right > b.Left && slot.Top < b.Bottom && slot.Bottom > b.Top);
+
+    private static bool OnScreen(Extent b, int width, int height) =>
+        b.Width > 0 && b.Height > 0 && b.Left >= 0 && b.Top >= 0 && b.Right <= width && b.Bottom <= height;
+
+    // Doubled coordinates keep centre alignment exact for odd widths.
+    private static long Anchor(Extent b, int edge) => edge switch
+    {
+        1 => (long)b.Left * 2 + b.Width,
+        2 => b.Right * 2,
+        _ => (long)b.Left * 2,
+    };
+
     private static int MostCommon(List<Extent> column, Func<Extent, int> size) => column
-        .GroupBy(size)
-        .OrderByDescending(static g => g.Count())
-        .ThenBy(static g => g.Key)
-        .First().Key;
+        .GroupBy(size).OrderByDescending(static g => g.Count()).ThenBy(static g => g.Key).First().Key;
 }

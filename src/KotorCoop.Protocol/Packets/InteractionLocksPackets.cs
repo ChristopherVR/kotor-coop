@@ -46,6 +46,9 @@ public enum InteractionKind : byte
 /// next <see cref="InteractionLockPacket"/> broadcast. The host still runs the SAME
 /// <c>InteractionLockStore.Claim</c> either way — a granted request is simply the ordinary claim,
 /// answered immediately rather than left to converge.
+/// On an INACTIVE container level it instead names the reservation being released; no
+/// LockResponse is sent for a release. A delayed close for an earlier request cannot cancel
+/// a later open. Zero remains the release identity for claims made without arbitration.
 /// </summary>
 public sealed record InteractionClaimPacket(
     uint PeerId, string Module, string Tag, InteractionKind Kind, bool Active, uint TargetId = 0,
@@ -72,9 +75,8 @@ public sealed record InteractionLockPacket(
 /// into the <see cref="InteractionLockPacket"/> level.
 ///
 /// A ONE-SHOT reply, not a level — unlike every other channel in this file, losing this packet
-/// is safe to just time out on: the requester's own deferral state machine falls back to
-/// "proceed as before" after <c>container_lock_arbitration</c>'s short deadline (300ms), the same
-/// fail-open default this whole feature ships with. Sent exactly once per request, never
+/// causes this click to be refused after the 1000ms deadline; a new click can retry. Only
+/// a positive grant permits opening. Sent exactly once per request, never
 /// retransmitted.
 /// </summary>
 public sealed record LockResponsePacket(
