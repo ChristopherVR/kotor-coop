@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "target_repository": "ChristopherVR/kotor-coop",
+  "files": [
+    {
+      "source": "site/public/project-README.md",
+      "target": "README.md"
+    },
+    {
+      "source": "tools/publication/public/SECURITY.md",
+      "target": "SECURITY.md"
+    },
+    {
+      "source": "tools/publication/public/gitignore",
+      "target": ".gitignore"
+    },
+    {
+      "source": "tools/publication/public/gitattributes",
+      "target": ".gitattributes"
+    },
+    {
+      "source": "LICENSE",
+      "target": "LICENSE"
+    },
+    {
+      "source": "site/public/index.html",
+      "target": "docs/index.html"
+    },
+    {
+      "source": "site/public/style.css",
+      "target": "docs/style.css"
+    },
+    {
+      "source": "site/public/favicon.svg",
+      "target": "docs/favicon.svg"
+    },
+    {
+      "source": "site/public/install.html",
+      "target": "docs/install.html"
+    },
+    {
+      "source": "site/public/play.html",
+      "target": "docs/play.html"
+    },
+    {
+      "source": "site/public/limitations.html",
+      "target": "docs/limitations.html"
+    }
+  ]
+}
