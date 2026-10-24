@@ -483,3 +483,35 @@ build/deploy; screenshots above show the preceding wording.
 ten-minute timeout, three or more players, differing appearance tables, exhaustive
 repeat-entry cleanup, and full save/inventory restoration comparisons. These observations
 do not change the project's legal/public-release gates.
+
+
+## 2026-10-24 Forced boss-death return-path probe
+
+**VERIFIED live control flow, deliberately forced outcome:** a third arena round
+(`1073741827`) was requested at 14:08:40 from `danm13`. Both sides reached the countdown
+at 14:08:46; the host spawned boss `0x21` at 14:08:51. The operator used the developer
+`slay 0x21` command to force death. At 14:08:58 the host records the boss as dead and
+emits the Defeat cue; both agent logs display the fall-over line. At 14:09:01 the host
+records the boss beaten, releases the pin, removes it and begins return. This verifies
+the death-triggered victory branch; it is not an ordinary combat win or balance evidence.
+The cue/line alone is not a frame-by-frame assessment of the death animation.
+
+Both agents report `danm13`, memory OK, 6/6 HP and no local combat by 14:09:07.
+The joiner requests restoration to `(104.0, 34.0)` at 14:09:08; the host requests
+`(103.0, 32.0)` at 14:09:09. Subsequent joiner samples through 14:09:19 remain healthy.
+Evidence is the same host/join agent and plugin log paths listed in the preceding
+section. The read-only reviewer issued no game controls for this assessment.
+
+**Uninvestigated loot observation:** at 14:08:58 the joiner queues a credit item for
+boss owner `0x21`; its attempt to spawn onto local stand-in `0x22` is refused with
+failure 8. At 14:09:01-02 it also queues and acknowledges two grenade items for a
+different target, `0x25`. This review did not establish whether those later items are
+related to the boss or pre-existing arena contents. No before/after inventory or credit
+comparison was taken. Consequently this probe does not establish reward neutrality or
+complete inventory restoration, despite the generic "Nothing was lost" UI message.
+Keep that comparison and the loot diagnostics open for a focused follow-up.
+
+This closes only the previously unobserved boss-death/victory return control-flow branch
+under forced death. Ordinary victory, unassisted combat, balance, full animation and
+individual-cue listening checks, disconnect/timeout/larger-party cases and inventory
+comparisons remain open. No release, malware-scan, or legal-clearance conclusion changes.
