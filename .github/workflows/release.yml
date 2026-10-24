@@ -1,180 +1,54 @@
-# Publishes the build CI just validated. Runs AFTER the CI workflow completes successfully
-# and reuses its packages — the release is the exact pair of artifacts that passed the tests
-# (and whose Linux tarball CI's linux-install job installed), never a second build.
-#
-#   push to main            -> CI validates packages; no automatic publication.
-#   v* tag -> point at a CI-validated commit; publication requires manual promotion.
-#   Actions tab (dispatch) -> promote a tested v* tag explicitly.
-name: Release
-
+# Private development workflow. Only curated Windows binaries and scan evidence
+# can be sent to the independent public repository; source refs never cross over.
+name: Public release candidate
 on:
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
   workflow_dispatch:
     inputs:
-      promote_release:
-        description: 'Publish the selected tested v* tag as a numbered release (requires release-readiness sign-off)'
+      reviewed_for_public_release:
+        description: 'Confirm asset, legal, gameplay and release-note review is complete'
         type: boolean
         required: true
         default: false
-
-concurrency:
-  group: release-publication
-  cancel-in-progress: false
-
 permissions:
-  contents: write
-  actions: read
-
+  contents: read
+concurrency:
+  group: public-release-candidate
+  cancel-in-progress: false
 jobs:
-  release:
-    runs-on: ubuntu-latest
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push' &&
-       github.event.workflow_run.head_repository.full_name == github.repository)
-
+  candidate:
+    if: inputs.reviewed_for_public_release
+    environment: public-release
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-
-      # The ref CI built. For a workflow_run, head_branch is the branch name, or the tag
-      # name when the push was a tag. For a manual run, whatever the workflow was started on.
-      - name: Resolve what to publish
-        id: what
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+      - name: Validate configuration
+        shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
-          PROMOTE_RELEASE: ${{ inputs.promote_release }}
+          PUBLIC_RELEASE_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_run" ]; then
-            ref='${{ github.event.workflow_run.head_branch }}'
-            sha='${{ github.event.workflow_run.head_sha }}'
-            run_id='${{ github.event.workflow_run.id }}'
-          else
-            ref='${{ github.ref_name }}'
-            sha='${{ github.sha }}'
-            run_id=$(gh run list --workflow CI --event push --commit "$sha" --status success --limit 1 --json databaseId --jq '.[0].databaseId')
-            if [ -z "$run_id" ]; then echo "no successful CI run for $sha"; exit 1; fi
-          fi
-
-          case "$ref" in
-            v[0-9]*)
-              if [ "${{ github.event_name }}" = workflow_dispatch ] && [ "$PROMOTE_RELEASE" = true ]; then
-                kind=tag
-              else
-                echo "tag packages validated; numbered publication requires manual promotion"
-                kind=skip
-              fi ;;
-            main)
-              echo "Main packages validated. Select a tested v* tag and enable promotion to publish."
-              kind=skip ;;
-            *)       echo "ref $ref is neither main nor a v* tag; nothing to publish"; kind=skip ;;
-          esac
-
-          echo "ref=$ref"       >> "$GITHUB_OUTPUT"
-          echo "sha=$sha"       >> "$GITHUB_OUTPUT"
-          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
-          echo "kind=$kind"     >> "$GITHUB_OUTPUT"
-
-      # CI can pass without uploaded packages. Publishing is a separate promise: missing
-      # artifacts must fail this workflow so a green Release cannot hide a stale download.
-      - name: Download the CI packages
-        id: download
-        if: steps.what.outputs.kind != 'skip'
+          if (-not $env:PUBLIC_RELEASE_TOKEN) { throw 'Configure a token limited to Contents write on ChristopherVR/kotor-coop in the public-release environment.' }
+          $version = (Get-Content VERSION -Raw).Trim()
+          if ($version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') { throw 'Invalid VERSION' }
+          if (-not (Test-Path "docs/release-notes/v$version.md")) { throw 'Reviewed release notes are required.' }
+      - name: Build and test
+        shell: pwsh
+        run: |
+          dotnet build KotorCoop.slnx -warnaserror
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet test tests/KotorCoop.Tests --no-build --filter 'Category!=Soak'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tools/publication -p 'test_*.py'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Rebuild, scan and create a draft in the public repository
+        shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
         run: |
-          if ! gh run download '${{ steps.what.outputs.run_id }}' --name kotor-coop --dir dist; then
-            echo "::error::CI run ${{ steps.what.outputs.run_id }} has no downloadable packages; the release was not updated. Check the CI artifact upload and repository artifact quota."
-            echo "have=no" >> "$GITHUB_OUTPUT"
-            echo "Release not updated: CI packages could not be downloaded. Existing release assets are unchanged." >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
-          ls -l dist
-          test -f dist/kotor-coop-*-windows.zip && test -f dist/kotor-coop-*-linux.tar.gz
-          echo "have=yes" >> "$GITHUB_OUTPUT"
-
-      - name: Publish release
-        if: steps.what.outputs.kind != 'skip' && steps.download.outputs.have == 'yes'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          zip=$(ls dist/kotor-coop-*-windows.zip | head -n1)
-          tgz=$(ls dist/kotor-coop-*-linux.tar.gz | head -n1)
-          zip_name=$(basename "$zip")
-          tgz_name=$(basename "$tgz")
-          ref='${{ steps.what.outputs.ref }}'
-          sha='${{ steps.what.outputs.sha }}'
-          kind='${{ steps.what.outputs.kind }}'
-          zip_size=$(du -k "$zip" | cut -f1)
-          zip_sha256=$(sha256sum "$zip" | cut -d' ' -f1)
-          version=${zip_name#kotor-coop-}; version=${version%-windows.zip}
-          source_version=$(git show "$sha:VERSION" | tr -d '[:space:]')
-          bumped=$(git log -1 --format=%H "$sha" -- VERSION)
-          since=$(git rev-list --count "$bumped..$sha")
-          expected_version="$source_version"
-          if [ "$since" -ne 0 ]; then
-            short_sha=$(git rev-parse --short=7 "$sha")
-            expected_version="$source_version-$since-g$short_sha"
-          fi
-          if [ "$version" != "$expected_version" ] || [ "$tgz_name" != "kotor-coop-$version-linux.tar.gz" ]; then
-            echo "::error::Package filenames and source VERSION do not agree."
-            exit 1
-          fi
-          if [ "$kind" = tag ] && { [ "$ref" != "v$version" ] || [ "$version" != "$source_version" ]; }; then
-            echo "::error::Selected tag does not match the validated package version."
-            exit 1
-          fi
-
-          # The notes lead with the one thing a visitor is here for: which file is for their
-          # machine, a direct link to it, and how to install it. GitHub lists assets below the
-          # notes, but nothing there says which file is which or what to do with it.
-          # $1 = the explicit release tag the download links point at.
-          make_notes() {
-            local tag="$1"
-            local base="https://github.com/${{ github.repository }}/releases/download/$tag"
-            {
-              echo "## Download"
-              echo
-              echo "| Platform | File | Install |"
-              echo "| --- | --- | --- |"
-              echo "| Windows | **[$zip_name]($base/$zip_name)** (${zip_size} KB) | extract into its own folder, then run \`KotorCoop.Agent.exe\` |"
-              echo
-              echo "No SDK, runtime or toolchain needed."
-              echo
-              echo "**Windows:** close KOTOR and its agent, back up your saves, extract into a separate folder and double-click \`KotorCoop.Agent.exe\`. It finds your GOG or Steam install (or asks you to pick the folder), copies and checks the files, and offers to launch. No PowerShell needed."
-              echo "Use the installer for updates and existing mods: direct extraction can overwrite \`coop.ini\` or another mod's \`dinput8.dll\`. Install the same co-op version on every computer."
-              echo
-              echo "(A \`pwsh .\\install.ps1 -GameDir '...'\` script is also included for scripted/CLI installs; double-click setup does not need it.)"
-              echo
-              echo "It contains the plugin (\`dinput8.dll\`), the chain loader for sharing \`dinput8.dll\` with another mod, the agent, the override assets, \`coop.ini\` and a README that covers install, play and troubleshooting."
-              echo
-              echo "SHA-256 \`$zip_sha256\` ($zip_name) · built by CI run [${{ steps.what.outputs.run_id }}](https://github.com/${{ github.repository }}/actions/runs/${{ steps.what.outputs.run_id }}) from \`${sha:0:7}\`."
-              echo
-              echo "> Experimental beta: a complete co-op campaign has not been verified. Read the [current limitations](https://github.com/${{ github.repository }}/blob/$sha/docs/limitations.md) before starting."
-            } > notes.md
-          }
-
-          # A numbered release. Plain-language notes live in docs/release-notes/<tag>.md when
-          # present (written by hand for players); otherwise GitHub's generated change list is
-          # appended. Prerelease tags stay explicitly marked as prereleases.
-          create_numbered() {
-            local vtag="$1"
-            make_notes "$vtag"
-            local extra=(--generate-notes)
-            if git cat-file -e "$sha:docs/release-notes/$vtag.md" 2>/dev/null; then
-              git show "$sha:docs/release-notes/$vtag.md" > human-notes.md
-              { cat human-notes.md; echo; echo "---"; echo; cat notes.md; } > notes-final.md
-              mv notes-final.md notes.md
-              extra=()
-            fi
-            local status=(--latest)
-            if [[ "$vtag" == *-* ]]; then status=(--prerelease --latest=false); fi
-            gh release create "$vtag" "$zip" --target "$sha" --title "$vtag" \
-              --notes-file notes.md "${extra[@]}" "${status[@]}"
-          }
-
-          create_numbered "$ref"
+          $version = (Get-Content VERSION -Raw).Trim()
+          pwsh tools/Publish-PublicRelease.ps1 -Version $version -Directory artifacts/public-candidate -NotesFile "docs/release-notes/v$version.md" -ReleaseReviewed
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

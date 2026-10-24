@@ -9,6 +9,9 @@ on:
   pull_request:
     paths-ignore: ['site/**', '.github/workflows/pages.yml']
 
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
     runs-on: windows-latest
@@ -23,6 +26,9 @@ jobs:
         uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
+
+      - name: Test publication boundary
+        run: python -m unittest discover -s tools/publication -p 'test_*.py'
 
       - name: Build solution
         run: dotnet build KotorCoop.slnx -warnaserror

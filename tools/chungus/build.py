@@ -1,4 +1,4 @@
-"""Builds the boss's game files: the model, its two textures and his one custom sound.
+"""Builds the boss's game files: the model, its two textures and two original synthesized sounds.
 
     python tools/chungus/build.py                 writes into profiles/override
     python tools/chungus/build.py --out DIR       writes somewhere else
@@ -7,10 +7,11 @@
 The output is deterministic: the same sources always give the same bytes, and
 tests/KotorCoop.Tests/ChungusBossTests.cs checks that the shipped files are well formed.
 
-Needs numpy, scipy, Pillow, scikit-image, xatlas and fast-simplification:
+Needs numpy, scipy and xatlas (imported by the TGA helper); Pillow is needed for previews.
+The replacement no longer uses scikit-image or fast-simplification:
 
     python -m venv artifacts/chungus-venv
-    artifacts/chungus-venv/Scripts/python -m pip install numpy scipy pillow scikit-image xatlas fast-simplification
+    artifacts/chungus-venv/Scripts/python -m pip install numpy scipy pillow xatlas
     artifacts/chungus-venv/Scripts/python tools/chungus/build.py
 """
 from __future__ import annotations
@@ -60,8 +61,8 @@ def main():
         os.makedirs(args.preview, exist_ok=True)
         views = [preview.render(built.root, built.textures, yaw=y, pitch=p) for y, p in ((0, 5), (-35, 10), (90, 5), (180, 5))]
         views.append(preview.render(built.root, built.textures, yaw=-8, pitch=4, centre=(0, 0.4, 2.3), span=1.7))
-        views.append(preview.render(built.root, built.textures, yaw=0, pitch=5, centre=(-0.85, 0.9, 1.85), span=1.5))
-        preview.sheet(views, 3, ["front", "front right", "side", "back", "face", "gauntlet"]).save(
+        views.append(preview.render(built.root, built.textures, yaw=0, pitch=5, centre=(0, 0.4, 1.6), span=1.5))
+        preview.sheet(views, 3, ["front", "front right", "side", "back", "face", "resonator"]).save(
             os.path.join(args.preview, "rest.png"))
         for anim in animations:
             frames = [preview.render(built.root, built.textures, anim, anim.length * k / 7, size=(260, 260), yaw=-20,

@@ -17,7 +17,7 @@
     "Microsoft.Extensions.Options/10.0.11",
     "Microsoft.Extensions.Primitives/10.0.11",
     "Onigwrap/1.0.11",
-    "runtimepack.Microsoft.NETCore.App.Runtime.win-x64/10.0.12",
+    "runtimepack.Microsoft.NETCore.App.Runtime.win-x64/10.0.13",
     "System.IO.Abstractions/22.2.0",
     "Terminal.Gui/2.5.0",
     "TestableIO.System.IO.Abstractions.Wrappers/22.2.0",
@@ -27,6 +27,6 @@
     "TextMateSharp/2.0.4",
     "Wcwidth/4.0.1"
   ],
-  "noticesSha256": "38CC93D3F2C16FCF5224C2D276F654DB897D54D3FC4582BEDD08B3869953AC73",
+  "noticesSha256": "FEBC4907E5B67BEC4933FA6AFE5008B29F3BD83E9DFB84A35A1BCD65AF9207C7",
   "embeddedProvenanceSha256": "5CAF4BECAD74D863D10422F202C02D57491F2FCE1B5FE3C026C80896136702AB"
 }

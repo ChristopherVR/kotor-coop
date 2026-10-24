@@ -72,6 +72,7 @@ below do not close these newer reports. Public distribution is still gated by th
 
 | | Status | What to expect |
 | --- | --- | --- |
+| Cairn Sentinel arena boss | **Not yet verified in-game** | The optional boss now has a new stone-automaton appearance, animations and sounds. These have passed automated checks but have not been watched in the game with two players. Earlier tests of the previous boss design do not verify this replacement. |
 | Fighting the same enemies | **Works** | Enemies have one health bar that you both damage. Kills, deaths and loot agree on both screens, for one boss or a room full. |
 | Which player an enemy goes after | **Works** | An enemy turns on whoever is hurting it most and lets go of a player who is down. |
 | Really fighting, not just watching | **Works** | Your own game runs up to three fights at once for real. Enemies beyond that are mirrored, and your hits still land. |

@@ -1,0 +1,13 @@
+{
+  "material": "tools/kotor1_0_3.db",
+  "upstream": "https://github.com/LaneDibello/Kotor-Patch-Manager",
+  "upstreamPath": "AddressDatabases/kotor1_0_3.db",
+  "exactMatchingRevision": "ef9deba6248490922cc942704b1d839ce632da22",
+  "upstreamAndLocalGitBlob": "56ad035924d58a894b47e6573edfaf40e3c74d04",
+  "localSha256": "9da23e6be81045287ad8317aa5a70c7f25366815b10ba1563387d4ef64aeea49",
+  "license": "MIT",
+  "licenseRevision": "eaa7bdae416d391418442f5c7b94f1e278a0cf12",
+  "licenseFile": "Kotor-Patch-Manager.LICENSE.txt",
+  "checked": "2026-10-24",
+  "qualification": "Exact database bytes match the recorded upstream historical revision. The current upstream MIT notice is retained. LICENSE was not present at the matched historical revision; this records the current upstream grant, not a claim that a license existed on the original import date. Game rights remain separate."
+}

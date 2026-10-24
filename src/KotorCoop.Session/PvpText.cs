@@ -32,30 +32,30 @@ public static class PvpText
     /// is about (<see cref="PvpNotice.Other"/>); <paramref name="aboutSelf"/> is true when that
     /// player is the reader (the "you are too hurt" case).</summary>
     public const string BossNotInstalledLine =
-        "Chungus is not installed in this game yet. Run the kotor-coop setup again, then restart the game.";
+        "Cairn Sentinel is not installed in this game yet. Run the kotor-coop setup again, then restart the game.";
 
     public const string BossUsageLine =
-        "chungus takes every player to the arena to fight Chungus together. Type yield to call it off.";
+        "sentinel takes every player to the arena to fight Cairn Sentinel together. Type yield to call it off.";
 
     /// <summary>The line for one of the boss's powers. <paramref name="targetName"/> is who it is
     /// aimed at ("you" for the reader); it is ignored by the powers that hit everyone.</summary>
     public static string FormatBossPower(BossCue cue, string targetName, bool aimedAtReader) => cue.Power switch
     {
-        BossPower.Snap => "Chungus snaps his fingers. Everyone loses half their health. \"Perfectly balanced, as all things should be.\"",
+        BossPower.Snap => "Cairn Sentinel releases a resonant shockwave. Everyone loses half their health.",
         BossPower.Blast => aimedAtReader
-            ? "Chungus fires the Power Stone at you."
-            : $"Chungus fires the Power Stone at {targetName}.",
-        BossPower.Lift => "Chungus folds space. Everyone is thrown somewhere else, and so is he.",
+            ? "Cairn Sentinel discharges its resonator at you."
+            : $"Cairn Sentinel discharges its resonator at {targetName}.",
+        BossPower.Lift => "Cairn Sentinel displaces the arena floor. Everyone is thrown somewhere else, and so is he.",
         BossPower.Gizka => aimedAtReader
-            ? "Chungus rewrites reality. You are a gizka for a while."
-            : $"Chungus rewrites reality. {targetName} is a gizka for a while.",
-        BossPower.Fright => "Chungus stares into your minds. Everyone is frightened.",
+            ? "Cairn Sentinel projects a distortion field. You are a gizka for a while."
+            : $"Cairn Sentinel projects a distortion field. {targetName} is a gizka for a while.",
+        BossPower.Fright => "Cairn Sentinel sounds a disorienting alarm. Everyone is frightened.",
         BossPower.Drain => aimedAtReader
-            ? "Chungus grips your soul and heals himself."
-            : $"Chungus grips {targetName}'s soul and heals himself.",
-        BossPower.Slow => "Chungus stops time. Nobody can move but him.",
-        BossPower.Entrance => "Chungus has arrived.",
-        BossPower.Defeat => "Chungus falls over.",
+            ? "Cairn Sentinel drains your energy to repair its shell."
+            : $"Cairn Sentinel drains {targetName}'s energy to repair its shell.",
+        BossPower.Slow => "Cairn Sentinel locks the arena in a stasis field. Nobody can move but it.",
+        BossPower.Entrance => "Cairn Sentinel has arrived.",
+        BossPower.Defeat => "Cairn Sentinel falls over.",
         // He does it every few seconds: seen, not announced.
         BossPower.Blink => string.Empty,
         _ => string.Empty,
@@ -116,25 +116,25 @@ public static class PvpText
         PvpNoticeCode.ArenaFailed =>
             $"Getting everyone into the arena took too long, so the fight with {otherName} was called off. Nothing was lost.",
         PvpNoticeCode.BossEntering => aboutSelf
-            ? "You called for Chungus. Moving everyone to the arena now. Type yield to call it off."
-            : $"{otherName} called for Chungus. Moving everyone to the arena now. Type yield to call it off.",
+            ? "You called for Cairn Sentinel. Moving everyone to the arena now. Type yield to call it off."
+            : $"{otherName} called for Cairn Sentinel. Moving everyone to the arena now. Type yield to call it off.",
         PvpNoticeCode.BossNotReady => aboutSelf
             ? "You cannot go to the arena right now. Finish what you are doing, stand with the host, and make sure the arena is installed (run the kotor-coop setup again)."
             : $"{otherName} cannot go to the arena right now. They have to be in the host's area, not in a conversation, and have the arena installed.",
         PvpNoticeCode.BossHostOnly =>
-            $"Only {otherName}, the host, can call for Chungus here. The host can let everyone do it with pvp = arena.",
+            $"Only {otherName}, the host, can call for Cairn Sentinel here. The host can let everyone do it with pvp = arena.",
         PvpNoticeCode.BossCountdown =>
-            "Chungus arrives in 5. Nobody can die in this fight. Type yield at any time to stop.",
-        PvpNoticeCode.BossStarted => "Fight! Beat Chungus before he beats all of you.",
+            "Cairn Sentinel arrives in 5. Nobody can die in this fight. Type yield at any time to stop.",
+        PvpNoticeCode.BossStarted => "Fight! Beat Cairn Sentinel before he beats all of you.",
         PvpNoticeCode.BossWon =>
-            "Chungus is beaten. You are back to how you were before the fight. Nothing was lost.",
+            "Cairn Sentinel is beaten. You are back to how you were before the fight. Nothing was lost.",
         PvpNoticeCode.BossLost =>
-            "Chungus beat everyone. You are back to how you were before the fight. Nothing was lost.",
+            "Cairn Sentinel beat everyone. You are back to how you were before the fight. Nothing was lost.",
         PvpNoticeCode.BossCancelled => otherName.Length == 0 || otherName == "Someone"
-            ? "The fight with Chungus was called off. Nothing was lost."
-            : $"{otherName} called off the fight with Chungus. Nothing was lost.",
+            ? "The fight with Cairn Sentinel was called off. Nothing was lost."
+            : $"{otherName} called off the fight with Cairn Sentinel. Nothing was lost.",
         PvpNoticeCode.BossTimedOut =>
-            "The fight with Chungus went on too long, so it was called off. Nothing was lost.",
+            "The fight with Cairn Sentinel went on too long, so it was called off. Nothing was lost.",
         _ => string.Empty,
     };
 }

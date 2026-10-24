@@ -126,7 +126,7 @@ internal sealed class ChungusPump(IGameBridge bridge, ICoopSession session, Acti
 
             if (cue.Power == BossPower.Snap)
             {
-                // "Perfectly balanced, as all things should be."
+                // Original nonverbal resonator chime.
                 _queue.Add((landAt + BossPowers.SnapLineDelayMs,
                     new CheatRequest(CheatKinds.Chungus, Amount: ChungusCheat.OpSound, Text: BossPowers.SnapLine), false));
             }

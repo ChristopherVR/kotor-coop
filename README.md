@@ -1,6 +1,10 @@
 # kotor-coop
 
-[![CI](https://github.com/ChristopherVR/kotor-coop/actions/workflows/ci.yml/badge.svg)](https://github.com/ChristopherVR/kotor-coop/actions/workflows/ci.yml)
+[![CI](https://github.com/ChristopherVR/kotor-coop-dev/actions/workflows/ci.yml/badge.svg)](https://github.com/ChristopherVR/kotor-coop-dev/actions/workflows/ci.yml)
+
+Private development lives in `ChristopherVR/kotor-coop-dev`. The separate
+[public project hub](https://github.com/ChristopherVR/kotor-coop) has fresh history,
+curated information and original media. See [publication instructions](docs/PUBLICATION.md).
 
 A free mod that lets two to eight people play **Star Wars: Knights of the Old Republic** (the
 GOG or Steam version) together. Each player runs their own copy of the game, on one desk or over
@@ -56,9 +60,10 @@ players, and it is the page to read before you plan a long session.
 
 ## Install
 
-Download the **Windows zip** from [v0.1 beta 2](https://github.com/ChristopherVR/kotor-coop/releases/tag/v0.1.0-beta.2).
-This is a fixed experimental prerelease. Automatic checks do not certify a complete
-campaign; read the beta limitations and back up your saves before testing.
+No public player build is currently available. Future reviewed **Windows zips**
+will appear in the [public releases](https://github.com/ChristopherVR/kotor-coop/releases).
+Private development builds remain experimental. Automatic checks do not certify
+a complete campaign; read the beta limitations and back up your saves before testing.
 
 - **Windows:** `kotor-coop-<version>-windows.zip`. Close KOTOR and its agent, extract the zip into
   its own folder, and double-click `KotorCoop.Agent.exe`. It finds
@@ -76,8 +81,9 @@ Setup also handles three things you might otherwise trip over:
   to restart as administrator.
 - If Windows SmartScreen says "Windows protected your PC", choose **More info**, then **Run
   anyway** (the files are not code-signed). Compare the zip's SHA-256 with the one on the release
-  page if you want to check it. If antivirus removes `dinput8.dll`, the Co-op button disappears:
-  add the game folder as an antivirus exclusion and run `KotorCoop.Agent.exe` again.
+  page before running it. If antivirus removes `dinput8.dll`, stop and report the
+  detection with the archive hash and scanner version so it can be investigated.
+  Do not add exclusions or disable protection to suppress a detection.
 
 ### What the mod changes
 
@@ -204,11 +210,10 @@ live-rig and release reference is [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
 
 Before promoting a build for general use, follow [the release-readiness checklist](docs/RELEASE-READINESS.md).
 
-The release number is the `VERSION` file. Branch pushes validate packages without
-creating or replacing releases; tag that tested commit. After candidate review, manually
-run the Release workflow on the tested `v<VERSION>` tag with `promote_release` enabled; the tag,
-package version and VERSION must agree. Prerelease versions are labelled as beta/RC
-prereleases rather than stable releases. See [the release instructions](docs/CONTRIBUTING.md#ci-and-releases).
+The release number is the `VERSION` file. Branch pushes validate private packages.
+The separate public publication process rebuilds a reviewed clean checkout, checks
+an exact file allowlist, scans with Defender and creates a draft with SHA-256 and
+scan evidence. It never copies development history. See [PUBLICATION.md](docs/PUBLICATION.md).
 
 ### How it works
 

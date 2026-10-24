@@ -6,7 +6,7 @@ namespace KotorCoop.Session;
 public static class BossPowers
 {
     /// <summary>How long after the power starts it lands: the moment in the animation the
-    /// fingers snap, the fist fires, the slam hits the floor.</summary>
+    /// resonator discharges, the tool strikes, the slam hits the floor.</summary>
     public static int LandDelayMs(BossPower power) => power switch
     {
         BossPower.Snap => 1_300,
@@ -28,7 +28,7 @@ public static class BossPowers
         _ => 0,
     };
 
-    /// <summary>How long after the snap lands he says his line.</summary>
+    /// <summary>How long after the discharge lands its answering chime plays.</summary>
     public const int SnapLineDelayMs = 900;
 
     /// <summary>The sound of the line (k_coop_chline.wav).</summary>
@@ -46,7 +46,7 @@ public static class BossPowers
 /// Decides when the boss uses a power and which. Host only, and pure: the pump tells it the time,
 /// how hurt the boss is and who is in the fight, and it answers with a power or nothing.
 ///
-/// He works through the stones in a shuffled order, one every seven to ten seconds (five to
+/// He works through the field effects in a shuffled order, one every seven to ten seconds (five to
 /// seven once he is badly hurt). The snap is kept for the moments that matter: the first time
 /// he drops below 60% of his health, and again below 25%.
 /// </summary>

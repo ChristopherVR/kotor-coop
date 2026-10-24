@@ -93,7 +93,7 @@ public sealed partial class CoopCommandDispatcher
 
         DispatchFromGame(new CoopCommand(
             CoopCommandKind.Connect,
-            Address: $"{host}:{port}",
+            Address: host.Contains(':') ? $"[{host}]:{port}" : $"{host}:{port}",
             Password: password.Length > 0 ? password : null));
     }
 
@@ -124,8 +124,8 @@ public sealed partial class CoopCommandDispatcher
 
         string who = steam.SteamId64 == 0 ? "unknown (ISteamUser did not bind)" : steam.SteamId64.ToString();
 
-        Reply(CurrentSteamConnectString() is { } connectString
-            ? $"steam: active, SteamID {who}, hosting - friends can Join Game or steaminvite this connect string: {connectString}"
+        Reply(CurrentSteamConnectString() is not null
+            ? $"steam: active, SteamID {who}, hosting - friends can Join Game or receive a steaminvite"
             : $"steam: active, SteamID {who}, not hosting - nothing to invite anyone to yet");
     }
 

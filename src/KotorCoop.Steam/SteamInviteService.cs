@@ -122,10 +122,14 @@ public sealed class SteamInviteService : IDisposable
             return;
         }
 
-        _native!.SetConnectString(normalised.Length == 0 ? null : normalised);
+        if (!_native!.SetConnectString(normalised.Length == 0 ? null : normalised))
+        {
+            _log("steam: could not update the join-me presence");
+            return;
+        }
         _log(normalised.Length == 0
             ? "steam: cleared the join-me presence"
-            : $"steam: friends can now join this session ({normalised})");
+            : "steam: friends can now join this session");
     }
 
     /// <summary>
@@ -195,12 +199,23 @@ public sealed class SteamInviteService : IDisposable
             string path = Path.Combine(directory, AppIdFileName);
             string wanted = appId.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
-            if (File.Exists(path) && File.ReadAllText(path).Trim() == wanted)
+            if (File.Exists(path))
             {
-                return true;
+                if (File.ReadAllText(path).Trim() == wanted)
+                {
+                    return true;
+                }
+
+                log($"steam: existing {AppIdFileName} identifies another app; left unchanged, invites stay off");
+                return false;
             }
 
-            File.WriteAllText(path, wanted);
+            // Never overwrite a file that appeared between the existence check and the write.
+            using (FileStream file = new(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            using (StreamWriter writer = new(file))
+            {
+                writer.Write(wanted);
+            }
             log($"steam: wrote {AppIdFileName} ({wanted}) beside the agent");
             return true;
         }

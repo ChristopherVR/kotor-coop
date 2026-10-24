@@ -555,10 +555,10 @@ internal static class AgentComposition
             case ChungusInstallOutcome.UpToDate:
                 return true;
             case ChungusInstallOutcome.Installed:
-                Console.WriteLine($"chungus: installed ({result.Message}) - restart the game once before the boss fight can work");
+                Console.WriteLine($"sentinel: installed ({result.Message}) - restart the game once before the boss fight can work");
                 break;
             default:
-                Console.WriteLine($"chungus: not installed ({result.Message})");
+                Console.WriteLine($"sentinel: not installed ({result.Message})");
                 break;
         }
 
@@ -669,8 +669,12 @@ internal static class AgentComposition
         if (installDirectory.Length > 0
             && KotorCoop.Steam.SteamInviteService.IsRedistributablePresent(installDirectory))
         {
-            KotorCoop.Steam.SteamInviteService.TryEnsureAppIdFile(
-                installDirectory, AgentOptions.SteamAppId, Console.WriteLine);
+            if (!KotorCoop.Steam.SteamInviteService.TryEnsureAppIdFile(
+                installDirectory, AgentOptions.SteamAppId, Console.WriteLine))
+            {
+                steam.Dispose();
+                return null;
+            }
         }
 
         // A JOINER must be listening for callbacks before an invite can arrive, so bring Steam
@@ -679,9 +683,9 @@ internal static class AgentComposition
         //
         // A run started BY a Steam invite (--steam-join) says so, because "how did I get into
         // this session" is the first question a confusing join raises.
-        if (options.SteamConnect is { Length: > 0 } connect)
+        if (options.SteamConnect is { Length: > 0 })
         {
-            Console.WriteLine($"steam: joining from an invite ({connect})");
+            Console.WriteLine("steam: joining from an invite");
         }
 
         if (options.Mode != CoopMode.Host)

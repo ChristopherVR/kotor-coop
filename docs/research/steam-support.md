@@ -1,5 +1,40 @@
 # Steam support — the Steam build, and native Steam invites (2026-08-29)
 
+## Current verification — 2026-10-24
+
+This update qualifies the older reports below; historical observations are not a fresh
+two-account acceptance test. The focused Steam and executable-digest suite passed **125/125**
+tests after this review. Read-only checks against the installed executables identify the
+Steam copy as `SteamStub` and the GOG copy as `DrmFree`. With Steam running, the current native
+loader was exercised without `steam_api64.dll`: it returned false and logged the expected
+optional-feature message. No game files or running Steam sessions were changed.
+
+The review fixed these problems:
+
+- Do not print rich-presence connect strings in publish, startup or status messages: their
+  base64 password token is reversible and must not leak into support logs/screenshots.
+- Reject control characters, invalid bracketed IPv6, nonnumeric ports, noncanonical token
+  alphabets and invalid UTF-8 passwords. Limit the encoded string to 255 UTF-8 bytes, reserving
+  the final byte in Steam's 256-byte callback buffer for the NUL terminator.
+- Preserve an existing `steam_appid.txt` naming a different application and leave invites off
+  instead of overwriting the file. File creation also refuses a concurrent overwrite.
+- Re-bracket IPv6 addresses when handing a live callback to the normal connection command.
+- Respect a failed `SetRichPresence` result instead of announcing success; bound callback
+  reads to the SDK's 256-byte field; shut down an initialized API even after a later failure.
+
+Neither installed game supplies the optional 64-bit Steam redistributable. No library was
+borrowed from another game for this check. New native success-path testing, a real friend
+receiving/accepting an invitation, and cross-network joining remain **NEEDS-LIVE**. The earlier
+self-invite and direct loopback tests do not establish those behaviors. A failure to reach
+one's public endpoint is also not by itself proof of NAT hairpinning as the sole cause.
+The `--steam-join` decoder is tested; this does not prove Steam's cold-start launch of the
+retail game forwards the invite to the separate agent.
+
+API contract reference: [Valve's ISteamFriends documentation](https://partner.steamgames.com/doc/api/ISteamFriends)
+for `SetRichPresence`, `InviteUserToGame` and `GameRichPresenceJoinRequested_t` (checked 2026-10-24).
+
+## Historical investigation
+
 Two questions asked together: *does this mod work on the Steam copy of KOTOR at all*, and
 *can two players start a session from Steam's own friends list ("Join Game") instead of
 typing an IP*. They have very different answers. The first is settled — measured, from

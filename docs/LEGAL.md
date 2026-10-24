@@ -12,7 +12,20 @@ Electronic Arts, Aspyr or other game rights holders. Players need a lawfully
 acquired, properly licensed game. We do not condone piracy or provide permission
 to distribute game copies, keys, cracks or bypass licensing/DRM.
 
-## Open gates before making the repository public
+## Distribution boundary (2026-10-24)
+
+Development remains private at `ChristopherVR/kotor-coop-dev`. The separate public
+`ChristopherVR/kotor-coop` repository starts from fresh history and contains only
+curated information and an original animated overview. It has no player release
+yet. Legacy game-derived media and deleted recordings are excluded rather than
+copied through a Git mirror. See [PUBLICATION.md](PUBLICATION.md).
+
+The boss now uses the original procedural Cairn Sentinel design and synthesized
+nonverbal audio. Prior character assets remain only in private history. The address
+database's current upstream MIT notice and exact-byte provenance have been recorded.
+Neither change establishes legal clearance for the mod as a whole.
+
+## Open gates before publishing player builds or development source
 
 - **Game/store terms:** qualified legal review of applicable agreements for
   supported stores and jurisdictions, including hooks, executable changes,
@@ -56,5 +69,6 @@ No finding has been made that this project satisfies those conditions or the law
 of other jurisdictions. Noncommercial status and anti-piracy notices alone do
 not establish legality.
 
-Sources and provenance checked 2026-10-03. The repository remains private;
-adding these documents does not authorize making it public.
+Steam terms and the Australian statutory reference were rechecked 2026-10-24.
+Development remains private; the curated public hub is not authorization to publish
+uncleared player builds, legacy media or development history.

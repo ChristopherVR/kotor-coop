@@ -264,7 +264,7 @@ internal sealed unsafe partial class CheatController
         }
 
         _chungusNamedCopy = objectId;
-        ReadOnlySpan<byte> name = "Chungus"u8;
+        ReadOnlySpan<byte> name = "Cairn Sentinel"u8;
         fixed (byte* text = name)
         {
             Odyssey.SetCreatureFirstName(copy, text, name.Length);
