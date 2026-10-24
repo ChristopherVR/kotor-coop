@@ -62,6 +62,15 @@ class ExportTests(unittest.TestCase):
         self.export();result=self.plan()
         self.assertEqual([],result['writes']);self.assertEqual([],result['deletes'])
 
+    def test_equivalent_branch_and_sha_produce_identical_provenance(self):
+        initial=self.export()
+        by_sha=self.plan(source_ref=initial['source_commit'])
+        self.assertEqual([],by_sha['writes'])
+        self.assertEqual([],by_sha['deletes'])
+        self.assertEqual(initial['_contents'][e.INVENTORY],by_sha['_contents'][e.INVENTORY])
+        self.assertNotIn('source_ref',json.loads(by_sha['_contents'][e.INVENTORY]))
+        self.assertEqual(initial['source_commit'],by_sha['source_ref'])  # CLI label remains useful.
+
     def test_explicit_old_ref_reads_old_committed_content(self):
         old=self.run_git(self.source,'rev-parse','HEAD').decode().strip()
         self.write('site/public/index.html',b'New reviewed site');self.commit()
