@@ -127,6 +127,20 @@ internal sealed class NewCharacterCaptureController(
     /// stability half of <see cref="NewCharacterCaptureRule.ShouldCapture"/>.</summary>
     private long _previousBytes = -1;
 
+    /// <summary>Tick of the last capture, or 0. With <see cref="_menuLoadAppliedAtCapture"/>,
+    /// what <see cref="HoldsFollowWarp"/> keys on between the capture and the adoption load.</summary>
+    private long _capturedAtMs;
+
+    private uint _menuLoadAppliedAtCapture;
+
+    /// <summary>
+    /// True while a session follow warp must wait for this capture
+    /// (<see cref="KotorCoop.Protocol.NewCharacterWarpHoldRule"/>): from the arm until the
+    /// adoption load that follows the capture. MAIN THREAD ONLY.
+    /// </summary>
+    public bool HoldsFollowWarp(long nowMs) => KotorCoop.Protocol.NewCharacterWarpHoldRule.Holds(
+        _armed, _capturedAtMs, _menuLoadAppliedAtCapture, block.MenuLoadApplied, nowMs);
+
     public void OnFrame()
     {
         uint serial = block.JoinChargenRequest;
@@ -172,6 +186,7 @@ internal sealed class NewCharacterCaptureController(
         _lastSaveRequestMs = 0;
         _candidate = null;
         _previousBytes = -1;
+        _capturedAtMs = 0;
 
         block.JoinChargenBytes = 0;
         block.PublishJoinChargenSaveDirectory(string.Empty);
@@ -347,6 +362,11 @@ internal sealed class NewCharacterCaptureController(
         // watching block.MenuLoadApplied's baseline before that happens. See its own doc
         // comment for the whole mechanism and why this repair no longer runs here.
         postAdoptEquipRepair.Arm();
+
+        // Keep holding the follow warp until the adoption load replaces this world; the agent
+        // requests that load as soon as it reads the state below, so take the baseline first.
+        _capturedAtMs = nowMs;
+        _menuLoadAppliedAtCapture = block.MenuLoadApplied;
 
         // NAME FIRST, STATE LAST — the same ordering every request region here uses, mirrored
         // for a reply: the agent must never read "captured" and then find the name still empty.

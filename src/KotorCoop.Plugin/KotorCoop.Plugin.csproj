@@ -67,6 +67,7 @@
     <Compile Include="..\KotorCoop.Protocol\HostLedConversationRule.cs" Link="Shared\HostLedConversationRule.cs" />
     <Compile Include="..\KotorCoop.Protocol\DialogueSkipAuthorityRule.cs" Link="Shared\DialogueSkipAuthorityRule.cs" />
     <Compile Include="..\KotorCoop.Protocol\FollowWarpSettleRule.cs" Link="Shared\FollowWarpSettleRule.cs" />
+    <Compile Include="..\KotorCoop.Protocol\NewCharacterWarpHoldRule.cs" Link="Shared\NewCharacterWarpHoldRule.cs" />
     <Compile Include="..\KotorCoop.Protocol\ContainerAnimationEdges.cs" Link="Shared\ContainerAnimationEdges.cs" />
     <Compile Include="..\KotorCoop.Protocol\SoloSegmentCatalogue.cs" Link="Shared\SoloSegmentCatalogue.cs" />
     <Compile Include="..\KotorCoop.Protocol\SoloSegmentMachine.cs" Link="Shared\SoloSegmentMachine.cs" />

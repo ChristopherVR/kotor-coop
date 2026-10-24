@@ -268,7 +268,17 @@ public static class WorldTransfer
         await using NetworkStream stream = client.GetStream();
 
         byte[] request = new byte[8];
-        await ReadExactlyAsync(stream, request, cancellationToken).ConfigureAwait(false);
+
+        // A joiner first checks the port with a bare connect that sends nothing
+        // (WorldAdoption.ProbeTcpReachableAsync). That is a probe, not a broken transfer: it
+        // used to log "world transfer failed ... closed after 0 of 8 bytes" on every join.
+        int first = await stream.ReadAsync(request, cancellationToken).ConfigureAwait(false);
+        if (first == 0)
+        {
+            return;
+        }
+
+        await ReadExactlyAsync(stream, request, cancellationToken, first).ConfigureAwait(false);
 
         ushort magic = (ushort)(request[0] | (request[1] << 8));
         byte version = request[2];
@@ -579,9 +589,9 @@ public static class WorldTransfer
     /// <summary>Fills the buffer or throws. A short read is a truncated transfer, and a
     /// half-written save is worse than no save.</summary>
     private static async Task ReadExactlyAsync(
-        NetworkStream stream, byte[] buffer, CancellationToken cancellationToken)
+        NetworkStream stream, byte[] buffer, CancellationToken cancellationToken, int alreadyRead = 0)
     {
-        int read = 0;
+        int read = alreadyRead;
         while (read < buffer.Length)
         {
             int n = await stream
