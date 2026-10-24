@@ -60,6 +60,46 @@ public sealed class WorldTransferTests : IDisposable
     }
 
     [Fact]
+    public async Task AReachabilityProbeIsNotLoggedAsAFailedTransfer()
+    {
+        // 2026-10-24 host bundle: every join logged "world transfer failed: ... closed after 0
+        // of 8 bytes" for the joiner's bare-connect port probe, then sent the world normally.
+        List<string> log = [];
+        int port = FreePort();
+        _ = WorldTransfer.ServeAsync(
+            [new("SAVEGAME.sav", Bytes(64, seed: 3))], port, SessionPassword.None, 0,
+            line => { lock (log) { log.Add(line); } }, _cts.Token);
+        await WaitUntilListeningAsync(port);
+
+        using (TcpClient probe = new())
+        {
+            await probe.ConnectAsync(Local(port), _cts.Token);
+        }
+
+        await WorldTransfer.FetchAsync(Local(port), SessionPassword.None, _cts.Token);
+
+        // The server logs "world sent" after its flush, which can land after the fetch returns.
+        for (int i = 0; i < 100; i++)
+        {
+            lock (log)
+            {
+                if (log.Exists(line => line.StartsWith("world sent", StringComparison.Ordinal)))
+                {
+                    break;
+                }
+            }
+
+            await Task.Delay(50);
+        }
+
+        lock (log)
+        {
+            Assert.DoesNotContain(log, line => line.Contains("failed", StringComparison.Ordinal));
+            Assert.Contains(log, line => line.StartsWith("world sent", StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
     public async Task AJoinerFetchesTheHostsWorld()
     {
         IReadOnlyList<WorldFile> world =

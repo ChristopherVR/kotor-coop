@@ -130,9 +130,12 @@ internal static unsafe class AgentLauncher
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern uint ResumeThread(nint thread);
 
-    private const uint GenericWrite = 0x40000000;
+    // Append-only: every write lands at end of file, so a relaunch keeps the previous
+    // session's agent log (the one a crash report needs) instead of truncating it.
+    private const uint FileAppendData = 0x00000004;
+    private const uint Synchronize = 0x00100000;
     private const uint FileShareReadWriteDelete = 0x00000007; // DELETE share lets the agent rotate the file it also holds
-    private const uint CreateAlways = 2;
+    private const uint OpenAlways = 4;
     private const uint FileAttributeNormal = 0x00000080;
     private const int UseStdHandles = 0x00000100;
     private static readonly nint InvalidHandle = -1;
@@ -247,6 +250,7 @@ internal static unsafe class AgentLauncher
             // and the dashboard writes the same lines to --log itself.
             string logPath = Path.Combine(gameDirectory, "kotorcoop-agent.log");
             RotateAgentLogIfNeeded(gameDirectory, logPath);
+            MarkAgentLaunch(logPath, pid);
             bool visible = WantsVisibleWindow();
             StartupInfo startup = default;
             startup.Cb = sizeof(StartupInfo);
@@ -275,8 +279,8 @@ internal static unsafe class AgentLauncher
                 };
 
                 log = CreateFileW(
-                    logPath, GenericWrite, FileShareReadWriteDelete, ref inheritable,
-                    CreateAlways, FileAttributeNormal, 0);
+                    logPath, FileAppendData | Synchronize, FileShareReadWriteDelete, ref inheritable,
+                    OpenAlways, FileAttributeNormal, 0);
 
                 // kotorcoop-agent.log is capped mid-session by the AGENT, not by us: this handle is a
                 // raw inherited OS handle that follows the file wherever it is renamed, so only the
@@ -367,17 +371,35 @@ internal static unsafe class AgentLauncher
     }
 
     /// <summary>
+    /// Separates sessions in the appended agent log, the way the plugin log's
+    /// "=== KotorCoop plugin loaded ===" line does, so a support bundle shows where each
+    /// launch began.
+    /// </summary>
+    private static void MarkAgentLaunch(string logPath, uint pid)
+    {
+        try
+        {
+            File.AppendAllText(logPath, $"{Environment.NewLine}[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] === agent launched for game pid {pid} ==={Environment.NewLine}");
+        }
+        catch
+        {
+            // Best-effort, like the rotation: the marker must not stop the agent launching.
+        }
+    }
+
+    /// <summary>
     /// Rotates the agent's log the same way PluginHost rotates its own (see
     /// PluginHost.RotateLogsIfNeeded and LogRotation): if the previous session's file is over
     /// coop.ini's <c>log_max_mb</c>, its generations shift up (see
     /// <see cref="LogRotation.ShiftPlan"/>) through coop.ini's <c>log_keep</c>, so that many
     /// prior sessions' tails survive instead of being silently discarded down to one.
     ///
-    /// CreateFileW below always opens with CREATE_ALWAYS, so without this a launch that
-    /// follows a very long agent session (the dashboard runs for hours, logging the whole
-    /// time) would simply overwrite it and lose it; this is the same cap applied before that
-    /// overwrite happens rather than after. A single session that grows past the cap while
-    /// running is capped by the agent itself (RotatingLogWriter, started via --console-log).
+    /// CreateFileW below appends (2026-10-24: it used to open with CREATE_ALWAYS, and a
+    /// relaunch after a crash erased the crashed session's agent log, the one the report
+    /// needed), so without this the file would grow across launches without bound; this is
+    /// the same cap applied before the next session starts writing. A single session that
+    /// grows past the cap while running is capped by the agent itself (RotatingLogWriter,
+    /// started via --console-log).
     /// </summary>
     private static void RotateAgentLogIfNeeded(string gameDirectory, string logPath)
     {

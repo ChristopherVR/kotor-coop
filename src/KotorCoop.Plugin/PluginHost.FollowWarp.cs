@@ -4,6 +4,9 @@ namespace KotorCoop.Plugin;
 
 internal static unsafe partial class PluginHost
 {
+    /// <summary>Epoch the new-character hold was last logged in, so it logs once per world.</summary>
+    private static ulong _followWarpHeldForCharacter = ulong.MaxValue;
+
     /// <summary>
     /// Holds a session-commanded warp until the world this engine just entered has built its
     /// client half and settled (<see cref="FollowWarpSettleRule"/>). While held, the frame runs
@@ -12,6 +15,20 @@ internal static unsafe partial class PluginHost
     private static bool FollowWarpMayStart()
     {
         long now = Environment.TickCount64;
+
+        // A first-time joiner's new character must be saved and the host's world adopted first;
+        // warping the fresh game before that is a wasted load that also breaks the save.
+        if (_newCharacterCapture is { } capture && capture.HoldsFollowWarp(now))
+        {
+            if (_followWarpHeldForCharacter != _epoch)
+            {
+                _followWarpHeldForCharacter = _epoch;
+                Log("travel: holding the follow warp until the new character is saved and the host's world adopted");
+            }
+
+            return false;
+        }
+
         nint player = Odyssey.GetPlayerCreaturePointer();
         bool hasBody = player != 0 && Odyssey.HasRenderedBody(player);
         if (FollowWarpSettleRule.MayStart(hasBody, _worldUpAtMs, now))
