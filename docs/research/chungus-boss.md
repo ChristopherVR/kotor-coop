@@ -399,3 +399,87 @@ sounds work in-game. Do not describe the replacement as live-verified until that
 **VERIFIED automated result:** 368 focused boss, PvP, console and menu tests passed.
 All seven generated asset outputs reproduced byte-for-byte in a separate output folder.
 The rendered multi-view preview was visually inspected; it is not a running-game capture.
+
+
+## 2026-10-24 Cairn Sentinel staged two-game live follow-up
+
+This section narrows the earlier replacement NEEDS-LIVE status using the completed
+13:50:53-13:55:25 local-time run. It does not turn the old design's evidence into evidence
+for the new one, and it does not certify ordinary campaign play or all animations.
+All earlier research sections are retained unchanged.
+
+### Rig and evidence
+
+**VERIFIED from logs/files:** two same-machine DRM-free game instances, SentinelHost and
+SentinelJoin, connected over loopback with matching content digest. Both installed
+`dinput8.dll` files hash to
+`11ab747eff42e276e8a844e438cda4c3f7df3dcd784273e46175ea0fc0b64e87`.
+This is a boss test on the DRM-free rig, not a Steam invite or internet test.
+The operator's run identifiers were host PID 14540/plugin base `0x2EA00000` and joiner
+PID 36312/base `0x223F0000`, on a separate background desktop; these are run-specific.
+
+Private evidence, excluded from the public export:
+
+- `artifacts/live-installs/sentinel-20261024-host/kotorcoop-agent.log` and
+  `kotorcoop-plugin.log`; corresponding files under `sentinel-20261024-join/`.
+- `artifacts/bossview.png`, SHA-256
+  `f73e3d9e3c6945a4d9d22a4d5714e6c2bd53ad6edc9c633003e40e419e63220a`.
+- `artifacts/gameplay-trailer/captures/boss-paired-01/contact.jpg` and `gameplay.mp4`.
+- `artifacts/gameplay-trailer/captures/host-audio-enabled.wav`.
+
+**Staging constraints:** the baseline already had `god` enabled; `topup 500` was clamped
+to the character's maximum 6 HP, not evidence of a 500-HP normal character. The operator
+used the `attack` diagnostic (including range staging), a virtual gamepad camera and
+`tp 202 100`. The screenshot visibly includes those diagnostic replies. This was a
+controlled rendering/fight-lifecycle capture, not an unassisted balance playtest.
+
+The operator reported an earlier harness preparation attempt issuing a raw `menuload`
+request without `MenuLoadModule`, first returning failure 7 and then crashing on repeated
+raw use. Setup was corrected to use `PluginMenuLoader`, with the staged autosave and
+`END_M01AA` module populated. That pre-restart trace was not present in the reviewed current
+logs, so this entry records it as operator-reported harness misuse, not a verified product
+regression or a demonstrated normal-load failure. It is outside the successful run below.
+
+### Completed observations
+
+| Check | Bounded result | Evidence |
+| --- | --- | --- |
+| First entry and spawn | **VERIFIED live** | Host requested the arena at 13:50:53; both reached the countdown by 13:50:59. Host spawned boss `0x17` at 13:51:04; both agent logs announce the fight. |
+| New model renders | **VERIFIED visually** | `bossview.png` shows the cyan-seamed dark stone automaton and Cairn Sentinel name. The paired contact sheet shows the same replacement design in both game views. This closes basic rendering, not every animation transition. |
+| Two-player loss and return | **VERIFIED live, limited restoration** | At 13:51:24 the host records every player beaten and removes the boss. Host is back in `END_M01AA`, memory OK, 6/6 HP at 13:51:29; joiner reaches the same state at 13:51:30. Inventory/save equality was not independently compared. |
+| Second entry | **VERIFIED live** | Another arena request at 13:52:09, countdown at 13:52:15, fresh host boss `0x1C` at 13:52:20. It remained responsive until cancellation. No exhaustive old-boss/corpse census was performed. |
+| Power delivery and effects | **VERIFIED logs; some visual confirmation** | Both sides record drain, displacement, blast, stasis, distortion and alarm cues. Native logs record effect application; joiner blast at 13:54:32 applies 1 damage, and HP changes 5/6 to 4/6. The paired sheet visibly shows the distortion/gizka result and effect flashes. This is not a complete per-power visual audit. |
+| Explicit cancellation and return | **VERIFIED live** | Host `yield` at 13:55:18 calls the fight off, removes boss `0x1C`, and requests return at 13:55:20. Both agents report `END_M01AA`, memory OK and 6/6 HP by 13:55:23. |
+| Responsiveness and exceptions | **VERIFIED for this interval only** | Temporary read failures during module loading recover after both returns. No first-chance/exception/fault lines were found in the two plugin logs within 13:50:53-13:55:25. This does not establish crash freedom beyond the observed interval. |
+
+### Audio and animation limits
+
+**VERIFIED measurement:** the host-only process-tree capture is non-silent after scoped
+process-session unmute. Independent `ffmpeg volumedetect` reads of `host-audio-enabled.wav`
+(19.98 s) report mean -24.2 dB and peak -4.8 dB; the 20.00 s paired movie reports mean
+-25.2 dB and peak -4.2 dB. The capture operator reports using host process audio only,
+without microphone/desktop loopback, and restoring the previous per-PID mute/volume state.
+Earlier muted takes are not evidence of a game audio defect. The host log acknowledges
+`k_coop_chline` playback, including 13:53:12, but no reviewer has separately listened to
+and identified both synthesized cues. Non-silent process audio alone does not prove each
+new cue is audible or well balanced. **NEEDS-LIVE/listening:** isolated discharge and
+answering chime identification, clipping/mix judgment and joiner audio.
+
+**VERIFIED log limitation:** for blast (power 2), the host logs script animation 19 played,
+while the joiner records `animation 0 not played` (for example 13:54:31). Relocation/blink
+(power 10) also records no animation. These outcomes must not be summarized as all peer
+animations passing. Basic rigid-model rendering and several visible power states are
+confirmed; gait/foot sliding, attack contact timing, all 28 animations, all transitions,
+and the intended joiner blast pose remain to be checked.
+
+**Small follow-up, not yet deployed in this evidence:** the 800-pixel screenshot truncates
+the arena header. `PvpMenuRule.BossFightLine` is shortened to
+`Cairn Sentinel fight.  F12: leave the arena together.` Ten user-facing reply prefixes
+in `CheatController.Chungus.cs` change from `chungus:` to `sentinel:`; internal resource,
+class and protocol names are unchanged. This text-only follow-up needs the next native
+build/deploy; screenshots above show the preceding wording.
+
+**Still open:** ordinary unassisted combat/balance, victory, disconnect/host departure,
+ten-minute timeout, three or more players, differing appearance tables, exhaustive
+repeat-entry cleanup, and full save/inventory restoration comparisons. These observations
+do not change the project's legal/public-release gates.

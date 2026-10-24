@@ -27,8 +27,8 @@ borrowed from another game for this check. New native success-path testing, a re
 receiving/accepting an invitation, and cross-network joining remain **NEEDS-LIVE**. The earlier
 self-invite and direct loopback tests do not establish those behaviors. A failure to reach
 one's public endpoint is also not by itself proof of NAT hairpinning as the sole cause.
-The `--steam-join` decoder is tested; this does not prove Steam's cold-start launch of the
-retail game forwards the invite to the separate agent.
+The later same-PC cold-start forwarding and world-entry check is recorded in section 20.
+Supplying an argument locally still does not establish Steam friend delivery.
 
 API contract reference: [Valve's ISteamFriends documentation](https://partner.steamgames.com/doc/api/ISteamFriends)
 for `SetRichPresence`, `InviteUserToGame` and `GameRichPresenceJoinRequested_t` (checked 2026-10-24).
@@ -971,3 +971,79 @@ before this wave's edits — the new `SteamId`/`ISteamUser` binding, the two con
 their verb-table/catalog/help-text wiring introduced no regressions elsewhere. New tests added:
 `ConsoleCommandSteamTests` (parsing `steamstatus`/`steaminvite`, every malformed-SteamID shape)
 and two new rows in `ConsoleCommandVerbTableCoverageTests`.
+
+
+## 20. Startup forwarding follow-up (2026-10-24)
+
+The follow-up found a real missing link: Steam launches the retail game, while
+`AgentLauncher` always started the separate helper with `--menu` and discarded
+the game's arguments. The plugin now parses the Windows process argument list,
+accepts one strictly validated `kc1/` value (raw or after `+connect`/`--steam-join`),
+and forwards it as `--steam-join` on the first helper launch. Ordinary launches,
+malformed or ambiguous values and agent restarts retain menu behavior. An old
+invitation is never replayed after an agent restart.
+
+A startup invite now arms the same one-shot world-entry path as a live callback,
+including save-mode joins, and re-arms it if the host is still loading and the
+normal startup redial retries. It does not launch a duplicate character-adoption
+task. The native callback path and cold-start bridge remain separate mechanisms.
+
+The codec also refuses wildcard and broadcast destinations, including IPv4-mapped
+IPv6 spellings of those addresses (confirmed accepted before the follow-up fix).
+Valid mapped loopback addresses still round-trip. The normal host
+listen socket binds `0.0.0.0`; that address must never be advertised to friends.
+Without a usable discovered endpoint the optional Steam presence stays absent;
+LAN browsing and direct connections still work.
+
+Verification: **157 tests passed** using the filter
+`FullyQualifiedName~Steam|FullyQualifiedName~CoopCommandDispatcherTests|FullyQualifiedName~JoinRedial`.
+This includes real local UDP handshakes: the startup-invite entry point loads
+exactly once after a matching-password acceptance, and never after rejection.
+The retail-argument forwarding rule is tested through the actual agent option
+parser. Tests do not substitute for Steam delivery from another account.
+
+No `steam_api64.dll` was found in either installed KOTOR directory or anywhere
+under this project (including ignored artifacts). No DLL was borrowed/downloaded,
+no invitations were sent, and no second Steam account was available. Actual
+Steam rich-presence publication and friend callback delivery remain unverified
+on this build. A locally supplied game argument can verify the forwarding path,
+but cannot establish that Steam itself delivered the argument.
+
+The background-only live rig uses `Start-CoopBackgroundRig.ps1`: disposable GOG
+copies start suspended on a named non-input Win32 desktop, then receive the
+existing checked in-memory mutex rename. A hidden worker retains that desktop
+handle until the exact owned game exits. No `SwitchDesktop` call or foreground
+fallback exists. An explicit `-Steam` mode recognizes the original retail wrapper
+and skips the entire mutex memory-access block; it requires Steam already running.
+Only the disposable clone is changed, never an installed game.
+
+The first menu GL captures were black on the inactive desktop. After displaying
+the game window on that same non-input desktop and loading a world through the
+plugin API, the rig owner obtained actual `END_M01AA` framebuffer pixels. No input
+desktop switch or foreground fallback was used.
+
+The first live cold-start trial exposed a separate guard in `RunCommand`: save-mode
+joins refused to start at the main menu before the invite dispatcher could run.
+Startup invites now pass that guard, while ordinary scripted save-mode joins keep
+the loaded-world requirement. Regression coverage checks both cases.
+
+With the corrected helper, a fresh GOG clone launched with the raw argument
+`kc1/127.0.0.1:27150` automatically started the hidden helper, joined the host as
+peer 2 and logged `auto-load: loaded through the plugin (no input injection)`.
+No manual join save load was performed. On 2026-10-24 at 13:48 local time the join
+was stable in `END_M01AA`, HP 6/6, one remote peer and one phantom; protocol 102
+reported 5,997 frames. This verifies game-argument forwarding, same-PC transport
+and save-mode world entry together. It does **not** verify Steam friend delivery.
+The real helper process received `--steam-join` from the plugin in this test.
+A separate manually invoked standalone helper CLI session was not rerun; its
+option parsing and dispatcher behavior are covered by the focused tests.
+
+A separate Steam clone was prepared from the installed game's resources, using
+the existing stock `dialog.tlk.bak` (identical to the working rig's stock table),
+fresh candidate mod assets and the corrected helper. Six retail root binaries
+and resources, including the wrapped `swkotor.exe`, matched their installed-source
+SHA-256 hashes. The retail executable retained entry RVA `0x0046D2ED` and the
+`0xC0DEC0DE` wrapper marker. Installer checks passed. This clone has not yet been
+launched: a separate concurrent test owns the stock `swkotor` mutex. The harness
+refuses that conflict; the other test was left running and no wrapped-executable
+mutex bypass was attempted. Genuine Steam-game startup therefore remains pending.

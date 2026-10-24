@@ -224,6 +224,16 @@ public static class SteamConnectStringRule
             return false;
         }
 
+        // Bind-all and broadcast addresses are not destinations a friend can dial.
+        if (IPAddress.TryParse(host, out IPAddress? destination))
+        {
+            // Dual-stack sockets treat mapped IPv4 literals as their IPv4 destination.
+            // Compare that destination so ::ffff:0.0.0.0 cannot advertise a bind address.
+            if (destination.IsIPv4MappedToIPv6) destination = destination.MapToIPv4();
+            if (destination.Equals(IPAddress.Any) || destination.Equals(IPAddress.IPv6Any)
+                || destination.Equals(IPAddress.Broadcast)) return false;
+        }
+
         string portText = endpoint[(colon + 1)..];
         return portText.Length > 0 && portText.All(char.IsAsciiDigit)
             && int.TryParse(portText, out port) && port is >= 1 and <= 65535;

@@ -22,6 +22,7 @@ public sealed class SteamLaunchRuleTests
         Assert.Equal("127.0.0.1", options.HostEndPoint!.Address.ToString());
         Assert.Equal(27140, options.HostEndPoint.Port);
         Assert.Equal("fixture-password", options.Password);
+        Assert.True(options.CanStartWithoutLoadedWorld(JoinMode.Save));
     }
 
     [Fact]
@@ -57,5 +58,17 @@ public sealed class SteamLaunchRuleTests
     public void OnlyArgumentsAfterTheExecutableCanBeInvites()
     {
         Assert.Equal(["--menu"], SteamLaunchRule.AgentArguments(["kc1/127.0.0.1:27140"], true));
+    }
+
+    [Fact]
+    public void OnlyInvitationAndMenuFlowsMayStartSaveModeWithoutAWorld()
+    {
+        AgentOptions scripted = AgentOptions.Parse(["run", "--join", "127.0.0.1:27140"]);
+        Assert.False(scripted.CanStartWithoutLoadedWorld(JoinMode.Save));
+        Assert.True(scripted.CanStartWithoutLoadedWorld(JoinMode.Auto));
+        AgentOptions menu = AgentOptions.Parse(["run", "--menu"]);
+        Assert.True(menu.CanStartWithoutLoadedWorld(JoinMode.Save));
+        AgentOptions host = AgentOptions.Parse(["run", "--host"]);
+        Assert.False(host.CanStartWithoutLoadedWorld(JoinMode.Save));
     }
 }
