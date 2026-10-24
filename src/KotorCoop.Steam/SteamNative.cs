@@ -84,6 +84,11 @@ public sealed unsafe class SteamNative : IDisposable
     /// means every other member is a no-op.</summary>
     public bool IsReady { get; private set; }
 
+    /// <summary>True when <see cref="TryLoad"/> failed because <see cref="LibraryName"/> is not
+    /// beside the agent: the package deliberately does not ship it, so this is the usual reason
+    /// invites are off on the Steam copy and the GOG copy alike.</summary>
+    public bool LibraryMissing { get; private set; }
+
     /// <summary>This account's own SteamID64 once <see cref="IsReady"/>, else 0. Useful on its
     /// own for a status line — "am I logged in, as whom" — and it is what a player would hand
     /// a friend so the friend can <c>steaminvite</c> back, since this build has no
@@ -128,8 +133,11 @@ public sealed unsafe class SteamNative : IDisposable
         {
             if (!NativeLibrary.TryLoad(LibraryName, typeof(SteamNative).Assembly, null, out _library))
             {
-                log($"steam: {LibraryName} not found beside the agent - Steam invites are off "
-                    + "(this is normal for a GOG install; see docs/research/steam-support.md §11)");
+                LibraryMissing = true;
+                log($"steam: {LibraryName} not found beside the agent - Steam friend invites are off. "
+                    + "The package does not include that file, so this is expected on the Steam copy "
+                    + "as well as the GOG copy; joining by address still works "
+                    + "(see docs/research/steam-support.md §11)");
                 return false;
             }
 

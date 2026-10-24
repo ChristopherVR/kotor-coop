@@ -111,7 +111,8 @@ public static class TranscriptTone
         }
 
         if (lower.StartsWith("unknown command", StringComparison.Ordinal)
-            || lower.StartsWith("steam: not active", StringComparison.Ordinal))
+            || lower.StartsWith("steam: not active", StringComparison.Ordinal)
+            || lower.StartsWith("steam: friend invites unavailable", StringComparison.Ordinal))
         {
             return Tone.Warning;
         }

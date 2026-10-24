@@ -115,12 +115,14 @@ public sealed partial class CoopCommandDispatcher
 
         if (!steam.IsActive)
         {
-            // TryActivate() already logged the specific reason (no DLL / Steam not running /
-            // app not owned) the first time something asked; repeat the one-line summary here
-            // rather than the detail, since that log line already told the full story once.
-            Reply("steam: not active - see kotorcoop-agent.log for why (no steam_api64.dll, "
-                + "Steam not running, or this account does not own KOTOR on Steam are the "
-                + "normal reasons)");
+            // A missing DLL is by far the usual cause (the package never ships it), so name it
+            // outright; the rarer causes (Steam not running, KOTOR not owned on this account)
+            // were logged in detail by TryActivate() and are only pointed at here.
+            Reply(steam.LibraryMissing
+                ? "steam: friend invites unavailable - this build does not include steam_api64.dll. "
+                    + "Join by address instead; that works on the Steam and GOG copies"
+                : "steam: not active - see kotorcoop-agent.log for why (Steam not running, or this "
+                    + "account does not own KOTOR on Steam are the normal reasons)");
             return;
         }
 
