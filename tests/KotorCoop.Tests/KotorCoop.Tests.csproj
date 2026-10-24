@@ -68,6 +68,7 @@
     <Compile Include="..\..\src\KotorCoop.Plugin\ConsoleHistoryRing.cs" Link="Plugin\ConsoleHistoryRing.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\ConsoleCompletionEngine.cs" Link="Plugin\ConsoleCompletionEngine.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\ConsoleVerbCatalog.cs" Link="Plugin\ConsoleVerbCatalog.cs" />
+    <Compile Include="..\..\src\KotorCoop.Plugin\ConsoleRoutedVerbs.cs" Link="Plugin\ConsoleRoutedVerbs.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\JournalTags.cs" Link="Plugin\JournalTags.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\BehaviourOverrideRule.cs" Link="Plugin\BehaviourOverrideRule.cs" />
     <Compile Include="..\..\src\KotorCoop.Plugin\SpectateCycle.cs" Link="Plugin\SpectateCycle.cs" />
