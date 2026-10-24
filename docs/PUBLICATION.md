@@ -117,3 +117,25 @@ player releases. The rejected overview is absent from its current tree. The loca
 exporter has 29 passing policy tests and records exact source/file provenance.
 The newer Steam startup fixes have 157 focused passing tests; the previous package
 hash/scan above does not cover these subsequent source changes.
+
+
+## Fresh candidate verification — 24 October 2026, 03:59 UTC
+
+A separate clean checkout of `59e6e2b687a35819f95f172de027bb057ee0feb0`
+produced a new `0.1.0-beta.3` candidate, including the live-discovered Steam startup
+guard fix, invalid invite-destination rejection and the shorter Sentinel banner.
+The clean snapshot excludes concurrently edited widescreen/menu integration files.
+NativeAOT and packaging completed with warnings treated as errors. The focused
+Steam/join/boss/PvP test selection passed **234 tests, zero failures/skips**; the
+exact extracted Windows candidate then passed **50 installer checks**.
+
+Defender scanned the ZIP and extracted files with no detections at
+`2026-10-24T03:59:33.6821627Z`, engine `1.1.26090.9`, signatures `1.461.176.0`.
+The ZIP SHA-256 is
+`ceae53f87fda2e581204e1bc89c7380b3cbe347ceb48710212e9dd3f3e92ea25`.
+Evidence stays in ignored `artifacts/publication-scan-verified-20261024/`,
+`artifacts/publication-installer-check-verified-20261024/` and
+`artifacts/publication-verified-tests/public-candidate-targeted.trx`. This is a
+local candidate, not a published player release or a claim of legal clearance.
+The initial GOG boss/trailer captures used the preceding live build; their exact
+plugin/agent hashes are recorded separately and must not be confused with this ZIP.
