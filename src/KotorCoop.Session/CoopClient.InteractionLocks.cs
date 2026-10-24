@@ -22,6 +22,8 @@ public sealed partial class CoopClient
     private InteractionKind _interactionKind;
     private bool _interactionActive;
     private uint _interactionTargetId;
+    private uint _interactionReleaseSerial;
+    private readonly ContainerClaimEpochs _containerClaimEpochs = new();
 
     private IReadOnlyList<InteractionLock> _interactionLocks = [];
     private string _interactionLockModule = string.Empty;
@@ -36,6 +38,8 @@ public sealed partial class CoopClient
             _interactionKind = kind;
             _interactionActive = active;
             _interactionTargetId = targetId;
+            _interactionReleaseSerial = !active && kind == InteractionKind.Container
+                ? _containerClaimEpochs.ForRelease(_interactionModule, targetId) : 0;
         }
     }
 
@@ -69,6 +73,7 @@ public sealed partial class CoopClient
         InteractionKind kind;
         bool active;
         uint targetId;
+        uint releaseSerial;
         lock (_gate)
         {
             module = _interactionModule;
@@ -76,6 +81,7 @@ public sealed partial class CoopClient
             kind = _interactionKind;
             active = _interactionActive;
             targetId = _interactionTargetId;
+            releaseSerial = _interactionReleaseSerial;
         }
 
         // A Container claim keys on the object id instead of the tag — an empty tag is the
@@ -86,7 +92,7 @@ public sealed partial class CoopClient
         }
 
         int length = PacketCodec.Write(
-            _sendBuffer, new InteractionClaimPacket(_localPeerId, module, tag, kind, active, targetId));
+            _sendBuffer, new InteractionClaimPacket(_localPeerId, module, tag, kind, active, targetId, releaseSerial));
         if (length > 0)
         {
             _channel.Send(_hostEndPoint, _sendBuffer.AsSpan(0, length));
@@ -131,6 +137,21 @@ public sealed partial class CoopClient
         if (targetId == 0 || requestSerial == 0)
         {
             return;
+        }
+
+        lock (_gate)
+        {
+            _containerClaimEpochs.Record(module, targetId, requestSerial);
+            // Stop producing the previous close before the explicit request leaves. A tick
+            // already holding an old snapshot still carries its OLD release serial.
+            if (!_interactionActive && _interactionKind == InteractionKind.Container
+                && _interactionTargetId == targetId
+                && string.Equals(_interactionModule, module, StringComparison.OrdinalIgnoreCase))
+            {
+                _interactionKind = InteractionKind.None;
+                _interactionTargetId = 0;
+                _interactionReleaseSerial = 0;
+            }
         }
 
         // NOT _sendBuffer: this is called from the plugin-pump thread while RunAsync's tick

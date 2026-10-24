@@ -1,13 +1,15 @@
 kotor-coop {{VERSION}}
 ======================
 
-License: personal, noncommercial use of official releases is permitted with a
-lawfully acquired game. Contributions to the official project are permitted;
-independent modified releases and commercial reuse require written permission.
-Read KotorCoop.LICENSE.txt. This is an unofficial fan mod; game rights remain
-with their owners. We do not condone piracy or claim endorsement. Third-party
-licenses apply separately. Legal review and the full dependency notice audit
-remain outstanding; see KotorCoop.LEGAL.txt and KotorCoop.THIRD-PARTY-NOTICES.txt.
+Copyright (c) 2026 ChristopherVR and contributors. Original mod code, original
+generated mod assets and project documentation are licensed under GNU GPL version
+3 only with the KOTOR 1 linking permission, without warranty. Read
+KotorCoop.LICENSE.txt and KotorCoop.KOTOR-LINKING-EXCEPTION.txt. Distributed
+derivatives must satisfy GPLv3, including its corresponding-source requirements.
+Source: https://github.com/ChristopherVR/kotor-coop (use the release's source tag).
+This is an unofficial fan mod; game rights remain with their owners. Each player
+needs a lawfully acquired, properly licensed game. Third-party licenses apply
+separately; see KotorCoop.LEGAL.txt and KotorCoop.THIRD-PARTY-NOTICES.txt.
 
 Two-to-eight-player co-op for Star Wars: Knights of the Old Republic (GOG or Steam,
 v1.0.3), on 64-bit Windows. Each player needs their own copy -- on one machine or across a network
@@ -290,17 +292,19 @@ remain:
   "frame hook NOT installed: ... something else already hooked it". Turn the overlay off for
   KOTOR (right-click the game -> Properties -> General) and relaunch.
 
-Friends-list invites ("Join Game", steam_invites in coop.ini) let a friend join without
-being told an IP. Optional and off unless you set it up: copy a steam_api64.dll next to
-KotorCoop.Agent.exe (from the Steamworks SDK, or from any Steam game you own -- this mod is
-not allowed to ship Valve's). Without that file you get one line in the log and everything else
-works exactly as before. Both players need to own KOTOR on Steam, and while the agent runs
-Steam will show you as playing KOTOR. Once it's active:
+Friends-list invites ("Join Game", steam_invites in coop.ini) are experimental and are not
+part of this beta's verified joining path. Use direct joining for the public playtest.
+The optional steam_api64.dll is not included. Owning another Steam game does not establish
+permission to reuse its DLL, and the Steam client alone does not supply that library.
+Any future setup must use a library obtained under applicable Valve authorization and
+review use of the game's Steam AppID. Without the library, ordinary direct joining remains
+available. Native friend-invite delivery has not been verified with two Steam accounts.
+The following developer commands exist for separately authorized testing:
 
 - Type steamstatus at the ~ console any time to check it's working -- it prints your own
   SteamID64 and, while hosting, the exact string a friend's "Join Game" carries.
-- A friend just needs to click Join Game on your entry in their Steam friends list; nothing
-  else to do on either side.
+- With a separately authorized and working setup, friends-list Join Game is intended
+  to deliver the session token. That complete two-account flow is still unverified.
 - To invite someone who isn't looking at your profile right now, type
   steaminvite <their SteamID64> while hosting (their SteamID64 is on their Steam profile:
   "Copy Player ID", or the digits at the end of the profile URL).

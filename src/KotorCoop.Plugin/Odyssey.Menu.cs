@@ -344,6 +344,12 @@ internal static unsafe partial class Odyssey
         *flags = (*flags | ControlFlagVisible) & ~ControlFlagLocked;
     }
 
+    public static bool IsControlVisible(nint control) =>
+        (*(uint*)(control + ControlFlagsOffset) & ControlFlagVisible) != 0;
+
+    public static void SetControlHidden(nint control) =>
+        *(uint*)(control + ControlFlagsOffset) &= ~ControlFlagVisible;
+
     // ---- lining the Co-op button up with the menu's own buttons -------------------
     //
     // CSWGuiExtent sits at control+0x04 (left, top, width, height, screen pixels). The menu's
@@ -353,9 +359,10 @@ internal static unsafe partial class Odyssey
 
     private const int ControlExtentOffset = 0x04;
 
-    /// <summary>How far into CSWGuiMainMenu to look for embedded buttons: past BTN_WARP, the
-    /// last control the .gui lays out.</summary>
-    private const int MainMenuScanBytes = MainMenuWarpButton + 0x200;
+    /// <summary>Read only through the last button's flags. Padding past BTN_WARP by 0x200
+    /// crosses the menu allocation under page heap, causing IsReadable to reject the entire
+    /// scan and silently disabling layout adaptation.</summary>
+    private const int MainMenuScanBytes = MainMenuWarpButton + ControlFlagsOffset + sizeof(uint);
 
     // CSWGuiButton::SetExtent(this, CSWGuiExtent* src), ret 4: copies the rect and re-lays the
     // button's border and label off it. VERIFIED (menu-button-runtime.md).

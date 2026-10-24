@@ -414,6 +414,16 @@ m_rgchConnect[256]; }`.
 
 ## 11. The `steam_api64.dll` problem, stated plainly
 
+**24 October 2026 correction:** the historical assessment below was too categorical
+about who may redistribute the SDK and incorrectly suggested that ownership of another
+game establishes reuse rights to its DLL. Valve's current
+[SDK Access Agreement](https://partner.steamgames.com/documentation/sdk_access_agreement/)
+section 1.1 grants licensees specified redistributable rights with their object-code
+software; it does not by itself settle this project's licensing or AppID/service access.
+The public beta excludes the optional DLL and does not recommend copying it from other
+games. Native friend invitations remain unverified. Historical reasoning is retained
+below as a record, not current installation guidance.
+
 Every option above needs that file, and we cannot supply it:
 
 * Valve's Steamworks SDK licence permits redistribution by **Steamworks partners shipping

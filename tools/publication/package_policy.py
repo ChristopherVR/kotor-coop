@@ -8,6 +8,7 @@ import io
 import json
 import re
 import stat
+import struct
 import zipfile
 from pathlib import Path
 
@@ -18,7 +19,7 @@ FIXED = {
     "install.ps1", "KotorCoop.CollectLogs.cmd", "README.txt", "coop.ini",
     "dinput8.chain.example", "KotorCoop.DEFAULTS.ini", "KotorCoop.LEGAL.txt",
     "KotorCoop.LICENSE.txt", "KotorCoop.THIRD-PARTY-INVENTORY.md",
-    "KotorCoop.THIRD-PARTY-NOTICES.txt",
+    "KotorCoop.THIRD-PARTY-NOTICES.txt", "KotorCoop.KOTOR-LINKING-EXCEPTION.txt",
 }
 OVERRIDES = {
     "k_coop_chline.wav", "k_coop_chsnap.wav", "k_coop_chungus.mdl",
@@ -33,6 +34,7 @@ SOURCE_FILES = {
     "coop.ini": "profiles/coop.ini.example",
     "KotorCoop.DEFAULTS.ini": "profiles/coop.ini.example",
     "KotorCoop.LICENSE.txt": "LICENSE", "KotorCoop.LEGAL.txt": "docs/LEGAL.md",
+    "KotorCoop.KOTOR-LINKING-EXCEPTION.txt": "KOTOR-LINKING-EXCEPTION.txt",
     "KotorCoop.THIRD-PARTY-NOTICES.txt": "third-party/NOTICES.txt",
     "KotorCoop.THIRD-PARTY-INVENTORY.md": "THIRD-PARTY-NOTICES.md",
     "install.ps1": "tools/install.ps1",
@@ -51,6 +53,90 @@ BINARY_FILES = {
 def sha256(path):
     with Path(path).open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def plugin_codeview_paths(data):
+    """Read actual PE CodeView records, not path-like strings in runtime code.
+
+    NativeAOT uses RSDS records. NB10 is also understood so an older linker
+    cannot bypass the publication boundary. Malformed debug data fails closed.
+    """
+    def region(offset, size):
+        if offset < 0 or size < 0 or offset + size > len(data):
+            raise ValueError("Malformed plugin PE debug data")
+        return data[offset:offset + size]
+
+    def u16(offset):
+        return struct.unpack("<H", region(offset, 2))[0]
+
+    def u32(offset):
+        return struct.unpack("<I", region(offset, 4))[0]
+
+    if region(0, 2) != b"MZ":
+        raise ValueError("Invalid plugin PE signature")
+    pe = u32(0x3c)
+    if region(pe, 4) != b"PE\0\0":
+        raise ValueError("Invalid plugin PE signature")
+    optional = pe + 24
+    optional_size = u16(pe + 20)
+    region(optional, optional_size)
+    magic = u16(optional)
+    directory = {0x10b: 96, 0x20b: 112}.get(magic)
+    if directory is None or optional_size < directory:
+        raise ValueError("Malformed plugin PE optional header")
+    if u32(optional + directory - 4) <= 6:
+        return []
+    if optional_size < directory + 7 * 8:
+        raise ValueError("Malformed plugin PE debug directory")
+    debug_rva, debug_size = struct.unpack("<II", region(optional + directory + 6 * 8, 8))
+    if not debug_rva and not debug_size:
+        return []
+    if not debug_rva or not debug_size or debug_size % 28:
+        raise ValueError("Malformed plugin PE debug directory")
+    sections = optional + optional_size
+    section_count = u16(pe + 6)
+    region(sections, section_count * 40)
+
+    def rva_offset(rva, size):
+        # Data directories may be in headers or in a section's file-backed data.
+        headers_size = u32(optional + 60)
+        if rva < headers_size and rva + size <= headers_size:
+            region(rva, size)
+            return rva
+        for i in range(section_count):
+            section = sections + i * 40
+            virtual_address = u32(section + 12)
+            raw_size, raw_pointer = u32(section + 16), u32(section + 20)
+            delta = rva - virtual_address
+            if 0 <= delta and delta + size <= raw_size:
+                offset = raw_pointer + delta
+                region(offset, size)
+                return offset
+        raise ValueError("Plugin PE debug RVA is outside file-backed data")
+
+    debug = rva_offset(debug_rva, debug_size)
+    paths = []
+    for offset in range(debug, debug + debug_size, 28):
+        if u32(offset + 12) != 2:  # IMAGE_DEBUG_TYPE_CODEVIEW
+            continue
+        size, address, pointer = struct.unpack("<III", region(offset + 16, 12))
+        record = region(pointer, size)
+        if address and rva_offset(address, size) != pointer:
+            raise ValueError("Plugin CodeView address and file pointer disagree")
+        prefix = {b"RSDS": 24, b"NB10": 16}.get(record[:4])
+        if prefix is None or len(record) <= prefix or not record.endswith(b"\0"):
+            raise ValueError("Malformed plugin CodeView record")
+        path = record[prefix:-1]
+        if not path or b"\0" in path:
+            raise ValueError("Malformed plugin CodeView path")
+        paths.append(path)
+    return paths
+
+
+def validate_plugin_debug_paths(data):
+    for path in plugin_codeview_paths(data):
+        if path != b"dinput8.pdb":
+            raise ValueError("Plugin CodeView PDB path must be the basename dinput8.pdb")
 
 
 def inspect_package_bytes(payload, archive_name, version, root=ROOT, extract=None):
@@ -87,12 +173,16 @@ def inspect_package_bytes(payload, archive_name, version, root=ROOT, extract=Non
                 raise ValueError("Oversized package entry")
             data = z.read(entry)
             source = SOURCE_FILES.get(entry.filename) or BINARY_FILES.get(entry.filename)
+            if entry.filename == 'KotorCoop.LEGAL.txt' and (root / 'site/public/LEGAL.md').is_file():
+                source = 'site/public/LEGAL.md'
             if source and data != (root / source).read_bytes():
                 raise ValueError(f"Stale or modified publication input: {entry.filename}")
             if entry.filename == "README.txt" and data != expected_readme:
                 raise ValueError("Stale or modified publication input: README.txt")
             if entry.filename.lower().endswith((".exe", ".dll")) and not data.startswith(b"MZ"):
                 raise ValueError("Invalid Windows binary: " + entry.filename)
+            if entry.filename == "dinput8.dll":
+                validate_plugin_debug_paths(data)
             inventory.append({"name": entry.filename, "bytes": len(data),
                               "sha256": hashlib.sha256(data).hexdigest()})
         if extract is not None:

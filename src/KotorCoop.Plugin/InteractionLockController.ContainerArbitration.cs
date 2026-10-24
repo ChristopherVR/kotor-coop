@@ -28,6 +28,7 @@ internal sealed unsafe partial class InteractionLockController
     private uint _nextContainerRequestSerial;
     private long _containerRequestAtMs;
     private uint _pendingDeferredSerial;
+    private Action<uint>? _resumeGrantedContainer;
 
     private void InvalidateContainerArbitration()
     {
@@ -66,6 +67,16 @@ internal sealed unsafe partial class InteractionLockController
             }
 
             _containerArbiter.BeginRequest(deferredId, requestSerial, now);
+            ContainerUseHook.LatestAttempt(out uint lastAllowedAttempt);
+            _containerCloseRelease.BeginDeferred(deferredId, lastAllowedAttempt);
+            // The helper can poll between frames. Withdraw the old shared-block release
+            // before publishing the new request serial below, not on the next frame.
+            if (!block.LocalInteractionActive && block.LocalInteractionKind == InteractionKindContainer
+                && block.LocalInteractionTargetId == deferredId)
+            {
+                block.LocalInteractionKind = 0;
+                block.LocalInteractionTargetId = 0;
+            }
             _containerRequestAtMs = now;
             _pendingDeferredSerial = deferredSerial;
             PluginHost.Log($"container: arbitration requested 0x{deferredId:X} (serial {requestSerial})");
@@ -85,12 +96,10 @@ internal sealed unsafe partial class InteractionLockController
         bool responseArrived = block.ContainerLockResponseSerial == pendingSerial;
         bool granted = responseArrived && block.ContainerLockResponseGranted;
 
-        switch (_containerArbiter.Poll(now, responseArrived, granted))
+        switch (_containerArbiter.PollAndResume(now, responseArrived, granted,
+            _resumeGrantedContainer ??= ResumeGrantedContainer))
         {
             case ContainerLockPollOutcome.Granted:
-                bool queued = ContainerUseHook.ResumeDeferredOpen(pendingTargetId, _pendingDeferredSerial);
-                PluginHost.Log($"container: arbitration granted 0x{pendingTargetId:X} after {now - _containerRequestAtMs}ms; "
-                    + (queued ? "resumed captured open" : "captured open expired or target unavailable"));
                 break;
 
             case ContainerLockPollOutcome.Denied:
@@ -104,21 +113,29 @@ internal sealed unsafe partial class InteractionLockController
                 break;
 
             case ContainerLockPollOutcome.TimedOut:
-                // Fails SAFE: proceed exactly as this feature's predecessor always did, rather
-                // than refusing a container nobody may actually hold. ContainerUseHook's own
-                // peer-held check still runs on the resumed open regardless, so a genuinely
-                // contested container is still caught there even if arbitration itself dropped
-                // the ball.
-                bool fallbackQueued = ContainerUseHook.ResumeDeferredOpen(pendingTargetId, _pendingDeferredSerial);
+                // A lost denial AND a lost lock broadcast must not open a contested chest.
+                // Without a positive grant, refuse this click and let a new click retry.
+                ContainerUseHook.WithdrawGrant();
+                _containerNoticeUntilMs = now + FarNoticeDurationMs;
+                ReadOnlySpan<byte> notice = "Container request timed out - try again"u8;
+                notice.CopyTo(_containerNoticeBuffer);
+                _containerNoticeLength = notice.Length;
                 PluginHost.Log(
                     $"container: arbitration timed out for 0x{pendingTargetId:X} "
                     + $"(no host answer within {ContainerLockArbiter.TimeoutMs}ms; elapsed {now - _containerRequestAtMs}ms); "
-                    + (fallbackQueued ? "resumed captured open" : "captured open expired or target unavailable"));
+                    + "open refused - try again (an abandoned reservation expires with its lease)");
                 break;
 
             case ContainerLockPollOutcome.Waiting:
             default:
                 break;
         }
+    }
+
+    private void ResumeGrantedContainer(uint targetId)
+    {
+        bool resumed = ContainerUseHook.ResumeDeferredOpen(targetId, _pendingDeferredSerial);
+        PluginHost.Log($"container: arbitration granted 0x{targetId:X} after {Environment.TickCount64 - _containerRequestAtMs}ms; "
+            + (resumed ? "resumed captured open" : "captured open expired or target unavailable"));
     }
 }

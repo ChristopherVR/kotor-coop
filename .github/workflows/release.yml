@@ -1,5 +1,6 @@
-# Private development workflow. Only curated Windows binaries and scan evidence
-# can be sent to the independent public repository; source refs never cross over.
+# Private development workflow. Reviewed Windows binaries, scan evidence and exact
+# GPL corresponding source are sent to the independent public repository.
+# Private Git refs/history never cross over; source must already be cleanly exported.
 name: Public release candidate
 on:
   workflow_dispatch:
@@ -34,7 +35,7 @@ jobs:
           if (-not $env:PUBLIC_RELEASE_TOKEN) { throw 'Configure a token limited to Contents write on ChristopherVR/kotor-coop in the public-release environment.' }
           $version = (Get-Content VERSION -Raw).Trim()
           if ($version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') { throw 'Invalid VERSION' }
-          if (-not (Test-Path "docs/release-notes/v$version.md")) { throw 'Reviewed release notes are required.' }
+          if (-not (Test-Path "docs/release-notes/public-playtest-$version.md")) { throw 'Reviewed standalone public release notes are required.' }
       - name: Build and test
         shell: pwsh
         run: |
@@ -50,5 +51,5 @@ jobs:
           GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
         run: |
           $version = (Get-Content VERSION -Raw).Trim()
-          pwsh tools/Publish-PublicRelease.ps1 -Version $version -Directory artifacts/public-candidate -NotesFile "docs/release-notes/v$version.md" -ReleaseReviewed
+          pwsh tools/Publish-PublicRelease.ps1 -Version $version -Directory artifacts/public-candidate -NotesFile "docs/release-notes/public-playtest-$version.md" -ReleaseReviewed
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -51,6 +51,63 @@ public class ContainerLockArbitrationTests
         }
     }
 
+    [Fact]
+    public async Task ReopeningAfterAPublishedCloseDoesNotReleaseTheNewGrantOnTheNextTick()
+    {
+        using CoopHost host = new(new SessionSettings { PlayerName = "Host", Port = 0, TickRate = 60 });
+        using CoopClient client = new(new SessionSettings { PlayerName = "Client", TickRate = 60 },
+            new IPEndPoint(IPAddress.Loopback, host.ListenEndPoint.Port));
+        using CancellationTokenSource cts = new(Timeout + TimeSpan.FromSeconds(5));
+        Task hostTask = host.RunAsync(cts.Token);
+        Task clientTask = client.RunAsync(cts.Token);
+        PlayerState state = new(new Vector3f(10.8f, 21.87f, 0f), 0f, Module, 100, 0);
+        void Publish()
+        {
+            host.PublishLocalState(state);
+            client.PublishLocalState(state);
+            host.PublishInteractionClaim(Module, string.Empty, InteractionKind.None, false);
+        }
+
+        try
+        {
+            Assert.True(await WaitForAsync(() => client.IsConnected, Timeout, Publish));
+            client.RequestContainerLock(Module, TargetId, 1);
+            Assert.True(await WaitForAsync(() => client.TryGetLockResponse(1, out bool granted) && granted,
+                Timeout, Publish));
+            Assert.True(await WaitForAsync(() => host.GetInteractionLocks().Any(l => l.TargetId == TargetId),
+                Timeout, Publish));
+            client.PublishInteractionClaim(Module, string.Empty, InteractionKind.Container, false, TargetId);
+            Assert.True(await WaitForAsync(() => host.GetInteractionLocks().Count == 0, Timeout, Publish));
+
+            // Deliberately leave the previous closed level cached, as the real plugin did
+            // while its new request awaited a response. Requesting again must retire it.
+            client.RequestContainerLock(Module, TargetId, 2);
+            Assert.True(await WaitForAsync(() => client.TryGetLockResponse(2, out bool granted) && granted,
+                Timeout, Publish));
+            Assert.True(await WaitForAsync(() => host.GetInteractionLocks().Any(l => l.TargetId == TargetId),
+                Timeout, Publish));
+            // Allow several real send ticks; the old implementation repeatedly sent the
+            // cached close here and allowed the host's competing request as well.
+            await Task.Delay(150);
+            host.RequestContainerLock(Module, TargetId, 1);
+            Assert.True(host.TryGetLockResponse(1, out bool hostGranted));
+            Assert.False(hostGranted);
+
+            // A genuine matching close still takes effect promptly, not after the 5s lease.
+            client.PublishInteractionClaim(Module, string.Empty, InteractionKind.Container, false, TargetId);
+            Assert.True(await WaitForAsync(() => host.GetInteractionLocks().Count == 0, Timeout, Publish));
+            host.RequestContainerLock(Module, TargetId, 2);
+            Assert.True(host.TryGetLockResponse(2, out hostGranted) && hostGranted);
+            // Releasing must not manufacture a denial response that overwrites grant 2.
+            Assert.True(client.TryGetLockResponse(2, out bool clientGranted) && clientGranted);
+        }
+        finally
+        {
+            await cts.CancelAsync();
+            await Task.WhenAll(SwallowCancel(hostTask), SwallowCancel(clientTask));
+        }
+    }
+
     /// <summary>
     /// The headline scenario from the task brief: two clients request the SAME container
     /// within about 1ms of each other (sent back-to-back on this thread, with no delay between

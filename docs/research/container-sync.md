@@ -1434,3 +1434,13 @@ Live two-instance check in `sta_m45ac`, door `0x3E`: host `opendoor` mirrored `0
 staging the host's verified lock byte to 1 converged to locked=1 on both; clearing the
 joiner's lock byte converged to locked=0 on both within 3.5 seconds each. This tests the
 replication path with a staged state change, not a full story-script door sequence.
+
+## 2026-10-24: same-container reopen released the newer reservation
+
+Exact candidate `59e6e2b` live verification reproduced both players opening nonempty container `0xD1` after closing it: both arbitration requests were granted and both native GL screenshots showed the same loot panel. See [the candidate smoke report](public-beta-smoke-2026-10-24.md) for timestamps, hashes, repository probes and limits.
+
+A previous inactive container level remained published during the next deferred open. Once the host granted that new request, the older release could immediately remove the new reservation, so a competitor was also granted. The plugin now retires the old same-container close before exposing a new request. The client stops transmitting its cached previous close before sending that request. Inactive container packets carry the reservation's epoch in the existing `RequestSerial`; the lock store ignores a release for a different epoch, including reordered/duplicate UDP levels. Ordinary active refreshes preserve that epoch; the actual matching close still releases promptly. Abandoned requests retain lease expiry, and unarbitrated zero-epoch claims still release normally.
+
+The related shared-block response writer now publishes the granted bit before its serial, and does not advance the serial if the verdict write fails. Previously a denied request could briefly observe a matching new serial with the old true verdict. Guarded-page tests cover that failed-write boundary.
+
+Targeted Release tests passed 169/169, including actual loopback reopen arbitration, reordered/duplicate releases, matching close, denial, abandonment/expiry, lost-request fallback, wrap and unchanged packet codecs. The fix still needs the new candidate's private-desktop live rerun. Packet size and field layout are unchanged; **all peers must nevertheless use the identical candidate**, since old hosts do not enforce release epochs and new hosts ignore legacy zero-epoch releases of explicit reservations until their lease expires.

@@ -34,6 +34,33 @@ ASCII-allocation microbenchmarks. It needs no game instance; see
 
 ## Live probes
 
+`menu-layout-probe.ps1 -ProcId <pid> -ExpectedWidth 1920 -ExpectedHeight 1080 -OutPath <json>`
+records the physical client size (with engine-size fallback), engine viewport, button geometry and loaded DLL names without
+writing game memory. It fails if the requested mode fell back or Co-op is hidden, offscreen
+or overlapping a button. Rendering and mouse/controller activation still need separate checks;
+see [menu compatibility](../docs/research/menu-widescreen-compatibility.md).
+
+`Test-LoaderEnhancedBridge.ps1` builds x86 fixtures and checks that the loader forwards
+Enhanced's optional input counters to a secondary DLL while keeping DirectInput on the
+first proxy. It also checks the no-provider case. Build `src/KotorCoop.Loader/build.ps1`
+first; no game files or third-party mod assets are needed for this test.
+
+`Test-LoaderEnhancedStartup.ps1` builds x86 fixtures for the early display-hook bootstrap:
+recognized game with renderer present or loaded later, renderer absent, and unknown game.
+It checks one-time priming, unchanged command-line delivery, and renderer import ownership.
+It also requires the built loader and uses no game/mod assets.
+
+For an owned private-desktop rig with `isolate_real_input=1`,
+`blockpoke.ps1 -ProcId <pid> rig 'input click 965 504'` and
+`blockpoke.ps1 -ProcId <pid> rig 'screenshot menu front'` send agent-free diagnostics through
+the native command channel. Input uses addressed messages and the virtual DirectInput queue;
+screenshots read the OpenGL framebuffer. Neither activates a window or moves the OS cursor.
+Arguments are limited to 31 ASCII bytes; a pending native command is refused. Enhanced's
+isolated hit-test bridge supplies the virtual cursor only inside its native menu hit tests;
+normal play with `isolate_real_input=0` does not install that bridge. Use
+`Start-CoopBackgroundRig.ps1` for disposable installs on a private, non-input desktop and
+its recorded `-StatePath ... -Stop` to clean up the owned process.
+
 Read (and sometimes write) a running game's or plugin's state directly, for verifying a
 channel without playing through a whole scenario.
 

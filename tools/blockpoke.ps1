@@ -34,7 +34,7 @@
 param(
     [string]$ProcessName = 'swkotor',
     [int]$ProcId = 0,
-    [Parameter(Position = 0)][ValidateSet('state', 'travel', 'announce', 'journal', 'pause', 'browser', 'death', 'hitphantom', 'combat', 'ledger', 'threat', 'talk', 'walk', 'dialogue', 'attack', 'encounters', 'triggers', 'cheat', 'console', 'item', 'chargen', 'menuload', 'doors')]
+    [Parameter(Position = 0)][ValidateSet('state', 'travel', 'announce', 'journal', 'pause', 'browser', 'death', 'hitphantom', 'combat', 'ledger', 'threat', 'talk', 'walk', 'dialogue', 'attack', 'encounters', 'triggers', 'cheat', 'console', 'rig', 'item', 'chargen', 'menuload', 'doors')]
     [string]$Command = 'state',
     [Parameter(Position = 1)][string]$Arg1 = '',
     [Parameter(Position = 2)][int]$Arg2 = 0
@@ -271,6 +271,25 @@ switch ($Command) {
             (U32 0x33B0), (U32 0x33B4), (U32 0x33B8), (U32 0x33BC)
         "  answer:  serial {0}  applied {1}  status {2}" -f (U32 0x3328), (U32 0x3364), $status
         "  detail:  '{0}'" -f (Ascii 0x336C 64)
+    }
+    'rig' {
+        # Direct, agent-free diagnostics. The plugin uses addressed window messages and
+        # its virtual DI queue; screenshot reads its OpenGL buffer. No foreground fallback.
+        if ($Arg1 -notmatch '^(input|screenshot)\s+(.+)$') { throw 'rig needs input <args> or screenshot <args>' }
+        $kind = if ($Matches[1] -eq 'input') { 103 } else { 105 }
+        $text = $Matches[2]
+        if ([Text.Encoding]::ASCII.GetByteCount($text) -gt 31) { throw 'Rig arguments exceed the 31-byte native command capacity.' }
+        if ((U32 0x3328) -ne (U32 0x3364)) { throw 'Another native command is pending; wait before retrying.' }
+        WU32 0x332C $kind
+        WAscii 0x3344 $text 32
+        WU32 0x3368 0
+        $serial = (U32 0x3328) + 1
+        WU32 0x3328 $serial
+        $deadline = [DateTime]::UtcNow.AddSeconds(6)
+        while ((U32 0x3364) -ne $serial -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 25 }
+        if ((U32 0x3364) -ne $serial) { throw 'Native rig command timed out.' }
+        "rig: status $(U32 0x3368): $(Ascii 0x336C 64)"
+        if ((U32 0x3368) -ne 1) { throw 'Native rig command was not applied.' }
     }
     'cheat' {
         # The staging cheats, without needing the console or a keyboard — which is the whole

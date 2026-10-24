@@ -5,6 +5,7 @@ Run: python -m unittest discover -s tools/publication -p test_package_policy.py 
 import hashlib
 import io
 import stat
+import struct
 import tempfile
 import unittest
 import warnings
@@ -13,6 +14,29 @@ from pathlib import Path
 from unittest.mock import patch
 
 import package_policy as policy
+
+
+def plugin_pe(path=b"dinput8.pdb", signature=b"RSDS", pe64=False):
+    """Small file-backed PE debug directory with the same layout as link.exe."""
+    image = bytearray(0x500)
+    image[:2] = b"MZ"
+    struct.pack_into("<I", image, 0x3c, 0x80)
+    image[0x80:0x84] = b"PE\0\0"
+    struct.pack_into("<H", image, 0x86, 1)  # section count
+    optional_size = 240 if pe64 else 224
+    struct.pack_into("<H", image, 0x94, optional_size)
+    struct.pack_into("<H", image, 0x98, 0x20b if pe64 else 0x10b)
+    struct.pack_into("<I", image, 0x98 + 60, 0x200)  # SizeOfHeaders
+    directory = 112 if pe64 else 96
+    struct.pack_into("<I", image, 0x98 + directory - 4, 16)
+    struct.pack_into("<II", image, 0x98 + directory + 6 * 8, 0x1000, 28)
+    section = 0x98 + optional_size
+    image[section:section + 8] = b".rdata\0\0"
+    struct.pack_into("<IIII", image, section + 8, 0x300, 0x1000, 0x300, 0x200)
+    record = signature + bytes(20 if signature == b"RSDS" else 12) + path + b"\0"
+    struct.pack_into("<IIII", image, 0x20c, 2, len(record), 0x1040, 0x240)
+    image[0x240:0x240 + len(record)] = record
+    return bytes(image)
 
 
 class PackagePolicyTests(unittest.TestCase):
@@ -28,6 +52,8 @@ class PackagePolicyTests(unittest.TestCase):
             target = self.root / source
             target.parent.mkdir(parents=True, exist_ok=True)
             data = (b"MZfixture-build:" if name in policy.BINARY_FILES else b"source:") + source.encode()
+            if name == "dinput8.dll":
+                data = plugin_pe()
             target.write_bytes(data)
             self.files[name] = data
         # Shared source paths (coop.ini/defaults) must produce identical bytes.
@@ -105,8 +131,9 @@ class PackagePolicyTests(unittest.TestCase):
             self.inspect(self.archive(omit=["README.txt"], extra=[(symlink, b"../secret")]))
 
     def test_rejects_missing_files(self):
-        with self.assertRaisesRegex(ValueError, "allowlist"):
-            self.inspect(self.archive(omit=["KotorCoop.LICENSE.txt"]))
+        for name in ('KotorCoop.LICENSE.txt', 'KotorCoop.KOTOR-LINKING-EXCEPTION.txt'):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, "allowlist"):
+                self.inspect(self.archive(omit=[name]))
 
     def test_rejects_stale_asset(self):
         with self.assertRaisesRegex(ValueError, "Stale.*Override/k_coop_chungus.mdl"):
@@ -117,10 +144,48 @@ class PackagePolicyTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaisesRegex(ValueError, "Stale"):
                 self.inspect(self.archive({name: b"MZold-build"}))
 
+    def test_rejects_developer_pdb_path_even_when_matching_build_output(self):
+        for path in (b"C:\\Users\\builder\\private\\dinput8.pdb", b"/build/private/dinput8.pdb",
+                     b"\\\\server\\private\\dinput8.pdb", b"../private/dinput8.pdb"):
+            with self.subTest(path=path):
+                data = plugin_pe(path)
+                (self.root / policy.BINARY_FILES["dinput8.dll"]).write_bytes(data)
+                with self.assertRaisesRegex(ValueError, "CodeView PDB path.*basename"):
+                    self.inspect(self.archive({"dinput8.dll": data}))
+
+    def test_codeview_parser_reads_rsds_nb10_and_pe32_plus(self):
+        for signature in (b"RSDS", b"NB10"):
+            for pe64 in (False, True):
+                with self.subTest(signature=signature, pe64=pe64):
+                    self.assertEqual([b"dinput8.pdb"], policy.plugin_codeview_paths(plugin_pe(signature=signature, pe64=pe64)))
+
+    def test_unrelated_runtime_path_string_is_not_a_codeview_path(self):
+        data = plugin_pe() + b"D:\\a\\_work\\runtime\\source.cpp\0"
+        policy.validate_plugin_debug_paths(data)
+
+    def test_malformed_plugin_debug_directory_fails_closed(self):
+        mutations = ((0x3c, 0xffffff00), (0x98 + 96 + 6 * 8, 0x9000),
+                     (0x98 + 96 + 6 * 8 + 4, 27), (0x218, 0x4ff),
+                     (0x214, 0x1041), (0x210, 0x10000))
+        for offset, value in mutations:
+            with self.subTest(offset=offset):
+                data = bytearray(plugin_pe())
+                struct.pack_into("<I", data, offset, value)
+                with self.assertRaises(ValueError):
+                    policy.plugin_codeview_paths(bytes(data))
+
     def test_rejects_stale_or_arbitrary_readme(self):
         for data in (b"private local notes", self.files["README.txt"].replace(self.version.encode(), b"0.0.1")):
             with self.subTest(data=data), self.assertRaisesRegex(ValueError, "Stale.*README.txt"):
                 self.inspect(self.archive({"README.txt": data}))
+
+    def test_curated_public_legal_takes_precedence_over_private_review(self):
+        legal = self.root / 'site/public/LEGAL.md'
+        legal.parent.mkdir(parents=True)
+        legal.write_bytes(b'Public legal scope\n')
+        self.inspect(self.archive({'KotorCoop.LEGAL.txt': legal.read_bytes()}))
+        with self.assertRaisesRegex(ValueError, 'Stale.*KotorCoop.LEGAL.txt'):
+            self.inspect()
 
     def test_rejects_version_not_declared_by_checkout(self):
         with self.assertRaisesRegex(ValueError, "match VERSION"):

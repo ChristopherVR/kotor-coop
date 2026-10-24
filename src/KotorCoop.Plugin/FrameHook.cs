@@ -63,9 +63,8 @@ internal static unsafe partial class FrameHook
 
         nint current = *(nint*)SwapBuffersSlot;
 
-        // Validate that the slot still holds the genuine export before touching it. If some
-        // other layer (the Steam overlay, for instance) has already wrapped it, or the
-        // layout has shifted, refuse rather than corrupt the import.
+        // A renderer proxy may already own this import (Enhanced Menu's opengl32.dll does).
+        // Chain through that live target, but only if it belongs to executable image memory.
         nint gdi32 = GetModuleHandle("gdi32.dll");
         nint expected = gdi32 == 0 ? 0 : GetProcAddress(gdi32, "SwapBuffers");
 
@@ -75,11 +74,11 @@ internal static unsafe partial class FrameHook
             return false;
         }
 
-        if (current != expected)
+        if (current != expected && !IsChainableTarget(current))
         {
             diagnostic =
                 $"IAT slot 0x{SwapBuffersSlot:X} holds 0x{current:X} but gdi32!SwapBuffers is "
-                + $"0x{expected:X}; something else already hooked it. Refusing.";
+                + $"0x{expected:X}; target is not executable foreign image memory. Refusing.";
             return false;
         }
 
@@ -98,8 +97,28 @@ internal static unsafe partial class FrameHook
         VirtualProtect(SwapBuffersSlot, (nuint)sizeof(nint), oldProtect, out _);
         _installed = true;
 
-        diagnostic = $"hooked IAT 0x{SwapBuffersSlot:X} (real SwapBuffers 0x{current:X})";
+        diagnostic = current == expected
+            ? $"hooked IAT 0x{SwapBuffersSlot:X} (real SwapBuffers 0x{current:X})"
+            : $"chained IAT 0x{SwapBuffersSlot:X} through existing renderer 0x{current:X}";
         return true;
+    }
+
+    private static bool IsChainableTarget(nint target)
+    {
+        if (target == 0 || NativeMethods.VirtualQuery(target, out NativeMethods.MemoryBasicInformation info,
+                (nuint)sizeof(NativeMethods.MemoryBasicInformation)) == 0
+            || info.State != NativeMethods.MemCommit || info.Type != 0x1000000 /* MEM_IMAGE */
+            || (info.Protect & 0x100 /* PAGE_GUARD */) != 0
+            || (info.Protect & 0xF0) == 0)
+        {
+            return false;
+        }
+
+        nint owner = 0, self = 0;
+        const uint flags = NativeMethods.GetModuleHandleExFlagFromAddress | NativeMethods.GetModuleHandleExFlagUnchangedRefcount;
+        return NativeMethods.GetModuleHandleEx(flags, target, &owner)
+            && NativeMethods.GetModuleHandleEx(flags, (nint)(delegate* unmanaged[Stdcall]<nint, int>)&Detour, &self)
+            && owner != self;
     }
 
     public static void Uninstall()
@@ -109,12 +128,17 @@ internal static unsafe partial class FrameHook
             return;
         }
 
-        if (VirtualProtect(SwapBuffersSlot, (nuint)sizeof(nint), 0x04, out uint oldProtect))
+        // A later hook can chain through us. Do not remove its import when uninstalling ours.
+        if (*(nint*)SwapBuffersSlot == (nint)(delegate* unmanaged[Stdcall]<nint, int>)&Detour
+            && VirtualProtect(SwapBuffersSlot, (nuint)sizeof(nint), 0x04, out uint oldProtect))
         {
             *(nint*)SwapBuffersSlot = (nint)_original;
             VirtualProtect(SwapBuffersSlot, (nuint)sizeof(nint), oldProtect, out _);
         }
 
+        // A later renderer may still call our detour. Leave the forwarding target alive,
+        // but stop invoking plugin work after uninstall even when that chain remains.
+        _onFrame = null;
         _installed = false;
     }
 

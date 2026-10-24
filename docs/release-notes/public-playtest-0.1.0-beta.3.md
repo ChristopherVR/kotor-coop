@@ -14,6 +14,9 @@ Back up saves first. Use a separate test save rather than your only campaign cop
 - The original Cairn Sentinel boss design and synthesized nonverbal effects.
 - Corrected Steam startup-join handling and validation of invite destinations.
 - Complete packaged third-party notices and a checked package inventory.
+- GPLv3 source publication, build instructions and contribution workflow.
+- Container arbitration fixes for stale close messages and grant-response ordering;
+  final in-game retesting is in progress before the binary release.
 
 ## Evidence for the current candidate
 
@@ -65,6 +68,9 @@ remove passwords, addresses and personal paths. Do not upload game files or save
 ## Publication status
 
 These notes do not grant game or media rights or establish legal clearance. The
-remaining game/store, ownership and custom-license review is recorded in the private
-release-readiness record. Public distribution of a player binary has not been
-approved by these notes or by a clean antivirus scan.
+owner confirmed authority over the original project and selected GPLv3. Game/store
+terms and footage rights remain separate; no affirmative publisher permission is
+claimed. The release will provide exact corresponding source alongside its binary.
+The owner approved the narrow KOTOR linking permission; it accompanies GPLv3 and
+does not authorize distribution of the game or change third-party terms.
+These preparation notes and a clean antivirus scan do not establish legal clearance.

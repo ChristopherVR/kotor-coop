@@ -1,18 +1,23 @@
 # Private development and public distribution
 
 As of 2026-10-24, `ChristopherVR/kotor-coop-dev` is the private development
-repository and `ChristopherVR/kotor-coop` is a separate public information and
-download repository. The local development folder may still be named `kotor-coop`.
+repository and `ChristopherVR/kotor-coop` is the separate public source,
+contribution and download repository. The local development folder may still be named `kotor-coop`.
 Check `git remote -v` before pushing. Never mirror private refs to the public remote.
 
 ## Boundary
 
-The public repository has separate Git history. Approved player information and the
-website are exported by `tools/Prepare-PublicRepository.ps1` using the exact mappings in
+The public repository has separate Git history. Reviewed current source, tests,
+build inputs, contributor/player information and the website are exported by
+`tools/Prepare-PublicRepository.ps1` using the exact mappings in
 `tools/publication/public-export.json`. Canonical public writing lives in `site/public/`
 and `tools/publication/public/`; the original project license is also exported.
-No wildcard copying is permitted. Private research, development source, historical
-recordings, databases, build symbols and support bundles remain private.
+Schema 2 explicitly enables the open-source export mode. No wildcard copying is
+permitted. Private research, development history, historical recordings, optional
+address databases, build symbols and support bundles remain private. The owner
+selected GNU GPL version 3 only for original project code and documentation.
+The former custom source-available license is replaced for this snapshot; this
+does not revoke earlier grants or relicense third-party material.
 
 The rejected illustrative overview is not part of the approved export. Its five former
 public media paths are the only legacy paths the first managed export may explicitly
@@ -34,22 +39,37 @@ will create new runs and artifacts; these are not public distribution.
 
 ## Player build publication
 
-1. Finish the legal and gameplay gates in `LEGAL.md` and `RELEASE-READINESS.md`.
+1. Finish the concrete release blockers in `LEGAL.md` and `RELEASE-READINESS.md`.
    The original boss redesign has bounded two-instance live evidence; ordinary
    balance/victory and complete animations remain unverified. Optional Steam friend
-   delivery still needs a licensed library and two-account test. Repository separation
-   does not resolve underlying game/store rights or the custom license review.
-2. Update `VERSION` and write reviewed notes in `docs/release-notes/v<VERSION>.md`.
+   delivery still needs a licensed library and two-account test and is not a
+   verified first-beta feature. Disclose unavailable independent-PC/campaign tests.
+   Repository separation and an open-source license do not resolve game/store
+   rights. Record the owner's decision on the identified residual terms/IP risk.
+2. Update `VERSION` and write reviewed notes in `docs/release-notes/public-playtest-<VERSION>.md`.
    Notes must stand alone for public readers and must not link private evidence.
 3. Commit the reviewed source, build with warnings as errors, run non-soak tests
-   and the publication policy tests. No source changes may be pending at publication.
+   and the publication policy tests. Export and build the public source snapshot
+   to verify it contains the needed build inputs. No selected source changes may
+   be pending at publication. Rebuild after the container-arbitration and PDB-path
+   fixes; earlier candidate scans do not cover them. The still-uncommitted menu
+   resizing work is excluded until separately reviewed and committed.
 4. Run `pwsh tools/Publish-PublicRelease.ps1 -Directory artifacts/public-candidate-<unique>
-   -Version <VERSION> -NotesFile docs/release-notes/v<VERSION>.md -ReleaseReviewed`.
+   -Version <VERSION> -NotesFile docs/release-notes/public-playtest-<VERSION>.md -ReleaseReviewed`.
    Use a single PowerShell command line. This rebuilds the package and scans it
    again; it does not trust pre-existing editable scan reports.
 5. Inspect the resulting draft in the public repository. Publish through GitHub
    when approved, or use the script's explicit `-Publish` option for an already
    reviewed release. Existing releases are never overwritten.
+
+The GPL release guard downloads the public source archive at an immutable commit,
+requires its export provenance to identify the same private source commit used
+for the build, and checks every mapped file. It validates the actual embedded
+dependency inventory against the corresponding-source manifest and verifies
+upstream source availability. The release includes the exact public source
+archive and source instructions beside the binary. `SHA256SUMS.txt` covers these
+assets too; the antivirus report's scope remains the player ZIP and extracted
+files. A source archive is not described as antivirus-scanned by that report.
 
 The publication boundary requires an exact Windows ZIP inventory, current asset
 and notice bytes, and exact local build outputs. Symbols and Linux packages are
@@ -84,7 +104,15 @@ Sources: [Defender custom-scan behavior](https://learn.microsoft.com/en-us/defen
 [GitHub visibility consequences](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/managing-repository-settings/setting-repository-visibility),
 [VirusTotal sharing](https://docs.virustotal.com/docs/how-it-works).
 
-## Local verification — 24 October 2026
+## Historical local verification — 24 October 2026
+
+The records below describe earlier snapshots, not approval of the latest tree.
+The current trailer is the 57-second gameplay edit with licensed music. The
+overview mentioned below was rejected and removed from the public current tree.
+The `59e6e2b` live smoke later found a simultaneous-container-open race; its passing
+checks and failing scenario are in [the dated report](research/public-beta-smoke-2026-10-24.md).
+A basename-only native PDB locator, current source export and concurrent menu
+changes also require a fresh final build and scan.
 
 The original overview renders and decodes successfully at 1280×720, 24 fps, 64 seconds.
 The redesigned boss's seven generated assets reproduce byte-for-byte. Focused checks

@@ -37,7 +37,8 @@ public sealed class InteractionLockStore
     public const long DefaultLeaseMs = ProtocolConstants.PeerTimeoutMs;
 
     private readonly record struct Entry(
-        uint PeerId, string Module, string Tag, InteractionKind Kind, uint TargetId, long RefreshedAtMs);
+        uint PeerId, string Module, string Tag, InteractionKind Kind, uint TargetId, long RefreshedAtMs,
+        uint RequestSerial);
 
     /// <summary>Keyed by (module, discriminated object key) — the question this store answers
     /// is "who owns this object", not "what is this peer doing". See the class remarks for why
@@ -73,7 +74,12 @@ public sealed class InteractionLockStore
             if (!packet.Active)
             {
                 // ContainerUseRule.MayRelease: only the current fresh holder may release.
-                if (ContainerUseRule.MayRelease(current.PeerId, fresh, packet.PeerId))
+                // An older close can arrive after a new open reservation, including while
+                // its grant is still on the wire. Only the close for this reservation may
+                // release it. Unarbitrated/legacy claims retain their zero-serial behavior.
+                bool matchingAttempt = packet.Kind != InteractionKind.Container
+                    || current.RequestSerial == 0 || packet.RequestSerial == current.RequestSerial;
+                if (matchingAttempt && ContainerUseRule.MayRelease(current.PeerId, fresh, packet.PeerId))
                 {
                     _byObject.Remove(fullKey);
                 }
@@ -86,11 +92,18 @@ public sealed class InteractionLockStore
                 return false; // someone else got here first and is still here
             }
 
+            // Ordinary active levels have serial zero; they refresh rather than erase the
+            // reservation epoch. A fresh explicit request by the owner begins a new epoch.
+            uint epoch = packet.Kind == InteractionKind.Container ? packet.RequestSerial : 0;
+            if (fresh && epoch != 0 && current.RequestSerial != 0
+                && unchecked((int)(epoch - current.RequestSerial)) < 0)
+                return false;
+
             _byObject[fullKey] = fresh
-                ? current with { RefreshedAtMs = nowMs } // re-entrancy: refresh our own hold
+                ? current with { RefreshedAtMs = nowMs, RequestSerial = epoch != 0 ? epoch : current.RequestSerial }
                 : new Entry(
                     packet.PeerId, packet.Module ?? string.Empty, packet.Tag ?? string.Empty,
-                    packet.Kind, packet.TargetId, nowMs);
+                    packet.Kind, packet.TargetId, nowMs, epoch);
             return true;
         }
     }

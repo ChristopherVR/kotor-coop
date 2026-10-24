@@ -157,14 +157,12 @@ internal sealed unsafe partial class InteractionLockController(SharedBlockView b
     /// which only ever OPENS), so it could not have been the bottleneck the delay was measured
     /// against.
     ///
-    /// Cleared the moment a NEW hold starts (superseded, nothing stale left to carry) and on
-    /// <see cref="Invalidate"/> (a module change reassigns every id). Left set indefinitely
-    /// otherwise — republishing an already-released id is a no-op on the far side
-    /// (<c>ContainerUseRule.MayRelease</c> requires a FRESH current holder, and the entry is
-    /// already gone after the first successful release), so there is no "stale forever" hazard
-    /// to guard against with a one-shot flag.
+    /// Cleared when a new hold starts, when this same container's next deferred request
+    /// starts, and on <see cref="Invalidate"/>. Keeping the OLD close while a reopen waits
+    /// for its grant released the new reservation (live 2026-10-24). The session also tags
+    /// releases with their request epoch so an already-sent old UDP level is harmless.
     /// </summary>
-    private uint _lastClosedContainerId;
+    private readonly ContainerCloseRelease _containerCloseRelease = new();
     private uint _seenCloseSerial;
 
     private uint _seenBlockedCount;
@@ -201,7 +199,7 @@ internal sealed unsafe partial class InteractionLockController(SharedBlockView b
         _pendingFramesLeft = 0;
         _localContainerId = 0;
         _localContainerActive = false;
-        _lastClosedContainerId = 0;
+        _containerCloseRelease.Reset();
         _seenBlockedCount = 0;
         _containerNoticeUntilMs = 0;
         _containerNoticeLength = 0;
@@ -253,6 +251,10 @@ internal sealed unsafe partial class InteractionLockController(SharedBlockView b
             return;
         }
 
+        PollLocalContainerUse();
+        // A newly deferred reopen supersedes the previous close BEFORE publishing a
+        // level or exposing its new request serial to the helper.
+        PollContainerArbitration();
         PublishLocalClaim();
 
         // Drawn every frame, independent of ApplyPeerLocks's throttle — a notice that only
@@ -264,10 +266,6 @@ internal sealed unsafe partial class InteractionLockController(SharedBlockView b
         // ten-frame cadence would show the notice up to a third of a second late.
         PollContainerRefusals();
         DrawContainerNotice();
-
-        // Same reasoning: a deferred click's grant/deny has to be acted on within a couple of
-        // frames (docs/roadmap-seamless.md Tier 1 item 4), not on the ten-frame cadence below.
-        PollContainerArbitration();
 
         if (_countdown > 0)
         {
@@ -316,8 +314,6 @@ internal sealed unsafe partial class InteractionLockController(SharedBlockView b
             return;
         }
 
-        PollLocalContainerUse();
-
         if (_localContainerActive)
         {
             block.LocalInteractionKind = InteractionKindContainer;
@@ -326,7 +322,7 @@ internal sealed unsafe partial class InteractionLockController(SharedBlockView b
 
             // A fresh hold supersedes whatever this instance last released; nothing stale is
             // left to (harmlessly) keep naming.
-            _lastClosedContainerId = 0;
+            _containerCloseRelease.ClearRelease();
             return;
         }
 
@@ -341,9 +337,9 @@ internal sealed unsafe partial class InteractionLockController(SharedBlockView b
         // container-sync.md's dated section. Naming the id here is an OPTIMISATION on top of
         // the same lease, not a replacement for it: losing this packet costs exactly the 5s it
         // always cost, nothing more.
-        block.LocalInteractionKind = _lastClosedContainerId != 0 ? InteractionKindContainer : 0u;
+        block.LocalInteractionKind = _containerCloseRelease.TargetId != 0 ? InteractionKindContainer : 0u;
         block.LocalInteractionActive = false;
-        block.LocalInteractionTargetId = _lastClosedContainerId;
+        block.LocalInteractionTargetId = _containerCloseRelease.TargetId;
     }
 
     /// <summary>
@@ -370,7 +366,7 @@ internal sealed unsafe partial class InteractionLockController(SharedBlockView b
                 _pendingContainerId = 0;
             if (_localContainerActive && _localContainerId == closedId && serial == closeAttemptSerial)
             {
-                _lastClosedContainerId = closedId;
+                _containerCloseRelease.ObserveClose(closedId, closeAttemptSerial);
                 _localContainerActive = false;
                 _localContainerId = 0;
             }
@@ -412,7 +408,7 @@ internal sealed unsafe partial class InteractionLockController(SharedBlockView b
                 // The player closed their own panel, or the module changed under us. Remember
                 // WHICH one so the release itself can still be published — see
                 // _lastClosedContainerId's own remarks.
-                _lastClosedContainerId = _localContainerId;
+                _containerCloseRelease.ObserveClose(_localContainerId, serial);
                 _localContainerActive = false;
                 _localContainerId = 0;
             }

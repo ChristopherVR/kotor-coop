@@ -1,4 +1,4 @@
-# Export approved public docs/site from immutable Git blobs. Does not commit or push.
+# Export approved source/docs/site from immutable Git blobs. Does not commit or push.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$Destination,

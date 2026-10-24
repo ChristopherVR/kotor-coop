@@ -230,11 +230,13 @@ host's. Full design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ### License and game ownership
 
-Official releases are free for personal, noncommercial play with a legally acquired
-game. Contributions to this project are welcome; independent modified releases,
-rebranding and commercial reuse require written permission under [LICENSE](LICENSE).
-This is a restricted source-available project; GitHub's public-repository permissions
-still apply if the repository becomes public.
+Copyright (c) 2026 ChristopherVR and contributors. Original mod code, original
+generated mod assets and project documentation are licensed under GNU GPL version
+3 only with the [KOTOR 1 linking permission](KOTOR-LINKING-EXCEPTION.txt), without
+warranty. See [LICENSE](LICENSE) for the terms and
+[contribution guidance](docs/CONTRIBUTING.md). The public repository receives a
+reviewed source snapshot with independent history; the development history stays
+private. Each player needs a lawfully acquired, properly licensed game.
 
 This unofficial fan mod does not own the game or its assets and is not endorsed by
 its rights holders. We do not condone piracy. See [legal release gates](docs/LEGAL.md)

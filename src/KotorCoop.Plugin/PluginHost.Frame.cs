@@ -278,6 +278,8 @@ internal static unsafe partial class PluginHost
         // The native browser first: its IsOpen gate tells the others the main-menu object
         // is currently freed (a shown child panel reclaims the menu until close rebuilds it).
         _nativeBrowser?.OnFrame();
+        EnhancedMenuLayoutController.OnFrame();
+        EnhancedMenuViewportController.OnFrame();
         _connectMenu?.OnFrame();
         _browser?.OnFrame();
 
@@ -450,9 +452,12 @@ internal static unsafe partial class PluginHost
 
         try
         {
-            // Before absolutely everything else: whatever this frame is about to spend its time
-            // on, the delta since the LAST callback already happened and belongs to the frame
-            // that just finished, not to whatever runs next.
+            // Only the SwapBuffers path has a current render context; the menu fallback
+            // calls this with false and must not change GL state.
+            if (countFrameInterval) EnhancedMenuViewportController.OnRenderFrame();
+
+            // Record the interval before the remaining frame work: the delta since the last
+            // callback belongs to the frame that just finished, not to whatever runs next.
             if (countFrameInterval && _frameStatsEnabled)
             {
                 RecordFrameTime();

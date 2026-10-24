@@ -2,15 +2,17 @@
 
 ## Contribution permissions
 
-Read [LICENSE](../LICENSE). **Forks are welcome for contributing back:** fork the
-repository, make a development branch, and open a pull request against this official
-project. Development and testing for that purpose are permitted; independent releases
-and commercial reuse are restricted.
-Intentionally submitting work for inclusion makes the section 3 contribution grant
-while you retain ownership. Identify separate licenses and confirm your rights.
+Read [LICENSE](../LICENSE). Fork the public repository, make a development branch,
+and open a pull request. Original-code contributions are submitted under the
+GPL version 3 only with the [KOTOR 1 linking permission](../KOTOR-LINKING-EXCEPTION.txt).
+By intentionally submitting original work for inclusion, you expressly apply
+that permission to your contribution, unless different terms are explicitly
+identified and accepted.
+You retain ownership. Identify separate licenses and confirm your rights.
 Do not submit game executables, extracted game assets, keys, cracks or DRM bypasses.
-Earlier contributions need rights-holder authorization before relicensing.
-The [legal readiness gates](LEGAL.md) remain open.
+The owner confirmed independent ownership and authority over earlier original
+material on 24 October 2026. This does not cover game or third-party rights; see
+[the legal review](LEGAL.md).
 
 ## Prerequisites
 
@@ -151,7 +153,8 @@ The manual **Public release candidate** workflow runs build/tests, then freshly
 packages and scans the Windows ZIP and creates a draft in the public repository.
 It requires reviewed release notes and a target-scoped `PUBLIC_RELEASE_TOKEN` in
 its `public-release` environment. The local equivalent is
-`tools/Publish-PublicRelease.ps1`. Neither path publishes source, recordings,
+`tools/Publish-PublicRelease.ps1`. Source is exported separately through the
+explicit source-snapshot policy; neither release path publishes historical recordings,
 symbols or private Actions logs. `VERSION` is the numbered release version;
 private development snapshots may still have a commit suffix.
 

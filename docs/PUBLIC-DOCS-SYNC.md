@@ -1,7 +1,7 @@
-# Repeatable public documentation and site sync
+# Repeatable public source, documentation and site sync
 
 The private development repository is `ChristopherVR/kotor-coop-dev`; the public
-information/download repository is `ChristopherVR/kotor-coop`. Local folders are
+source/contribution/download repository is `ChristopherVR/kotor-coop`. Local folders are
 currently `D:\Development\kotor-coop` and `D:\Development\kotor-coop-public`.
 "Development branch" means the reviewed branch in the private checkout. It is currently
 `main`; this script does not invent a `dev` branch. Without `-SourceRef`, it resolves the
@@ -20,6 +20,10 @@ source commit. Current approved sources are:
 | `tools/publication/public/gitignore` | `.gitignore` |
 | `tools/publication/public/gitattributes` | `.gitattributes` (`* -text`, exact bytes) |
 | `LICENSE` | `LICENSE` |
+| Explicit `src/`, `tests/`, reviewed `profiles/`, `third-party/` and build-root entries | Same paths |
+| Explicit build, install, package and package-policy tools | Same paths |
+| `site/public/project-CONTRIBUTING.md` | `CONTRIBUTING.md` |
+| `site/public/development.md`, `CONFIG.md`, `LEGAL.md` | `docs/DEVELOPMENT.md`, `docs/CONFIG.md`, `docs/LEGAL.md` |
 | `site/public/index.html`, `style.css`, `favicon.svg` | `docs/` with the same filenames |
 | `site/public/install.html`, `play.html`, `limitations.html` | `docs/` with the same filenames |
 | The seven explicitly listed files in `site/public/media/` | `docs/media/`: trailer, poster, transcript, provenance, music credits/license and font license |
@@ -40,6 +44,14 @@ attribution, the applicable full license, font notices and exact final-media has
 when replacing a trailer. The exporter rejects Git LFS pointer text rather than
 publishing a pointer as a movie. It does not download remote content or infer any
 new approval from filenames.
+
+Schema 2 with `mode: open-source` enables the reviewed source roots. Schema 1's
+documentation-only boundary remains supported for older snapshots. Every source
+file has an explicit mapping, so new classes, project files and test fixtures must
+be added deliberately before publication. Build and test the exported tree, not
+only the private checkout. The private export orchestrator and its policy stay
+private; contributors edit the actual public source and docs rather than a second
+copy of canonical website files.
 
 ## Review, preview and apply
 
@@ -105,5 +117,5 @@ credential patterns cause refusal. Unmanaged files must be reviewed separately; 
 script never sweeps an arbitrary directory or recursively removes `.git`/history.
 The credential checks are deliberately limited and do not replace content review.
 
-This pipeline synchronizes approved documentation and site assets. Player binaries still
+This pipeline synchronizes approved source, documentation and site assets. Player binaries still
 use `Publish-PublicRelease.ps1` and its independent package/Defender/release-readiness gates.

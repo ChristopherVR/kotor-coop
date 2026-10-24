@@ -26,14 +26,13 @@
 # from a bug report back into file/line, and a publish only produces them alongside a fresh
 # build, not on demand later. See docs/research/proton.md for why the exe is self-contained.
 #
-# Does NOT touch a game install and does NOT run the game. CI runs this on every push and
-# attaches both files to the run; releases require explicit tested-tag promotion.
-# Tested v* tags require manual numbered promotion (.github/workflows/release.yml). The symbols zip is CI-artifact-only -
-# it is never attached to a GitHub release, only kept for maintainers to pull off a CI run.
+# Does NOT touch a game install and does NOT run the game. Public publication uses
+# Publish-PublicRelease.ps1 to rebuild, scan and verify the reviewed snapshot.
+# The symbols zip stays private and is never attached to a public player release.
 #
+#   pwsh tools\package.ps1                 # dist\kotor-coop-<git describe>-windows.zip + -linux.tar.gz
 #                                          # (+ -setup.exe when Inno Setup 6 is installed; see
 #                                          # tools\installer\kotor-coop-setup.iss)
-#   pwsh tools\package.ps1                 # dist\kotor-coop-<git describe>-windows.zip + -linux.tar.gz
 #   pwsh tools\package.ps1 -Version 1.2.3  # override the version
 #   pwsh tools\package.ps1 -WarnAsError    # what CI runs: any build warning fails the package
 param(
@@ -56,7 +55,7 @@ if (-not $Version) {
     # The VERSION file is the release number. The build is named exactly VERSION on the commit
     # that last changed that file, and "<VERSION>-<commits since>-g<sha>" after it, so the first
     # build of a bumped VERSION is the numbered candidate and later ones are clearly newer
-    # snapshots of it. Numbered publication requires explicit promotion of a tested tag.
+    # snapshots of it. Public publication requires a reviewed clean source snapshot.
     $versionFile = Join-Path $repo 'VERSION'
     if (Test-Path $versionFile) {
         $declared = (Get-Content $versionFile -Raw).Trim()
@@ -70,12 +69,29 @@ if (-not $Version) {
     }
 }
 $Version = $Version -replace '^v', ''
+if ($Version -notmatch '^[0-9A-Za-z][0-9A-Za-z.-]*$') { throw 'Version contains unsafe path characters.' }
+
+function Remove-CheckedBuildDirectory([string]$Path, [string]$Root) {
+    $rootPath = [IO.Path]::GetFullPath($Root).TrimEnd('\', '/')
+    $targetPath = [IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
+    if (-not $targetPath.StartsWith($rootPath + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing cleanup outside the owned build directory: $targetPath"
+    }
+    if (-not (Test-Path -LiteralPath $targetPath)) { return }
+    $cursor = Get-Item -LiteralPath $targetPath -Force
+    while ($cursor -and $cursor.FullName.Length -ge $rootPath.Length) {
+        if ($cursor.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Refusing cleanup through a filesystem link: $($cursor.FullName)" }
+        $cursor = $cursor.Parent
+    }
+    Remove-Item -LiteralPath $targetPath -Recurse -Force
+}
 
 "packaging kotor-coop $Version"
 
-$staging = Join-Path $env:TEMP "kotorcoop-package-$Version"
-if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
-New-Item -ItemType Directory -Path $staging | Out-Null
+$scratchRoot = [IO.Path]::GetFullPath($env:TEMP)
+$packageScratch = Join-Path $scratchRoot ('kotorcoop-package-' + [guid]::NewGuid().ToString('N'))
+$staging = Join-Path $packageScratch 'player'
+New-Item -ItemType Directory -Path $staging -Force | Out-Null
 
 # build.ps1 imports the MSVC x86 environment (vcvarsall.bat) into ITS OWN process env, which
 # includes a "Platform=x86" variable that MSBuild picks up from any dotnet invocation that
@@ -118,7 +134,7 @@ $agentPublishDir = Join-Path $agentProject 'bin\Release\net10.0-windows\win-x64\
 # Start from an empty publish directory: an incremental publish over a previous one skipped the
 # referenced projects' pdbs (seen 2026-09-03: the second run in a row shipped 2 KotorCoop.*
 # files instead of 6), and the package must not depend on what the last run left behind.
-if (Test-Path $agentPublishDir) { Remove-Item $agentPublishDir -Recurse -Force }
+Remove-CheckedBuildDirectory -Path $agentPublishDir -Root (Join-Path $agentProject 'bin')
 Push-Location $agentProject
 try {
     # Stamped into KotorCoop.Agent.exe's version resource (InformationalVersion / FileVersionInfo
@@ -155,8 +171,7 @@ if ($missingPdb) { throw "agent publish is missing the pdb(s) of: $($missingPdb 
 
 # --- symbols: the pdbs a player never needs, kept for turning a bug report's stack trace ---
 # back into file/line. Its own zip, never inside the player package or a GitHub release.
-$symbolsDir = Join-Path $env:TEMP "kotorcoop-symbols-$Version"
-if (Test-Path $symbolsDir) { Remove-Item $symbolsDir -Recurse -Force }
+$symbolsDir = Join-Path $packageScratch 'symbols'
 New-Item -ItemType Directory -Path $symbolsDir | Out-Null
 foreach ($pdb in $agentPdbs) { Copy-Item $pdb.FullName (Join-Path $symbolsDir $pdb.Name) }
 
@@ -183,12 +198,17 @@ Get-ChildItem (Join-Path $repo 'profiles\mods') -File -Filter '*.json' |
 
 # --- installer wrapper + README ------------------------------------------------------------
 Copy-Item (Join-Path $repo 'LICENSE') (Join-Path $staging 'KotorCoop.LICENSE.txt')
+Copy-Item (Join-Path $repo 'KOTOR-LINKING-EXCEPTION.txt') (Join-Path $staging 'KotorCoop.KOTOR-LINKING-EXCEPTION.txt')
 Copy-Item (Join-Path $repo 'THIRD-PARTY-NOTICES.md') (Join-Path $staging 'KotorCoop.THIRD-PARTY-INVENTORY.md')
 & (Join-Path $PSScriptRoot 'Stage-ThirdPartyNotices.ps1') `
     -AgentDepsPath (Join-Path $agentPublishDir '..\KotorCoop.Agent.deps.json') `
     -PluginAssetsPath (Join-Path $repo 'src\KotorCoop.Plugin\obj\project.assets.json') `
     -Destination (Join-Path $staging 'KotorCoop.THIRD-PARTY-NOTICES.txt')
-Copy-Item (Join-Path $repo 'docs\LEGAL.md') (Join-Path $staging 'KotorCoop.LEGAL.txt')
+# The private checkout keeps a separate maintainer risk review in docs/LEGAL.md.
+# The public source tree exposes the curated legal text directly at that path.
+$legalSource = Join-Path $repo 'site\public\LEGAL.md'
+if (-not (Test-Path -LiteralPath $legalSource -PathType Leaf)) { $legalSource = Join-Path $repo 'docs\LEGAL.md' }
+Copy-Item -LiteralPath $legalSource -Destination (Join-Path $staging 'KotorCoop.LEGAL.txt')
 Copy-Item (Join-Path $PSScriptRoot 'install.ps1') (Join-Path $staging 'install.ps1')
 Copy-Item (Join-Path $PSScriptRoot 'KotorCoop.CollectLogs.cmd') (Join-Path $staging 'KotorCoop.CollectLogs.cmd')
 # Settings migration runs in the agent; no separate PowerShell drift table is required.
@@ -205,26 +225,6 @@ if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
 Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $zipPath
 "packaged -> $zipPath ($([math]::Round((Get-Item $zipPath).Length / 1KB)) KB)"
 
-# --- symbols zip: CI-artifact-only, never attached to a release -----------------------------
-$symbolsZipPath = Join-Path $OutDir "kotor-coop-$Version-symbols.zip"
-if (Test-Path $symbolsZipPath) { Remove-Item $symbolsZipPath -Force }
-Compress-Archive -Path (Join-Path $symbolsDir '*') -DestinationPath $symbolsZipPath
-"packaged -> $symbolsZipPath ($([math]::Round((Get-Item $symbolsZipPath).Length / 1KB)) KB)"
-
-# --- Linux: tar.gz with install.sh executable ------------------------------------------------
-# Written through System.Formats.Tar rather than tar.exe: Windows' bsdtar records every file
-# as 0666, so a `tar xzf` on Linux would leave install.sh without its exec bit. install.sh is
-# also normalised to LF here (the repo has *.sh eol=lf in .gitattributes; this is the belt to
-# that brace, an autocrlf checkout must not ship a script bash cannot parse).
-Remove-Item (Join-Path $staging 'install.ps1')
-$installSh = (Get-Content (Join-Path $PSScriptRoot 'install.sh') -Raw) -replace "`r`n", "`n"
-[System.IO.File]::WriteAllText((Join-Path $staging 'install.sh'), $installSh, [System.Text.UTF8Encoding]::new($false))
-
-$tarPath = Join-Path $OutDir "kotor-coop-$Version-linux.tar.gz"
-if (Test-Path $tarPath) { Remove-Item $tarPath -Force }
-$tarRoot = "kotor-coop-$Version"
-$fileStream = [System.IO.File]::Create($tarPath)
-try {
 # --- Windows: graphical setup.exe over the same staged image (tools\installer) ---------------
 # A front end for `KotorCoop.Agent.exe install`: folder picker + options page. Needs Inno
 # Setup 6's ISCC.exe; without it the zip above is still the complete package.
@@ -246,6 +246,26 @@ else {
     Write-Warning 'Inno Setup 6 not found, so no setup.exe was built (winget install JRSoftware.InnoSetup).'
 }
 
+# --- symbols zip: CI-artifact-only, never attached to a release -----------------------------
+$symbolsZipPath = Join-Path $OutDir "kotor-coop-$Version-symbols.zip"
+if (Test-Path $symbolsZipPath) { Remove-Item $symbolsZipPath -Force }
+Compress-Archive -Path (Join-Path $symbolsDir '*') -DestinationPath $symbolsZipPath
+"packaged -> $symbolsZipPath ($([math]::Round((Get-Item $symbolsZipPath).Length / 1KB)) KB)"
+
+# --- Linux: tar.gz with install.sh executable ------------------------------------------------
+# Written through System.Formats.Tar rather than tar.exe: Windows' bsdtar records every file
+# as 0666, so a `tar xzf` on Linux would leave install.sh without its exec bit. install.sh is
+# also normalised to LF here (the repo has *.sh eol=lf in .gitattributes; this is the belt to
+# that brace, an autocrlf checkout must not ship a script bash cannot parse).
+Remove-Item (Join-Path $staging 'install.ps1')
+$installSh = (Get-Content (Join-Path $PSScriptRoot 'install.sh') -Raw) -replace "`r`n", "`n"
+[System.IO.File]::WriteAllText((Join-Path $staging 'install.sh'), $installSh, [System.Text.UTF8Encoding]::new($false))
+
+$tarPath = Join-Path $OutDir "kotor-coop-$Version-linux.tar.gz"
+if (Test-Path $tarPath) { Remove-Item $tarPath -Force }
+$tarRoot = "kotor-coop-$Version"
+$fileStream = [System.IO.File]::Create($tarPath)
+try {
     $gzip = [System.IO.Compression.GZipStream]::new($fileStream, [System.IO.Compression.CompressionLevel]::Optimal)
     try {
         $tar = [System.Formats.Tar.TarWriter]::new($gzip, [System.Formats.Tar.TarEntryFormat]::Pax, $false)
@@ -257,7 +277,7 @@ else {
             $dir.Mode = $rwx
             $tar.WriteEntry($dir)
             # GetRelativePath, not a Substring on $staging: $env:TEMP is the 8.3 short form on
-            # some machines (C:\Users\CHRIST~1\...) while FullName is always the long one.
+            # some machines via an 8.3 path alias, while FullName is always the long one.
             $stagingFull = (Get-Item $staging).FullName
             foreach ($item in Get-ChildItem $staging -Recurse | Sort-Object FullName) {
                 $rel = [System.IO.Path]::GetRelativePath($stagingFull, $item.FullName).Replace('\', '/')
@@ -283,7 +303,6 @@ else {
     finally { $gzip.Dispose() }
 }
 finally { $fileStream.Dispose() }
-Remove-Item $staging -Recurse -Force
-Remove-Item $symbolsDir -Recurse -Force
+Remove-CheckedBuildDirectory -Path $packageScratch -Root $scratchRoot
 
 "packaged -> $tarPath ($([math]::Round((Get-Item $tarPath).Length / 1KB)) KB)"

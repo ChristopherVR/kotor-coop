@@ -1,8 +1,8 @@
 # Third-party material
 
 The project license covers only authorized original material. Third-party
-software, fonts and game content retain their own rights and licenses; project
-commercial/derivative restrictions do not replace upstream permissions.
+software, fonts and game content retain their own rights and licenses. The
+project license does not replace upstream permissions or grant game rights.
 
 ## KotOR Patch Manager address database
 
@@ -38,8 +38,8 @@ have a material hash and notice-source mapping, with full Microsoft/VS Code,
 Atom, One Dark/Light conversion and Dracula notices included.
 See [source resolutions](third-party/embedded-resource-provenance.json) and the original
 [grammar provenance](third-party/grammar-origins.json). This addresses notice collection;
-the game's rights, contributor authorization and custom-license legal review in
-[LEGAL.md](docs/LEGAL.md) remain separate gates.
+the game's rights and distribution scope discussed in
+[LEGAL.md](docs/LEGAL.md) remain separate questions.
 
 ## Runtime audit refresh (2026-10-24)
 
@@ -84,6 +84,10 @@ vulnerable packages on 2026-10-03. It does not cover undisclosed vulnerabilities
 game hooks, native implementation defects or fulfillment of notice obligations.
 Verify the final self-contained runtime and embedded materials separately.
 
-DejaVu fonts carry their [included license](media/trailer/fonts/LICENSE.txt).
-Game music, voices, logo and imagery are not licensed by the project; see
-[trailer provenance](media/trailer/README.md) and the legal release gate.
+DejaVu fonts carry their [included license](https://christophervr.github.io/kotor-coop/media/DejaVu-LICENSE.txt).
+The current trailer uses Kevin MacLeod's “Heroic Age” under CC BY 4.0; see
+[music credits and changes](https://christophervr.github.io/kotor-coop/media/music-credits.txt)
+and [trailer provenance](https://christophervr.github.io/kotor-coop/media/provenance.json).
+That license does not cover depicted game imagery or dialogue, which are not
+licensed by the project. Legacy extracted soundtrack and logo files are excluded
+from the public source snapshot and player packages.
