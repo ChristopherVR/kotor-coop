@@ -5,6 +5,7 @@ param(
     [ValidatePattern('^kcoop[0-9]{1,2}$')][string]$MutexName = 'kcoop81',
     [ValidatePattern('^KotorCoopBackground[A-Za-z0-9_-]*$')][string]$DesktopName = 'KotorCoopBackground20261024',
     [string]$SteamConnect = '',
+    [ValidateSet('raw','+connect')][string]$ConnectSyntax = 'raw',
     [switch]$Steam,
     [string]$StatePath = '',
     [switch]$Stop,
@@ -92,7 +93,7 @@ $entry = [BitConverter]::ToUInt32($bytes,$pe + 40)
 if ($Steam) {
     # Exact shipped SteamStub signature, read from disk only. No unwrap or memory patch.
     if ($entry -ne 0x46D2ED -or $bytes.Length -lt 0x3DB2ED -or
-        [BitConverter]::ToUInt32($bytes,0x3DB2E9) -ne 0xC0DEC0DE) { throw 'Expected the recognized retail SteamStub wrapper.' }
+        [BitConverter]::ToUInt32($bytes,0x3DB2E9) -ne [Convert]::ToUInt32('C0DEC0DE',16)) { throw 'Expected the recognized retail SteamStub wrapper.' }
     if (!(Get-Process -Name steam -ErrorAction SilentlyContinue)) { throw 'Steam must already be running; this harness never starts its UI.' }
 } elseif ($entry -ne 0x2FB38D) { throw 'Expected DRM-free KOTOR 1.0.3; use explicit -Steam only for the recognized retail wrapper.' }
 $ini = [IO.File]::ReadAllText((Join-Path $game 'swkotor.ini'))
@@ -106,6 +107,7 @@ if (!$Worker) {
     New-Item -ItemType Directory -Path (Split-Path $StatePath) -Force | Out-Null
     $workerArgs = @('-NoProfile','-File',$PSCommandPath,'-Worker','-GameDirectory',$game,'-MutexName',$MutexName,'-DesktopName',$DesktopName,'-StatePath',$StatePath)
     if ($SteamConnect) { $workerArgs += @('-SteamConnect',$SteamConnect) }
+    if ($ConnectSyntax -ne 'raw') { $workerArgs += @('-ConnectSyntax',$ConnectSyntax) }
     if ($Steam) { $workerArgs += '-Steam' }
     # All path arguments are quoted, with no shell interpolation/evaluation.
     $workerArgs = @($workerArgs | ForEach-Object { if ($_ -match '"') { throw 'Quotes are not supported in rig paths.' }; '"' + $_ + '"' })
@@ -151,9 +153,9 @@ public static class CoopBackgroundDesktop {
     IntPtr desk=CreateDesktopW(name,IntPtr.Zero,IntPtr.Zero,0,0xC7,IntPtr.Zero);
     Check(desk!=IntPtr.Zero,"CreateDesktop"); return desk;
   }
-  public static Process Launch(string exe,string cwd,string desktop,string mutex,string connect,bool renameMutex) {
+  public static Process Launch(string exe,string cwd,string desktop,string mutex,string connect,string syntax,bool renameMutex) {
     var si=new SI { cb=Marshal.SizeOf<SI>(),desktop="WinSta0\\"+desktop,flags=1,show=0 };
-    var cmd=new StringBuilder("\""+exe+"\""+(connect.Length==0?"":" \""+connect+"\"")); PI pi;
+    var cmd=new StringBuilder("\""+exe+"\""+(connect.Length==0?"":" "+(syntax=="+connect"?"+connect ":"")+"\""+connect+"\"")); PI pi;
     Check(CreateProcessW(exe,cmd,IntPtr.Zero,IntPtr.Zero,false,4|0x08000000,IntPtr.Zero,cwd,ref si,out pi),"CreateProcess suspended");
     bool resumed=false;
     try {
@@ -167,7 +169,9 @@ public static class CoopBackgroundDesktop {
       finally { uint ignored; VirtualProtectEx(pi.process,address,(UIntPtr)8,old,out ignored); }
       }
       Check(ResumeThread(pi.thread)!=uint.MaxValue,"resume game"); resumed=true;
-      return Process.GetProcessById(pi.pid);
+      var owned=Process.GetProcessById(pi.pid);
+      _=owned.Handle; // Retain a query handle so the exit code remains available after exit.
+      return owned;
     } finally { if(!resumed) TerminateProcess(pi.process,1); CloseHandle(pi.thread); CloseHandle(pi.process); }
   }
 }
@@ -179,12 +183,14 @@ try {
     $effectiveMutex = if ($Steam) { 'swkotor' } else { $MutexName }
     if ([Threading.Mutex]::TryOpenExisting($effectiveMutex,[ref]$mutexProbe)) { $mutexProbe.Dispose(); throw 'Game mutex already exists; refusing a conflicting launch.' }
     $desktop = [CoopBackgroundDesktop]::Open($DesktopName)
-    $ownedGame = [CoopBackgroundDesktop]::Launch($exe,$game,$DesktopName,$MutexName,$SteamConnect,(!$Steam))
+    $ownedGame = [CoopBackgroundDesktop]::Launch($exe,$game,$DesktopName,$MutexName,$SteamConnect,$ConnectSyntax,(!$Steam))
     $state = [ordered]@{Status='Running';Id=$ownedGame.Id;StartTicks=$ownedGame.StartTime.ToUniversalTime().Ticks;Path=$exe;Desktop=$DesktopName;WorkerId=$PID;WorkerStartTicks=(Get-Process -Id $PID).StartTime.ToUniversalTime().Ticks;StatePath=$StatePath;HasStartupInvite=[bool]$SteamConnect;RetailSteam=[bool]$Steam}
     $state | ConvertTo-Json | Set-Content -LiteralPath ($StatePath + '.pending')
     Move-Item -LiteralPath ($StatePath + '.pending') -Destination $StatePath
     $ownedGame.WaitForExit()
     $state.Status = 'Exited'
+    $state.ExitCode = $ownedGame.ExitCode
+    $state.ExitedUtc = [DateTime]::UtcNow.ToString('o')
     $state | ConvertTo-Json | Set-Content -LiteralPath $StatePath
 } catch {
     # A failure between native launch and state publication must not leave an untracked game.

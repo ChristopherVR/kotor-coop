@@ -1035,15 +1035,82 @@ was stable in `END_M01AA`, HP 6/6, one remote peer and one phantom; protocol 102
 reported 5,997 frames. This verifies game-argument forwarding, same-PC transport
 and save-mode world entry together. It does **not** verify Steam friend delivery.
 The real helper process received `--steam-join` from the plugin in this test.
-A separate manually invoked standalone helper CLI session was not rerun; its
-option parsing and dispatcher behavior are covered by the focused tests.
+The separate standalone helper CLI was subsequently exercised against the actual
+Steam executable as recorded in section 21.
 
 A separate Steam clone was prepared from the installed game's resources, using
 the existing stock `dialog.tlk.bak` (identical to the working rig's stock table),
 fresh candidate mod assets and the corrected helper. Six retail root binaries
 and resources, including the wrapped `swkotor.exe`, matched their installed-source
 SHA-256 hashes. The retail executable retained entry RVA `0x0046D2ED` and the
-`0xC0DEC0DE` wrapper marker. Installer checks passed. This clone has not yet been
-launched: a separate concurrent test owns the stock `swkotor` mutex. The harness
-refuses that conflict; the other test was left running and no wrapped-executable
-mutex bypass was attempted. Genuine Steam-game startup therefore remains pending.
+`0xC0DEC0DE` wrapper marker. Installer checks passed. Initially a concurrent test
+owned the stock `swkotor` mutex; the harness refused that conflict. After that
+other test exited, the additional checks below became possible. No wrapped-executable
+mutex bypass was attempted.
+
+## 21. Exact-candidate Steam startup matrix (2026-10-24)
+
+The disposable Steam clone received the verified beta.3 package built from source
+`59e6e2b`. Its plain plugin SHA-256 was
+`090FC46086F8E08E8770F6A4C3C8BA26E6141E434FF701B50121A5D4D34EFEDD`, and its
+helper SHA-256 was `9CBD0AF5A5E7CEDDE35F837F8C935353F6AF880DC93CCACDE08F05C526A9E7F2`.
+The original retail executable stayed byte-identical to the installed Steam copy.
+All trials used the same non-input desktop, windowed configuration and already-running
+Steam client. The controlled matrix also used `steam_appid.txt` containing `32370`
+in the disposable clone, following Valve's [direct-launch identity guidance](https://partner.steamgames.com/doc/sdk/api).
+No DLL was borrowed and no installed game, client configuration or registry setting changed.
+
+| Layout | No game argument | Raw `kc1/127.0.0.1:27150` game argument |
+| --- | --- | --- |
+| Stock system DirectInput, mod DLL removed | Process remained alive/responding (PID 10260) | Access violation before mod startup (PID 49356) |
+| Candidate plain NativeAOT plugin | Main menu and hidden helper started (PID 47016) | Same access violation (PID 40676) |
+| Candidate native chain loader | Main menu and hidden helper started (PID 3948) | Same access violation (PID 20972) |
+
+Stock without the mod also failed with `+connect kc1/127.0.0.1:27150` (PID 39720),
+exit code `0xC0000005`. Windows Application event 1000 consistently recorded fault
+RVA `0x0046D82F`, inside the retail `.bind` section. The machine's existing full
+page heap (`GlobalFlag 0x02000000`, `PageHeapFlags 3`) and `verifier.dll` were present
+in both successful and failed trials; their causal role is unproven.
+The harness quotes the token as one Windows command-line argument. These are
+direct clone launches, not captures of a real Steam-client-generated command line.
+
+The initial comparison mixed argument-bearing and argument-free launches and therefore
+did not isolate the install layout. The completed matrix corrected that interpretation.
+A proposed automatic Steam chain-install change was fully reverted; neither changing
+the wrapper nor changing machine diagnostics was necessary or attempted. Normal Steam
+game startup with this candidate is verified. Retail-game argument startup remains
+unresolved on this rig, including without the mod, and is not certified by the GOG
+argument-forwarding result.
+
+### Actual Steam game plus standalone helper join
+
+The exact candidate's plain layout was restored. The wrapped Steam game started
+with no game arguments, with only this disposable clone's `auto_start_agent=0`.
+The helper was then launched hidden with
+`run --pid <owned Steam PID> --kotor --steam-join kc1/127.0.0.1:27150`.
+An initially empty save folder correctly reached the new-character flow after
+connecting. For the save-mode check, a copy of the existing local baseline save
+was staged before a fresh launch; no manual save load was issued.
+
+At 14:10 local time, Steam game PID 36100 and helper PID 25652 connected as peer 3
+to the two running GOG peers. The helper loaded through the plugin, then followed
+the host to `danm13`. Protocol 102 showed travel serial/applied 1, status 0, two
+remotes and two phantoms. Logs settled at `memory ok`, HP 6/6, malformed packets 0.
+The front-buffer image `kotorcoop-shots/steamproof.png` visibly showed Bastila's
+conversation and the connected co-op overlay on the non-input desktop.
+
+This proves actual Steam-to-GOG local transport, the real helper CLI invite path,
+automatic save loading and host-follow world entry. The differing save/area fixture
+triggered `W_GIT` and `W_SAVE`, correctly disabling enemy, door, item and party
+synchronization; this is not evidence of full shared-world equivalence. It also
+does not establish retail-game argument startup, Steam friend invitations or
+cross-network delivery. No native Steam API success was possible without the
+optional library. Evidence remains in the disposable clone's separate
+`steam-cli-helper.*.log`, `steam-cli-baseline.*.log` and screenshot files.
+
+After closing the joined Steam pair, an additional no-argument trial without the
+temporary `steam_appid.txt` stayed alive but did not produce fresh plugin startup
+logs before it was closed. That direct-clone configuration is not verified as a
+successful game startup. The file was restored for reproducibility; this does not
+test normal Steam-client launch identity. All owned Steam test games and helpers
+were then closed. The existing GOG capture pair was left for the rig owner to close.
