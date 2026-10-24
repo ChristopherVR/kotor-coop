@@ -91,11 +91,12 @@ public sealed partial class CoopCommandDispatcher
 
         Reply($"steam: joining {host}:{port} from a friend's invite");
 
-        DispatchFromGame(new CoopCommand(
-            CoopCommandKind.Connect,
-            Address: host.Contains(':') ? $"[{host}]:{port}" : $"{host}:{port}",
-            Password: password.Length > 0 ? password : null));
+        JoinFromSteam(host.Contains(':') ? $"[{host}]:{port}" : $"{host}:{port}", password);
     }
+
+    /// <summary>Both startup invites and live callbacks arm the same one-shot world entry.</summary>
+    public void JoinFromSteam(string address, string password) => DispatchFromGame(
+        new CoopCommand(CoopCommandKind.Connect, Address: address, Password: password));
 
     /// <summary>
     /// <c>steamstatus</c>: the one place a player can see whether the whole feature is actually

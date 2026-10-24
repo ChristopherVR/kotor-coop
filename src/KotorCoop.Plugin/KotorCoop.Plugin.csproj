@@ -57,6 +57,8 @@
     coverage lives with KotorCoop.Protocol; the code compiles into both.
   -->
   <ItemGroup>
+    <Compile Include="..\KotorCoop.Session\SteamLaunchRule.cs" Link="Shared\SteamLaunchRule.cs" />
+    <Compile Include="..\KotorCoop.Session\SteamConnectStringRule.cs" Link="Shared\SteamConnectStringRule.cs" />
     <Compile Include="..\KotorCoop.Protocol\ModSupportProfile.cs" Link="Shared\ModSupportProfile.cs" />
     <Compile Include="..\KotorCoop.Protocol\DialogueFollowClock.cs" Link="Shared\DialogueFollowClock.cs" />
     <Compile Include="..\KotorCoop.Protocol\DialogueFollowMachine.cs" Link="Shared\DialogueFollowMachine.cs" />
