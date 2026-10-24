@@ -77,6 +77,9 @@ git -C D:/Development/kotor-coop-public push origin main
 Do not push or mirror any private branch/ref to the public remote. A public commit's
 history is independent; `.publication-manifest.json` records the corresponding private
 source SHA (not a private source URL or local path), policy hash and output hashes.
+The inventory records only the resolved commit, not the spelling of `-SourceRef`, so
+`main` and its equivalent SHA produce identical provenance. The CLI plan still shows
+the requested ref for convenience.
 Source commit provenance identifies the bytes; it is not legal or malware clearance.
 
 ## Check for drift

@@ -155,7 +155,7 @@ def plan(source, destination, source_ref=None, adopt_existing=False):
     if contents.get('.gitattributes') != b'* -text\n':
         raise PolicyError('Public .gitattributes must be exactly * -text with an LF newline')
     validate_content(contents)
-    inventory = {'schema': 1, 'source_commit': commit, 'source_ref': source_ref,
+    inventory = {'schema': 1, 'source_commit': commit,
                  'policy_sha256': digest(policy_bytes), 'files': sorted(file_rows, key=lambda x:x['target'])}
     contents[INVENTORY] = (json.dumps(inventory, indent=2, ensure_ascii=True) + '\n').encode()
     prior = {}
