@@ -213,4 +213,58 @@ public class ServerDiscoveryTests
             after.Single(s => s.Name == "Alpha").Address);
     }
 
+    private static (IPAddress, IPAddress) Adapter(string address, string mask) =>
+        (IPAddress.Parse(address), IPAddress.Parse(mask));
+
+    [Fact]
+    public void EveryAdapterGetsItsOwnDirectedBroadcast()
+    {
+        // The Hamachi case: a home LAN and a 25.0.0.0/8 virtual LAN side by side. Windows sends
+        // 255.255.255.255 out of only one of them, so each also gets its subnet's broadcast.
+        IReadOnlyList<IPAddress> targets = ServerDiscovery.BroadcastTargets(
+        [
+            Adapter("192.168.1.20", "255.255.255.0"),
+            Adapter("25.61.12.7", "255.0.0.0"),
+            Adapter("10.147.17.4", "255.255.240.0"),
+        ]);
+
+        Assert.Equal(
+            ["255.255.255.255", "192.168.1.255", "25.255.255.255", "10.147.31.255"],
+            targets.Select(t => t.ToString()));
+    }
+
+    [Fact]
+    public void TheLimitedBroadcastAlwaysStays()
+    {
+        // No adapters (an unreadable list under Wine) must behave exactly as before.
+        Assert.Equal([IPAddress.Broadcast], ServerDiscovery.BroadcastTargets([]));
+    }
+
+    [Fact]
+    public void AdaptersWithNoPeersAreSkipped()
+    {
+        IReadOnlyList<IPAddress> targets = ServerDiscovery.BroadcastTargets(
+        [
+            Adapter("127.0.0.1", "255.0.0.0"),        // loopback
+            Adapter("169.254.3.9", "255.255.0.0"),    // link-local (no DHCP answer)
+            Adapter("100.64.0.5", "255.255.255.255"), // /32 tunnel endpoint
+            Adapter("100.64.0.6", "255.255.255.254"), // /31 point-to-point
+            Adapter("192.168.1.20", "0.0.0.0"),       // nonsense mask
+            (IPAddress.IPv6Loopback, IPAddress.Parse("255.255.255.0")),
+        ]);
+
+        Assert.Equal([IPAddress.Broadcast], targets);
+    }
+
+    [Fact]
+    public void TwoAddressesOnOneSubnetSendOnce()
+    {
+        IReadOnlyList<IPAddress> targets = ServerDiscovery.BroadcastTargets(
+        [
+            Adapter("192.168.1.20", "255.255.255.0"),
+            Adapter("192.168.1.21", "255.255.255.0"),
+        ]);
+
+        Assert.Equal(2, targets.Count);
+    }
 }
