@@ -1,6 +1,6 @@
 # Beta readiness and remaining gates
 
-## Publication split â€” 24 October 2026
+## Publication split — 24 October 2026
 
 Private development moved to `ChristopherVR/kotor-coop-dev`; the new public
 `ChristopherVR/kotor-coop` contains curated information and an original illustrative

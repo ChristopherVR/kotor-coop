@@ -163,22 +163,22 @@ That package is a local candidate; check your installed build when comparing res
 If antivirus removed `dinput8.dll`, follow the detection-reporting guidance above.
 Investigate the detection before attempting another installation.
 
-`menu_button` defaults ON in the code (both readers â€” see CONFIG.md) and the shipped
+`menu_button` defaults ON in the code (both readers — see CONFIG.md) and the shipped
 `coop.ini` sets `menu_button = 1`. A `coop.ini` from before 2026-08-27 shipped with
-`menu_button = 0` and a stale "awaiting live verification" comment â€” the installer never
+`menu_button = 0` and a stale "awaiting live verification" comment — the installer never
 overwrites an existing `coop.ini`, so an upgraded install keeps the old value. Set
 `menu_button = 1`. If it is set and the button is still missing, the plugin never loaded:
 see the next two sections.
 
 `tools/install.ps1` now catches this automatically: every plain install run (not just
 `-Uninstall`) diffs the existing `coop.ini` against the table of keys whose shipped default
-changed (`menu_button`, `effect_sync`, `trigger_relay` â€” the same three CONFIG.md's footnotes
-4/5/7 describe) and warns by name when the old value is still there â€” a dry run by default, so
+changed (`menu_button`, `effect_sync`, `trigger_relay` — the same three CONFIG.md's footnotes
+4/5/7 describe) and warns by name when the old value is still there — a dry run by default, so
 nothing is written unless you pass `-UpdateDefaults`, which rewrites just those lines in place
 (order, comments and every other line untouched). See `tools/CoopIniDefaults.ps1` and
 `tools/README.md`'s "Manual verification" section for the decision logic itself.
 
-## Nothing happens at all â€” no `kotorcoop-plugin.log` beside the game
+## Nothing happens at all — no `kotorcoop-plugin.log` beside the game
 
 The plugin did not load. `dinput8.dll` must sit in the same directory as `swkotor.exe`
 (not a subfolder), and must be the x86 build (`build.ps1` checks this). In chain mode, read
@@ -193,15 +193,15 @@ selects the same mode. Avoid `--force`, which overwrites the other DLL. In chain
 `dinput8.dll`, the plugin is installed as `KotorCoop.Plugin.dll`, the other mod is renamed
 `dinput8.prev.dll`, and `dinput8.chain` lists all of them in load order (edit it by hand to
 add more; `--load a.dll` does the same). Extracting the zip straight over the other mod
-overwrites it â€” the package README says how to recover by hand. The game's DirectInput calls go to the first proxy in the list (ours), which
-forwards to the next entry, and so on to the system DLL â€” so a proxy that always loads the
+overwrites it — the package README says how to recover by hand. The game's DirectInput calls go to the first proxy in the list (ours), which
+forwards to the next entry, and so on to the system DLL — so a proxy that always loads the
 system DLL itself must be the last proxy. `coop.ini`'s `dinput8_next = <file>` forces the
 plugin's next hop regardless of the list. `-Uninstall` puts the other mod back under its
 original name.
 
 ## Second KOTOR instance won't launch, or refuses to run alongside the first
 
-The retail single-instance guard is a named mutex, not real DRM â€” but it only yields to
+The retail single-instance guard is a named mutex, not real DRM — but it only yields to
 `agent launch --instance 2` (which renames the mutex in memory) on the **DRM-free GOG build**.
 The Steam copy goes through the Steam client, which allows one copy of an app, and it refuses
 regardless: the rename succeeds (`launched pid NNNNN with mutex name 'kcoop2'`) and the process
@@ -210,8 +210,8 @@ still vanishes a moment later, usually with
 
 **Two instances on one PC with only one DRM-free copy: run the Steam copy FIRST** (it takes the
 plain `swkotor` mutex), then `agent launch --instance 2` on the DRM-free copy. Host and client
-roles come from the agents' `--host`/`--join` arguments, not from launch order. Verified live â€”
-docs/research/steam-support.md Â§18.5.
+roles come from the agents' `--host`/`--join` arguments, not from launch order. Verified live —
+docs/research/steam-support.md §18.5.
 
 (The old claim that "its packed binary means none of this project's engine addresses apply" was
 wrong and is retracted: the wrapper decrypts `.text` in place before the game starts, so every
@@ -220,14 +220,14 @@ address is the same at runtime.)
 ## Steam: nothing works / "the exe differs" when playing with a GOG friend
 
 Fixed. The compatibility handshake used to hash the `swkotor.exe` **file**, and the Steam copy
-is the same code under Valve's SteamStub wrapper, which encrypts `.text` on disk â€” so two
+is the same code under Valve's SteamStub wrapper, which encrypts `.text` on disk — so two
 installs that hook identically hashed differently and the join was refused with
 `RefusalReason.Executable`. It now hashes the **running image**, which the two builds share
 byte for byte. A Steam client and a DRM-free host have been verified in one live session
-(docs/research/steam-support.md Â§18).
+(docs/research/steam-support.md §18).
 
 If a cross-store join is still refused on the executable, **both sides need this version or
-newer**. Check each agent's startup line â€” the two `exe image` values must match, and the
+newer**. Check each agent's startup line — the two `exe image` values must match, and the
 `exe file` values are expected to differ:
 
 ```
@@ -237,12 +237,12 @@ Steam content digest: exe image C6962619, ... [exe file 220AC31D (SteamStub)]
 
 If a session logs `executable identity unchecked: one side published no live image digest`, one
 peer's plugin did not publish one (an older plugin, or a plugin that failed to read its own
-image â€” its log says which). The session still runs; the executable check is simply not in
+image — its log says which). The session still runs; the executable check is simply not in
 force, so make sure both sides really are on the same build.
 
 Expect content warnings (`W_OVERRIDE`, `W_APPEARANCE`, `W_TLK`, `W_2DA`, `W_GLOBALS`) whenever
 the two installs are modded differently. Those are not Steam-specific and none of them ends a
-session â€” they name the channel each mismatch degrades.
+session — they name the channel each mismatch degrades.
 
 ## Steam overlay and the frame hook
 
@@ -260,10 +260,10 @@ culprit:
 IAT slot 0x73D00C holds 0x... but gdi32!SwapBuffers is 0x...; something else already hooked it. Refusing.
 ```
 
-The one-click fix for that is Steam â†’ KOTOR â†’ Properties â†’ General â†’ uncheck "Enable the Steam
+The one-click fix for that is Steam → KOTOR → Properties → General → uncheck "Enable the Steam
 Overlay while in-game".
 
-âš  **A frame counter of 0 at the main menu is normal on every build** â€” the swap hook is dormant
+⚠ **A frame counter of 0 at the main menu is normal on every build** — the swap hook is dormant
 there and the menu runs off the `MainLoop` call site instead. The plugin says so itself
 (`frame hook installed but has not fired for ~2s`). Do not read it as an overlay conflict.
 
@@ -277,9 +277,9 @@ steam: ready as app 32370 (ISteamFriends via SteamAPI_SteamFriends_v018)
 steam: friends can now join this session (kc1/203.0.113.7:27140)
 ```
 
-Without it, exactly one line and then silence â€” everything else works as before. Other failure
+Without it, exactly one line and then silence — everything else works as before. Other failure
 lines to expect: `steam: SteamAPI_Init returned false` (Steam is not running, or the account
-does not own KOTOR â€” it must own **app 32370**, whichever store the install came from), and
+does not own KOTOR — it must own **app 32370**, whichever store the install came from), and
 `steam: steam_api64.dll exports neither SteamAPI_InitFlat nor SteamAPI_Init` (the file is not a
 Steamworks redistributable).
 
@@ -293,19 +293,19 @@ default was a Steam path.
 ## Client can't connect / "no reply from \<host\>"
 
 - Host and client `port` must match (`coop.ini port=`; the code's own default is 27015,
-  but the shipped `coop.ini.example` sets `port = 27140` explicitly â€” see CONFIG.md).
+  but the shipped `coop.ini.example` sets `port = 27140` explicitly — see CONFIG.md).
 - A session `password` must match exactly on both sides, or be left empty on both. A wrong
   one shows "Wrong password. Ask the host for the password and try again."
 - The host must have said yes to the firewall question in setup (see below).
 - `connect_timeout_ms` (default: the built-in 15000) is how long a client waits before
   giving up; raise it on a slow network.
-- Firewalls: this is a direct UDP connection (star relay â€” clients talk only to the host),
+- Firewalls: this is a direct UDP connection (star relay — clients talk only to the host),
   so the host's UDP port must be reachable from the client. See the next two sections.
 
 ## Windows Firewall: the host's prompt never appeared, or was dismissed
 
 The agent starts windowless behind a fullscreen game, so Windows' "allow this app through
-the firewall?" prompt on the host's first listen lands where nobody sees it â€” and an
+the firewall?" prompt on the host's first listen lands where nobody sees it — and an
 unanswered prompt is a silent deny: the host's own status line looks fine while no joiner's
 datagram ever arrives. The installer handles this (`WindowsFirewall.cs`). Setup asks "Allow friends to connect to
 games you host?"; answer yes and Windows asks for permission. If you skipped it, run setup
@@ -319,7 +319,7 @@ again. Details:
 - Not elevated, it prints the two exact `netsh advfirewall firewall add rule ...` commands
   to run once from an Administrator prompt.
 - `KotorCoop.Agent.exe install --check` prints `PASS: Windows Firewall inbound rule
-  'KotorCoop Agent' exists` or a `NOTE:` with the commands (a NOTE, not a FAIL â€” a LAN-only
+  'KotorCoop Agent' exists` or a `NOTE:` with the commands (a NOTE, not a FAIL — a LAN-only
   host whose partner is on the same PC never needs it).
 - `uninstall` removes the rule when elevated, or prints the `delete rule` command.
 
@@ -334,25 +334,25 @@ appear on a stream or screenshot by accident.
 
 `status` / `public_address` on a hosting player never says a bare "UPnP mapped", because a
 mapping alone does not prove the port is reachable from outside
-([network-topology.md Â§16](research/network-topology.md)). After the router answers, the host
-probes itself (Â§17 there: the router's WAN address vs the address STUN sees, plus a datagram
+([network-topology.md §16](research/network-topology.md)). After the router answers, the host
+probes itself (§17 there: the router's WAN address vs the address STUN sees, plus a datagram
 sent from a second socket to its own public address) and the line says one of:
 
-- `UPnP mapped - local self-test passed; internet access unconfirmed` â€” the probe came back
+- `UPnP mapped - local self-test passed; internet access unconfirmed` — the probe came back
   locally. That tests a local UDP path, not the internet. Share the address and have your
   friend try.
 - `UPnP mapped - possible additional NAT; check upstream routers or use a tunnel such as
-  playit.gg` â€” the router's WAN address is not the address the internet sees (another router,
+  playit.gg` — the router's WAN address is not the address the internet sees (another router,
   or an ISP that shares addresses). This does not prove forwarding is impossible, but a
   tunnel is the dependable path. `UPnP unavailable - possible additional NAT; ...` is the
   same with the mapping refused.
 - `UPnP mapped - could not confirm it is reachable; if a friend cannot connect, use a tunnel
-  such as playit.gg` â€” nothing contradicted the mapping but the probe did not come back
+  such as playit.gg` — nothing contradicted the mapping but the probe did not come back
   (most home routers do not "hairpin" traffic to their own public address). Try it with
   your friend.
-- `UPnP unavailable - local self-test passed on port N; internet access unconfirmed` â€” the
+- `UPnP unavailable - local self-test passed on port N; internet access unconfirmed` — the
   port answered locally, for example because you forwarded it by hand.
-- `UPnP unavailable - forward UDP+TCP N manually` â€” forward that port to this PC, both UDP
+- `UPnP unavailable - forward UDP+TCP N manually` — forward that port to this PC, both UDP
   and TCP, or use a tunnel.
 
 `public_address` prints a second `reachability:` line with the evidence (router WAN address,
@@ -364,54 +364,54 @@ after STUN and UPnP have both answered (up to 30 s).
 A client that loses its host is not stuck. For the player-facing messages (after about 60
 seconds, then giving up at 5 minutes) see "The host stopped responding" above. Within
 `host_loss_timeout_ms` of silence (default
-5000ms, same as the ordinary reconnect trigger â€” near-instant instead if the host shut down
-cleanly rather than crashing) every co-op lock releases and you keep playing solo â€” companions
+5000ms, same as the ordinary reconnect trigger — near-instant instead if the host shut down
+cleanly rather than crashing) every co-op lock releases and you keep playing solo — companions
 respond to clicks again, doors and dialogue work normally, nothing stays frozen. A HUD/chat
 line says "Host connection lost - playing solo, will rejoin automatically." while this is
 happening.
 
 - The client keeps re-Helloing in the background the whole time; if the host comes back
-  (relaunched, or the network recovers) you rejoin automatically and everything re-mirrors â€”
+  (relaunched, or the network recovers) you rejoin automatically and everything re-mirrors —
   no player action needed. A second HUD/chat line ("Host connection restored - rejoining.")
   confirms it.
 - If you were mid-conversation with a shared NPC when the host vanished, you keep the reply
-  list you were already looking at and can keep clicking through it on your own â€” dialogue is
+  list you were already looking at and can keep clicking through it on your own — dialogue is
   initiator-led, so this does not require the host.
 - `coop.ini host_loss_release = 0` turns this off and restores the old behaviour: every lock
   stays held until you manually run `disconnect` in the console. `host_loss_timeout_ms` lets
   the release wait longer than the reconnect attempt itself, if you would rather bet on a brief
   blip resolving first. See [CONFIG.md](CONFIG.md) and
-  [disconnect-reconnect.md Â§11](research/disconnect-reconnect.md).
-- This does not apply to the HOST losing a client â€” a client vanishing mid-dialogue or
+  [disconnect-reconnect.md §11](research/disconnect-reconnect.md).
+- This does not apply to the HOST losing a client — a client vanishing mid-dialogue or
   mid-interaction only ever releases what THAT client was holding; the host and every other
   connected player are unaffected either way.
 
 ## Host went to the main menu (or sat on a load screen) and I'm frozen
 
 The host's agent keeps running at the main menu, so the link never goes silent and neither
-of the two triggers above fires â€” before 2026-09-18 a joiner sat in a frozen world holding
+of the two triggers above fires — before 2026-09-18 a joiner sat in a frozen world holding
 every lock for as long as the host stayed parked. Now a host that stays flagged away (the
 same `FlagAway` that shows "X left the world (main menu / loading)") for longer than
 `host_away_timeout_ms` (default 20 s; `0` turns just this trigger off) counts as host loss
 too: the same release runs, the chat line reads "Host has left the world (main menu /
 loading) - playing solo until they return.", and the moment the host is back in the world
-mirroring resumes on its own ("Host connection restored - rejoining.") â€” no reconnect, since
+mirroring resumes on its own ("Host connection restored - rejoining.") — no reconnect, since
 the link never dropped. A load screen or a quick visit to the save menu is well under the
 grace period. Gated by `host_loss_release` like the other two triggers (`HostAwayRule`,
-[disconnect-reconnect.md Â§13](research/disconnect-reconnect.md)).
+[disconnect-reconnect.md §13](research/disconnect-reconnect.md)).
 
 ## The host sees nothing when a friend on the wrong build (or wrong password) tries to join
 
 Fixed 2026-09-18. The joiner always got a typed `E_PROTO` / `E_PASSWORD` reject (now shown to the joiner as a
 plain sentence; the tag stays in the logs); the host
-now also gets a chat/console/log line â€” `co-op: a player at 203.0.113.9 on an older build
+now also gets a chat/console/log line — `co-op: a player at 203.0.113.9 on an older build
 tried to join (v50 vs your v52) - both sides need the same kotor-coop version`, or `... tried
-to join with the wrong password` â€” once per address per 30 s, however often that client
+to join with the wrong password` — once per address per 30 s, however often that client
 retries (`RejectedJoinNotices`).
 
 ## I can't see my partner / their phantom never appears
 
-- Confirm both players are actually in the same module â€” a peer in a different module is
+- Confirm both players are actually in the same module — a peer in a different module is
   filtered out by design (`--no-module-filter` on the CLI removes this filter, mainly useful
   for bridging different games or a mock harness).
 - An unfocused or minimised instance keeps simulating; it should not need to be in the
@@ -424,28 +424,28 @@ Both are by design, not bugs: only the host can switch party character
 ([client-control-lock.md](research/client-control-lock.md),
 [control-return.md](research/control-return.md)), and a mirrored companion can't swing on a
 client except through `companion_local_combat`, which is **off by default in the code AND in the
-shipped `coop.ini.example`** â€” set `companion_local_combat = 1` yourself if you want it. See
+shipped `coop.ini.example`** — set `companion_local_combat = 1` yourself if you want it. See
 [party-reconciliation.md](research/party-reconciliation.md).
 
 ## My damage numbers look wrong in a swarm
 
-Not a bug â€” two separate, deliberate simplifications, both worth knowing about if a fight
+Not a bug — two separate, deliberate simplifications, both worth knowing about if a fight
 against several enemies at once looks like the wrong creature gets credited or blamed.
 
 The wire that reports damage a peer's phantom took carries one CUMULATIVE total plus the id of
-the LAST attacker only â€” not a per-hit, per-attacker breakdown
-([combat-when-apart.md](research/combat-when-apart.md) Â§6b,
-[combat-participation.md](research/combat-participation.md) Â§4.3). When two or more hostiles
+the LAST attacker only — not a per-hit, per-attacker breakdown
+([combat-when-apart.md](research/combat-when-apart.md) §6b,
+[combat-participation.md](research/combat-participation.md) §4.3). When two or more hostiles
 land hits in the same short window, all of that damage is folded into one number and the whole
 amount is attributed to whichever of them hit last, so a floaty number or a "took N damage from"
 log line can name the wrong enemy in a crowd even though the total itself is correct.
 
 Separately, `local_combat` only ever lets ONE mirrored enemy fight a given player's own engine
-at a time â€” `EnemyPresenceController`'s exclusion slot holds a single creature, by design (one
+at a time — `EnemyPresenceController`'s exclusion slot holds a single creature, by design (one
 shared-block field, one fight). Every other hostile that is in range and eligible keeps being
 mirrored (position, health, animation) exactly like normal, just not handed to this engine's own
 AI yet; whatever it deals still arrives through the ordinary forwarded-damage channel, so no
-damage goes missing â€” but "which enemy is actually hitting me right now" can look inconsistent
+damage goes missing — but "which enemy is actually hitting me right now" can look inconsistent
 with what is on screen during a real swarm, for the same attribution reason as above. A
 "`N` more enemies engaged - mirrored" HUD line (coop.ini `local_combat_deferred_notice`, default
 on; roadmap-seamless.md Tier 2 item 14) shows whenever this is happening, so a swarm's numbers
@@ -453,17 +453,17 @@ not quite matching what is on screen has a visible explanation instead of lookin
 
 ## A feature that "should" be on isn't doing anything
 
-Two `coop.ini` keys â€” `companion_local_combat` (a companion fighting for the OTHER player
+Two `coop.ini` keys — `companion_local_combat` (a companion fighting for the OTHER player
 through their own engine) and `dialogue_recruit_sync` (a companion recruited on one instance
-being made available on the other at all) â€” default **OFF in the code, and are absent from the
+being made available on the other at all) — default **OFF in the code, and are absent from the
 shipped file too**, so a fresh install genuinely ships with both off. This is the documented,
 on-purpose state, not a stale template: set `companion_local_combat = 1` / `dialogue_recruit_sync
 = 1` in `coop.ini` by hand if you want either. Without `dialogue_recruit_sync`, recruiting a
-companion in conversation only keeps it for whoever ran that conversation â€” the other player does
+companion in conversation only keeps it for whoever ran that conversation — the other player does
 not get it. See the footnotes in [CONFIG.md](CONFIG.md).
 
 Separately, a `coop.ini` installed before 2026-08-27 shipped `effect_sync`, `trigger_relay` and
-`menu_button` OFF, where the current template ships all three ON â€” that one IS a stale-template
+`menu_button` OFF, where the current template ships all three ON — that one IS a stale-template
 issue (see the same footnotes), unlike the two keys above. The installer never overwrites an
 existing `coop.ini`, so check your actual file against CONFIG.md's table rather than assuming
 either side's "default" applies.
@@ -472,14 +472,14 @@ either side's "default" applies.
 
 **Fixed and on by default since 2026-08-29** (`party_follow_stall_recovery`). The engine's own
 "has the follower reached this waypoint" test is a STRICT comparison, and at the end of a leg the
-recorded waypoint collapses onto the follower's cached previous position â€” so the test compares a
+recorded waypoint collapses onto the follower's cached previous position — so the test compares a
 number against itself, can never pass, and the companion freezes where it stands. Live-reproduced
 4/4, including the severe form: a leader teleported 16.5 units away that the companion never
 recovered from at all.
 
 A runtime detector now watches for that exact wedged state and, once it has held for two seconds
 with the companion genuinely separated, gathers the party through the engine's own
-`CSWPartyTable::PositionParty` â€” the same call a module transition makes. Across five reps every
+`CSWPartyTable::PositionParty` — the same call a module transition makes. Across five reps every
 wedge recovered on the first attempt (`party follow stall: recovered 0x... via positionparty` in
 `kotorcoop-plugin.log`). Note it RELOCATES the companion rather than walking it back: the engine's
 own long-distance pathfinding limit underneath is separate and still unfixed.
@@ -487,12 +487,12 @@ own long-distance pathfinding limit underneath is separate and still unfixed.
 Turn it off with `party_follow_stall_recovery=0`; `party_follow_stall_recovery_method` selects
 between six recoveries (the other five were each tried live and are documented, with their
 results, in [party-reconciliation.md](research/party-reconciliation.md) round 105). Two much older
-candidates (`party_follow_extend_final_node`, `party_follow_advance_destnode_phase6`) remain off â€”
+candidates (`party_follow_extend_final_node`, `party_follow_advance_destnode_phase6`) remain off —
 round 105 folded what they do into method `5` and measured it insufficient on its own.
 
 ## Swoop racing / a minigame won't start or gets stuck
 
-Fixed 2026-08-29 â€” the "the race never dispatches" report was a wrong test recipe, not an
+Fixed 2026-08-29 — the "the race never dispatches" report was a wrong test recipe, not an
 engine-level block: the race branch of Gadon's dialogue needs the `Tar_SummonGadon` global (not
 `Tar_SwoopEng`, which an earlier round had set instead) plus three real reply picks, and with
 those the race runs end to end. A KOTOR swoop track is a single-seat area, so the co-op layer
@@ -503,20 +503,20 @@ reach everyone through the ordinary globals channel. The one remaining gap is NE
 keyboard half of the peer lock only confirms its own mechanism engages, never confirmed to stop
 a real PHYSICAL keypress (injected keystrokes never reach this game, same limit as the Star
 Forge spectate lock). The `delay_probe` diagnostic splice used to trace the original dispatch
-chain ships OFF by default. See [minigames.md](research/minigames.md) Â§24.
+chain ships OFF by default. See [minigames.md](research/minigames.md) §24.
 
 ## `kotorcoop-*.log` keeps growing / disk usage from logs
 
 `kotorcoop-plugin.log` and every per-channel split (`kotorcoop-combat.log` etc.) rotate their
 generations up (`*.log` -> `*.1.log` -> `*.2.log` -> ...) once they cross `coop.ini`'s
-`log_max_mb` (default 8) â€” both at plugin startup and roughly every 30 seconds during play
+`log_max_mb` (default 8) — both at plugin startup and roughly every 30 seconds during play
 (`PluginHost.RotateLogsIfNeededMidSession`, `LogRotation.PeriodicCheckIntervalMs`), so a
 session that runs long enough to cross the cap on its own no longer has to wait for a restart
 to shrink back down. `coop.ini`'s `log_keep` (default 3, clamped 1-10) prior generations are
 kept, oldest dropped; a rotation older than that is gone. Before 2026-09-02 only one
 generation was ever kept, and a mid-session rotation could overwrite the evidence for a real
 bug (a corrupt damage effect logged, then rotated away) before anyone had a chance to read it
-â€” see `LogRotation.ShiftPlan`.
+— see `LogRotation.ShiftPlan`.
 
 `kotorcoop-agent.log` (the log for the agent process the plugin auto-starts) also rotates
 during a session now: `kotorcoop-agent.log`, then `.1`, `.2` and `.3`, each capped at 8 MB by
@@ -528,43 +528,43 @@ The `--log` file `tools/demo.ps1`/`verify.ps1` point the agent at directly (`age
 `agent2.log` under `$env:TEMP\kotorcoop-demo\`) is a plain scratch file the agent writes with
 its own `File.AppendAllText`. Since 2026-09-18 it rotates the same way as the plugin logs: at
 agent start AND about every 30 s during the session (`AgentDashboard.RotateLogMidSessionIfDue`),
-shifting `.1.log` â€¦ `.3.log` up at the plugin's default 8 MB cap. Before that it rotated only
+shifting `.1.log` … `.3.log` up at the plugin's default 8 MB cap. Before that it rotated only
 at construction, so one long session grew it without limit.
 
 ## A partner's game crashes during or shortly after a module transition (`0xC0000005`)
 
-There are at least two distinct, unrelated causes behind crashes shaped like this â€” do not
+There are at least two distinct, unrelated causes behind crashes shaped like this — do not
 assume it is either one without checking `kotorcoop-plugin.log`/`tools/crashlog.ps1` first.
 
 **A fixed cause: the `CGuiInGame+0x78` write storm.** On builds up to 2026-08-27,
 `PartySelectSuppressionController` re-detected and re-tore-down the same stale party-selection
-panel address hundreds of times a second for the life of a session â€” a write storm through a
+panel address hundreds of times a second for the life of a session — a write storm through a
 dangling pointer that could corrupt whatever heap block a module load later reallocated at that
 address. Root-caused and fixed 2026-08-28 (touch a given panel address at most once per module
 instead of every frame forever); the write-storm ITSELF is confirmed fixed (one suppress/sweep
 pair per session instead of 70,000+). **If you hit a crash on a build from before 2026-08-27, the
-fix is to upgrade** â€” reinstall from a current release or rebuild from `main` (`build.ps1
+fix is to upgrade** — reinstall from a current release or rebuild from `main` (`build.ps1
 -Install`).
 
 **An open, NOT-yet-fixed cause: a pre-existing engine bug, `0x0040D386`, unrelated to any
 `coop.ini` feature.** This is the same crash address the write-storm fix was hoped to have closed
-(the STUNT_00 escape-pod path it was first seen on) â€” but a 2026-08-28/29 live round reproduced
+(the STUNT_00 escape-pod path it was first seen on) — but a 2026-08-28/29 live round reproduced
 it again, post-fix, via an ordinary two-instance `warp` cycle that never opens the galaxy map or
 touches party-select at all, and confirmed it is not gated by ANY optional `coop.ini` flag (a
 pass with every feature simultaneously OFF still crashed). It is inside `swkotor.exe`'s own
-`CExoKeyTable::DestroyTable` â€” a resource-table subsystem, nothing this project's own code calls
-or references â€” most often (not exclusively) following a transition through `tar_m02aa`. **There
+`CExoKeyTable::DestroyTable` — a resource-table subsystem, nothing this project's own code calls
+or references — most often (not exclusively) following a transition through `tar_m02aa`. **There
 is no known workaround or `coop.ini` setting that avoids it**; it is not specific to co-op play
 (the recipe that reproduces it is a bare console `warp`, something a solo player's own game could
 in principle also hit). A separate 2026-08-28 round found a second address in the same bug family
 (`0x0023D4B3`, `CSWCObject::GetServerObject`) reproduces on a build from BEFORE this project's
-current feature set even existed (`c9d08bb`) â€” confirming neither address is a regression this
-project introduced â€” and, more usefully for a player: **a 12-transition soak that only ever used
+current feature set even existed (`c9d08bb`) — confirming neither address is a regression this
+project introduced — and, more usefully for a player: **a 12-transition soak that only ever used
 real in-game doors, on the same build, produced zero crashes**, while every soak that used the
 `warp` console verb as the transition trigger itself crashed reliably by the second or third hop.
 The working theory is that `warp` fires a transition near-instantly, with none of a real door's
 few seconds of walk-up and fade to let a transient engine state (a lingering conversation, in
-particular) settle first â€” so this crash is most likely to actually appear during rapid `warp`
+particular) settle first — so this crash is most likely to actually appear during rapid `warp`
 chaining (dev/test use), not during ordinary door-based play. See
 [transition-crashes.md](research/transition-crashes.md) for the full attribution round and
 [galaxy-map-and-party-select.md](research/galaxy-map-and-party-select.md)'s 2026-08-28/29 entries
@@ -573,7 +573,7 @@ for the RE and the correction to the earlier "fixed" claim; see
 
 ## The party's shared item stash and a merchant's stock aren't shared between us
 
-**As of 2026-08-29 both channels ship ON, at mode 2** â€” if your stash and a merchant's stock are
+**As of 2026-08-29 both channels ship ON, at mode 2** — if your stash and a merchant's stock are
 not shared, the usual cause is an OLD `coop.ini`: the installer never overwrites that file, so an
 install from before 2026-08-29 keeps its own `party_pool_sync=0`/`store_sync=0` lines. Set them to
 `2`, or re-run `install.ps1 -GameDir '...' -UpdateDefaults`.
@@ -582,7 +582,7 @@ Two limitations are real and expected even with the channels on:
 
 * **A shop's stock can only be READ while some player has that shop's GUI open.** That is an
   engine limitation (`CSWSStore+0x230` is only reachable through the open panel), unchanged from
-  mode 1. Applying a peer's buy/sell never needs the GUI â€” only noticing your own does.
+  mode 1. Applying a peer's buy/sell never needs the GUI — only noticing your own does.
 * **An infinite-stock item's buys never replicate**, because the engine's own stock never changes
   for one.
 
@@ -601,7 +601,7 @@ correctly on your OWN instance regardless of these flags. See [CONFIG.md](CONFIG
 
 `kotorcoop-plugin.log` covers access violations and managed exceptions inside the plugin
 (`CrashProbe`), but a .NET NativeAOT fail-fast (`RaiseFailFastException`/`__fastfail`) bypasses
-every user-mode handler â€” the process is just gone, log ending mid-sentence, with no trace of
+every user-mode handler — the process is just gone, log ending mid-sentence, with no trace of
 why. Windows' own Error Reporting can capture a minidump for the NEXT crash, but it needs to be
 turned on first (off by default, machine-wide): from an **Administrator** PowerShell, in the
 extracted package folder,
@@ -613,13 +613,13 @@ extracted package folder,
 A non-elevated shell gets a clear error naming the reason (the setting lives under
 `HKEY_LOCAL_MACHINE`) rather than silently doing nothing. The next crash leaves a `.dmp` file
 under `<game folder>\crashdumps` (override with `-DumpFolder <path>`), capped at the 10 most
-recent (~200 MB each â€” a 32-bit game's full dump). Turn it back off with
+recent (~200 MB each — a 32-bit game's full dump). Turn it back off with
 `install.ps1 -GameDir '...' -DisableCrashDumps`; it does not expire or undo itself. The
 dev-only `tools/crashlog.ps1 -EnableDumps` does the identical registry write for a hardcoded
-dev dump folder â€” the two are equivalent, just aimed at different audiences.
+dev dump folder — the two are equivalent, just aimed at different audiences.
 
 **2026-09-02:** none of the above helps if the process was TERMINATED rather than left to
-report its own fault â€” WER off (the default) plus an engine filter that calls
+report its own fault — WER off (the default) plus an engine filter that calls
 `TerminateProcess` right after the crash leaves the plugin log ending mid-sentence with no
 `FATAL`/`FIRST-CHANCE` line at all, because that line is only ever written by the plugin's
 WORKER thread on its next poll, and a terminated process has no next poll. This killed a
@@ -627,7 +627,7 @@ client 100 ms into a follow after a wipe-recovery rejoin with nothing anywhere t
 (see the "CLIENT vanishing" case in
 [research/transition-crashes.md](research/transition-crashes.md)). `CrashProbe`'s vectored
 stub now hands the same fault record straight to `kernel32!WriteFile`, on the faulting
-thread, in the same breath as filling it â€” no managed code involved, so it survives a
+thread, in the same breath as filling it — no managed code involved, so it survives a
 `TerminateProcess` the log-writing path never gets a chance to run for. The result lands next
 to the plugin log as `kotorcoop-crash.bin`; decode it with:
 
@@ -640,18 +640,18 @@ Application-log scan above.
 
 ## My partner looks like the wrong character (a stranger, or a companion) after a warp
 
-The body a peer is drawn with has two halves â€” the server object the mod writes, and the
-CLIENT TWIN the engine actually renders â€” and only the second one is what you see. Before
+The body a peer is drawn with has two halves — the server object the mod writes, and the
+CLIENT TWIN the engine actually renders — and only the second one is what you see. Before
 2026-08-29 the mod decided "this phantom already wears the right look" from the server half
 alone, so a phantom re-spawned after a module change (a `warp`, a door, any transition) could
 be left rendering the `k_coop_phantom` blueprint for the rest of the module: the server field
 was correct, the twin did not exist yet at the moment it was written, and nothing re-applied
-it. It did not show at first connect, only after a transition â€” that ordering is the whole
+it. It did not show at first connect, only after a transition — that ordering is the whole
 tell. Fixed by re-asserting the look on the twin until it lands, per body; see
 [research/name-plates.md](research/name-plates.md).
 
 If it still happens on a current build, the peer is probably PUBLISHING the wrong look rather
-than the mod applying it wrongly â€” i.e. that player's own agent has latched onto a body that is
+than the mod applying it wrongly — i.e. that player's own agent has latched onto a body that is
 not their character. Check that side's agent log for `player: adopted the engine's own creature
 0x...` and `player 0x...: is-PC flag is ...` lines around the transition, and the receiving
 side's plugin log for the spawn line, which carries all three numbers that can disagree:
@@ -667,16 +667,16 @@ agent resolving the wrong player, which is a different bug and worth reporting w
 
 ## A second Trask (or Carth, or Bastila) is standing next to the party after a warp
 
-This one is not your partner wearing the wrong body â€” it is a **copy of your own companion**,
+This one is not your partner wearing the wrong body — it is a **copy of your own companion**,
 and it arrives through the enemy channel, not the player channel. The tell is that the extra
 body has no name band and does not move with the party.
 
 Before 2026-08-29 the host decided "is this creature one of ours" from the engine's
 party-FOLLOW pointer, which the engine attaches some time *after* a companion's body exists.
 A module change (a `warp`, a door) is exactly that window, so Trask read as an ordinary
-stranger for a second, went out in the enemy census, and the other instance â€” which does not
+stranger for a second, went out in the enemy census, and the other instance — which does not
 necessarily hold that companion under the same runtime object id, because party bodies are
-spawned by the party table at load rather than placed in the module â€” built a stand-in for
+spawned by the party table at load rather than placed in the module — built a stand-in for
 him: Trask's own appearance row (378), standing where Trask stands.
 
 Fixed on both sides: the census now takes membership from the party TABLE's roster, and a
