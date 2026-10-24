@@ -142,6 +142,7 @@ fallback (they agree here — `CoopIniExampleDocSyncTests` checks it).
 | `log_max_mb` | `8` | log rotation cap per file, MB. Covers the plugin logs and the agent log (`kotorcoop-agent.log`, `.1`-`.3`), which rotate during a session as well as at launch | — |
 | `log_keep` | `3` | rotated log generations kept (plugin logs and the agent log), clamped 1-10 | — |
 | `auto_start_agent` | ON | the plugin launches/attaches the agent itself; set 0 only if you run the agent yourself | — |
+| `agent_window` | `minimized` | the helper's window: `minimized` opens it minimised behind the game, `hidden` starts it with no window (output only in `kotorcoop-agent.log`) | [AgentLauncher.cs](../src/KotorCoop.Plugin/AgentLauncher.cs) |
 | `dinput8_next` | unset | file (relative to the game dir) the plugin forwards DirectInput calls to instead of the system `dinput8.dll` | [Exports.cs](../src/KotorCoop.Plugin/Exports.cs) |
 
 ## Developer switches (do not change)

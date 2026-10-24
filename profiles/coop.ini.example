@@ -227,6 +227,11 @@ log_keep = 3
 ; running the agent yourself from a command line.
 # auto_start_agent = 1
 
+; The co-op helper's window (the dashboard with the session status and a command line).
+; minimized: it opens minimised in the taskbar, behind the game - click it to look. Closing it
+; stops co-op until the plugin restarts it. hidden: no window at all; read kotorcoop-agent.log.
+agent_window = minimized
+
 ; If another mod already owns dinput8.dll, chain mode (see the README) usually handles it
 ; automatically. This forces the plugin's next hop by hand if you ever need to override that.
 # dinput8_next =

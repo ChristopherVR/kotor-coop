@@ -26,8 +26,25 @@ internal static class InstallCommand
             return PackageInstaller.Check(game, Cli.Log) ? 0 : 1;
         }
 
+        // Refused before anything is copied, so a typo never leaves a half-applied install.
+        foreach ((string key, string value) in options.IniSettings)
+        {
+            if (CoopIniSettings.Validate(key, value) is { } problem)
+            {
+                Cli.Error(key.Length == 0 ? $"--set {value}: expected key=value" : $"--set: {problem}");
+                return 2;
+            }
+        }
+
         string package = options.PackageDirectory ?? AppContext.BaseDirectory;
         ReportVersion(package, game);
+        PackageInstaller.FirewallEnabled = !options.NoFirewall;
+
+        // Before the copy, so the firewall rule the install adds opens the port chosen here.
+        if (options.IniSettings.Count > 0 && !ApplySettings(package, game, options.IniSettings))
+        {
+            return 1;
+        }
 
         bool ok;
         try
@@ -56,6 +73,7 @@ internal static class InstallCommand
         if (ok)
         {
             OfferDefaults(package, game, interactive: false, options.UpdateDefaults);
+            ok = !options.Windowed || GameLauncher.TrySetWindowed(game);
         }
         return ok ? 0 : 1;
     }
@@ -229,6 +247,7 @@ internal static class InstallCommand
             }
 
             OfferDefaults(here, game, interactive, options.UpdateDefaults);
+            AskChoices(game, interactive);
             return OfferLaunch(game, interactive);
         }
         catch (PackageInstaller.NeedsElevationException ex)
@@ -420,6 +439,54 @@ internal static class InstallCommand
         {
             Cli.Dim("Settings preserved. Compare KotorCoop.DEFAULTS.ini or use install --update-defaults.");
         }
+    }
+
+    /// <summary>The console setup's two options questions; both default to what is already
+    /// there, so a re-run (or a script) changes nothing it was not asked to.</summary>
+    private static void AskChoices(string game, bool interactive)
+    {
+        Console.WriteLine();
+        bool windowed = !GameLauncher.IsWindowed(game)
+            && Ask("Run the game in a window instead of fullscreen? (easier to switch to the co-op helper)", defaultYes: false, interactive);
+
+        string iniPath = Path.Combine(game, "coop.ini");
+        bool wasHidden = string.Equals(CoopIniSettings.Read(iniPath, "agent_window"), "hidden", StringComparison.OrdinalIgnoreCase);
+        bool minimized = Ask("Open the co-op helper window minimised behind the game? (no = no window at all)", defaultYes: !wasHidden, interactive);
+        if (windowed)
+        {
+            GameLauncher.TrySetWindowed(game);
+        }
+
+        ApplySettings(null, game, [new("agent_window", minimized ? "minimized" : "hidden")]);
+    }
+
+    /// <summary>Writes key=value pairs into the game's coop.ini, first seeding it from the
+    /// package's template (as the install itself would, which then leaves it alone) when the
+    /// game has none yet.</summary>
+    private static bool ApplySettings(string? package, string game, IReadOnlyList<KeyValuePair<string, string>> settings)
+    {
+        string iniPath = Path.Combine(game, "coop.ini");
+        try
+        {
+            string? template = package is null ? null : Path.Combine(package, "coop.ini");
+            if (!File.Exists(iniPath) && template is not null && File.Exists(template))
+            {
+                File.Copy(template, iniPath);
+            }
+
+            foreach (CoopIniSettings.Change change in CoopIniSettings.Apply(iniPath, settings))
+            {
+                Cli.Log($"coop.ini: {change.Key} = {change.NewValue}"
+                    + (change.OldValue is null ? string.Empty : $" (was {(change.OldValue.Length == 0 ? "blank" : change.OldValue)})"));
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            Cli.Error($"could not write coop.ini: {ex.Message}");
+            return false;
+        }
+
+        return true;
     }
 
     private static int OfferLaunch(string game, bool interactive)

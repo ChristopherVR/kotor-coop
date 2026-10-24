@@ -7,6 +7,19 @@ namespace KotorCoop.Agent;
 /// </summary>
 internal static class Program
 {
+    private static Action<string> TeeLine(TextWriter console, string logFile) => line =>
+    {
+        console.WriteLine(line);
+        console.Flush();
+        try
+        {
+            File.AppendAllText(logFile, $"[{DateTime.Now:HH:mm:ss}] {line}{Environment.NewLine}");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
+    };
+
     private static async Task<int> Main(string[] args)
     {
         AgentOptions options = AgentOptions.Parse(args);
@@ -26,6 +39,15 @@ internal static class Program
             {
                 Console.Error.WriteLine($"could not open the rotating log '{options.ConsoleLog}': {ex.Message}");
             }
+        }
+        else if (options.Command == AgentCommand.Run && !string.IsNullOrEmpty(options.LogFile) && !Console.IsOutputRedirected)
+        {
+            // Launched in a console of its own (coop.ini agent_window = minimized): the
+            // dashboard writes to --log once it is up; this keeps what is printed before that
+            // (and after it closes). One open per line, like the dashboard's own appends, so
+            // the two never hold the file against each other.
+            Console.SetOut(new ConsoleCaptureWriter(TeeLine(Console.Out, options.LogFile)));
+            Console.SetError(new ConsoleCaptureWriter(TeeLine(Console.Error, options.LogFile)));
         }
 
         // Linux/Proton: NEEDS-LIVE, no Wine box exists to confirm this against — see

@@ -31,6 +31,8 @@
 # Tested v* tags require manual numbered promotion (.github/workflows/release.yml). The symbols zip is CI-artifact-only -
 # it is never attached to a GitHub release, only kept for maintainers to pull off a CI run.
 #
+#                                          # (+ -setup.exe when Inno Setup 6 is installed; see
+#                                          # tools\installer\kotor-coop-setup.iss)
 #   pwsh tools\package.ps1                 # dist\kotor-coop-<git describe>-windows.zip + -linux.tar.gz
 #   pwsh tools\package.ps1 -Version 1.2.3  # override the version
 #   pwsh tools\package.ps1 -WarnAsError    # what CI runs: any build warning fails the package
@@ -223,6 +225,27 @@ if (Test-Path $tarPath) { Remove-Item $tarPath -Force }
 $tarRoot = "kotor-coop-$Version"
 $fileStream = [System.IO.File]::Create($tarPath)
 try {
+# --- Windows: graphical setup.exe over the same staged image (tools\installer) ---------------
+# A front end for `KotorCoop.Agent.exe install`: folder picker + options page. Needs Inno
+# Setup 6's ISCC.exe; without it the zip above is still the complete package.
+$iscc = @(
+    (Get-Command ISCC.exe -ErrorAction SilentlyContinue)?.Source
+    (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe')
+    (Join-Path $env:ProgramFiles 'Inno Setup 6\ISCC.exe')
+    (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe')
+) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+if ($iscc) {
+    $numericVersion = if ($Version -match '^(\d+)\.(\d+)\.(\d+)') { $Matches[0] } else { '0.0.0' }
+    $setupPath = Join-Path $OutDir "kotor-coop-$Version-setup.exe"
+    if (Test-Path $setupPath) { Remove-Item $setupPath -Force }
+    & $iscc /Q "/DSourceDir=$staging" "/DAppVersion=$Version" "/DNumericVersion=$numericVersion" "/O$OutDir" (Join-Path $PSScriptRoot 'installer\kotor-coop-setup.iss')
+    if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed with exit code $LASTEXITCODE" }
+    "packaged -> $setupPath ($([math]::Round((Get-Item $setupPath).Length / 1KB)) KB)"
+}
+else {
+    Write-Warning 'Inno Setup 6 not found, so no setup.exe was built (winget install JRSoftware.InnoSetup).'
+}
+
     $gzip = [System.IO.Compression.GZipStream]::new($fileStream, [System.IO.Compression.CompressionLevel]::Optimal)
     try {
         $tar = [System.Formats.Tar.TarWriter]::new($gzip, [System.Formats.Tar.TarEntryFormat]::Pax, $false)

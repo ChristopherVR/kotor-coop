@@ -313,32 +313,22 @@ public static class GameLauncher
     {
         string iniPath = Path.Combine(gameDirectory, "swkotor.ini");
 
-        if (!File.Exists(iniPath))
-        {
-            Console.Error.WriteLine($"swkotor.ini not found at {iniPath}.");
-            return false;
-        }
-
         try
         {
-            string backupPath = iniPath + BackupSuffix;
-            if (!File.Exists(backupPath))
+            // A copy that has never been started (or configured) may not have swkotor.ini
+            // yet. The game fills in every other key with its defaults, so the two lines
+            // below are a complete windowed setup on their own.
+            List<string> lines = [];
+            if (File.Exists(iniPath))
             {
-                File.Copy(iniPath, backupPath);
-                Console.WriteLine($"backed up swkotor.ini to {Path.GetFileName(backupPath)}");
-            }
-
-            List<string> lines = [.. File.ReadAllLines(iniPath)];
-            bool changed = false;
-
-            for (int i = 0; i < lines.Count; i++)
-            {
-                if (lines[i].StartsWith("FullScreen=", StringComparison.OrdinalIgnoreCase)
-                    && lines[i].Trim() != "FullScreen=0")
+                string backupPath = iniPath + BackupSuffix;
+                if (!File.Exists(backupPath))
                 {
-                    lines[i] = "FullScreen=0";
-                    changed = true;
+                    File.Copy(iniPath, backupPath);
+                    Console.WriteLine($"backed up swkotor.ini to {Path.GetFileName(backupPath)}");
                 }
+
+                lines = [.. File.ReadAllLines(iniPath)];
             }
 
             // FullScreen=0 alone is silently ignored by KOTOR 1: without AllowWindowedMode
@@ -347,40 +337,8 @@ public static class GameLauncher
             // stale frame that never updates, and DirectInput running at an exclusive
             // cooperative level does not observe injected input, so neither screenshots
             // nor automation work at all.
-            bool hasAllowWindowed = lines.Any(l =>
-                l.StartsWith("AllowWindowedMode=", StringComparison.OrdinalIgnoreCase));
-
-            if (!hasAllowWindowed)
-            {
-                int graphicsSection = lines.FindIndex(l =>
-                    l.Trim().Equals("[Graphics Options]", StringComparison.OrdinalIgnoreCase));
-
-                if (graphicsSection >= 0)
-                {
-                    lines.Insert(graphicsSection + 1, "AllowWindowedMode=1");
-                }
-                else
-                {
-                    lines.Add(string.Empty);
-                    lines.Add("[Graphics Options]");
-                    lines.Add("AllowWindowedMode=1");
-                }
-
-                changed = true;
-                Console.WriteLine("added AllowWindowedMode=1 to swkotor.ini");
-            }
-            else
-            {
-                for (int i = 0; i < lines.Count; i++)
-                {
-                    if (lines[i].StartsWith("AllowWindowedMode=", StringComparison.OrdinalIgnoreCase)
-                        && lines[i].Trim() != "AllowWindowedMode=1")
-                    {
-                        lines[i] = "AllowWindowedMode=1";
-                        changed = true;
-                    }
-                }
-            }
+            bool changed = SetGraphicsOption(lines, "FullScreen", "0");
+            changed |= SetGraphicsOption(lines, "AllowWindowedMode", "1");
 
             if (changed)
             {
@@ -399,6 +357,66 @@ public static class GameLauncher
             Console.Error.WriteLine($"could not edit swkotor.ini: {ex.Message}");
             return false;
         }
+    }
+
+    /// <summary>True when swkotor.ini already asks for a window (both keys the game needs).</summary>
+    public static bool IsWindowed(string gameDirectory)
+    {
+        string iniPath = Path.Combine(gameDirectory, "swkotor.ini");
+        if (!File.Exists(iniPath))
+        {
+            return false;
+        }
+
+        string[] lines = File.ReadAllLines(iniPath);
+        return lines.Any(l => l.Trim().Equals("FullScreen=0", StringComparison.OrdinalIgnoreCase))
+            && lines.Any(l => l.Trim().Equals("AllowWindowedMode=1", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>Sets <paramref name="key"/> wherever it already is, else adds it under
+    /// [Graphics Options] (creating the section). Returns true when a line changed.</summary>
+    private static bool SetGraphicsOption(List<string> lines, string key, string value)
+    {
+        string wanted = $"{key}={value}";
+        bool found = false;
+        bool changed = false;
+        for (int i = 0; i < lines.Count; i++)
+        {
+            if (lines[i].TrimStart().StartsWith(key + "=", StringComparison.OrdinalIgnoreCase))
+            {
+                found = true;
+                if (lines[i].Trim() != wanted)
+                {
+                    lines[i] = wanted;
+                    changed = true;
+                }
+            }
+        }
+
+        if (found)
+        {
+            return changed;
+        }
+
+        int graphicsSection = lines.FindIndex(l =>
+            l.Trim().Equals("[Graphics Options]", StringComparison.OrdinalIgnoreCase));
+        if (graphicsSection >= 0)
+        {
+            lines.Insert(graphicsSection + 1, wanted);
+        }
+        else
+        {
+            if (lines.Count > 0)
+            {
+                lines.Add(string.Empty);
+            }
+
+            lines.Add("[Graphics Options]");
+            lines.Add(wanted);
+        }
+
+        Console.WriteLine($"added {wanted} to swkotor.ini");
+        return true;
     }
 
     public static void RestoreIni(string gameDirectory)
