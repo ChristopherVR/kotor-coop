@@ -676,6 +676,15 @@ public sealed record CoopConfig
     /// </summary>
     public bool SteamInvites { get; init; } = true;
 
+    /// <summary>
+    /// coop.ini <c>exe_mismatch</c> (`refuse`/`allow`), HOST only. False ("refuse", the
+    /// default) refuses a joiner whose running swkotor.exe differs (<c>E_EXE</c>); true
+    /// ("allow") admits them with a <c>W_EXE</c> warning on both screens, for widescreen and
+    /// other exe patches. A joiner's own value is never consulted: see
+    /// <see cref="KotorCoop.Protocol.ContentCompatibility.Compare"/>.
+    /// </summary>
+    public bool AllowExeMismatch { get; init; }
+
     // ── Digest-only keys ────────────────────────────────────────────────────────────────
     // Everything below is a PLUGIN-side key (docs/CONFIG.md's "Plugin-side keys" table,
     // PluginConfig.cs + per-controller reads) that this agent-side reader never acted on
@@ -901,7 +910,7 @@ public sealed record CoopConfig
         "enemy_health", "enemy_damage", "xp_rate", "store_stock", "store_prices",
         "hide_party_portraits", "status_toasts", "status_indicator", "chat_overlay",
         "chat_overlay_opacity", "chat_overlay_anchor", "chat_overlay_lines",
-        "chat_overlay_fade_ms", "steam_invites", "stun_servers", "upnp",
+        "chat_overlay_fade_ms", "steam_invites", "exe_mismatch", "stun_servers", "upnp",
         "world_transfer_udp_fallback", "log_max_mb",
         "log_keep", "auto_start_agent", "dinput8_next", "gamepad", "gamepad_cursor_speed",
     ];
@@ -1117,6 +1126,8 @@ public sealed record CoopConfig
             CreditsPersonal = creditsPersonal,
             CorpseLootPersonal = string.Equals(
                 kv.GetValueOrDefault("corpse_loot"), "personal", StringComparison.OrdinalIgnoreCase),
+            AllowExeMismatch = string.Equals(
+                kv.GetValueOrDefault("exe_mismatch"), "allow", StringComparison.OrdinalIgnoreCase),
             Pvp = kv.GetValueOrDefault("pvp") is { } pvpValue
                 && (string.Equals(pvpValue, "duel", StringComparison.OrdinalIgnoreCase)
                     || string.Equals(pvpValue, "arena", StringComparison.OrdinalIgnoreCase)),

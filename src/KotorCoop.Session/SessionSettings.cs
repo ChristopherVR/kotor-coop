@@ -135,6 +135,13 @@ public sealed record SessionSettings
     public bool RequireIdenticalSave { get; init; }
 
     /// <summary>
+    /// HOST only: admit a joiner whose running swkotor.exe differs, with a <c>W_EXE</c> warning,
+    /// instead of refusing with <c>E_EXE</c> — coop.ini <c>exe_mismatch = allow</c>
+    /// (<see cref="CoopConfig.AllowExeMismatch"/>). A client ignores it.
+    /// </summary>
+    public bool AllowExeMismatch { get; init; }
+
+    /// <summary>
     /// Session password. Empty means an open session. A host with a password admits only
     /// clients that present the same one; a client sends it in its join request. Reduced
     /// to a hash on the wire — a stranger-gate, not a security boundary.

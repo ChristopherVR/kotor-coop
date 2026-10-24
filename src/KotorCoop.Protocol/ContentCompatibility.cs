@@ -59,6 +59,10 @@ public enum CompatibilityCode
     /// <summary>The live GUI difficulty differs, so PC/party damage scaling can differ.</summary>
     Difficulty,
     Gameplay,
+
+    /// <summary>The running executables differ and the host admitted the peer anyway
+    /// (coop.ini <c>exe_mismatch = allow</c>): a patched exe may break any engine address.</summary>
+    Executable,
 }
 
 /// <summary>
@@ -92,6 +96,7 @@ public readonly record struct CompatibilityNote(
         CompatibilityCode.Modules => "W_MODULES",
         CompatibilityCode.Difficulty => "W_DIFFICULTY",
         CompatibilityCode.Gameplay => "W_GAMEPLAY",
+        CompatibilityCode.Executable => "W_EXE",
         _ => "W_NONE",
     };
 
@@ -186,7 +191,12 @@ public static class ContentCompatibility
     /// capability set. World-time facts (globals catalogue, save identity, per-module GIT)
     /// refine it later through <see cref="ApplyWorldMismatch"/>.
     /// </summary>
-    public static CompatibilityVerdict Compare(in ContentDigest local, in ContentDigest remote)
+    /// <param name="allowExeMismatch">Turns the one fatal check into a warning. The host passes
+    /// coop.ini <c>exe_mismatch = allow</c>; a client passes true, because it only compares
+    /// after a Welcome, and a host that refuses (every host older than this setting included)
+    /// never sends one to a mismatched exe.</param>
+    public static CompatibilityVerdict Compare(
+        in ContentDigest local, in ContentDigest remote, bool allowExeMismatch = false)
     {
         List<CompatibilityNote> notes = [];
         SessionCapabilities caps = SessionCapabilities.All;
@@ -225,9 +235,23 @@ public static class ContentCompatibility
         // strictly stronger — it also catches a runtime patcher a file hash never sees — and
         // it is the honest statement of what this check is actually about.
         // docs/research/steam-support.md §8.
+        //
+        // exe_mismatch = allow (a host's opt-in, for widescreen and other exe patches that
+        // rarely touch what the mod uses) admits the peer with a W_EXE note instead. Most
+        // detours check their own prologue bytes and refuse on a patched site; fixed-address
+        // reads and calls have no such guard, which is why this stays a loud warning.
         if (BothKnow(local, remote, ContentDigest.Field.Exe) && local.ExeDigest != remote.ExeDigest)
         {
-            return Refuse(RefusalReason.Executable);
+            if (!allowExeMismatch)
+            {
+                return Refuse(RefusalReason.Executable);
+            }
+
+            notes.Add(new CompatibilityNote(
+                CompatibilityCode.Executable,
+                SessionCapabilities.None,
+                $"swkotor.exe differs (image {local.ExeDigest:X8} here, {remote.ExeDigest:X8} on the peer); "
+                + "admitted because the host allows exe_mismatch, so engine addresses are unchecked"));
         }
 
         // ...and say so when it could NOT be checked. One side without a published image

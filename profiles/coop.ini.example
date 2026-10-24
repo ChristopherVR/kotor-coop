@@ -196,6 +196,13 @@ stun_servers = stun.l.google.com:19302,stun1.l.google.com:19302
 ; means "forward the port yourself" in the status line, not an error. 0 disables the attempt.
 upnp = 1
 
+; HOST only: what to do when a joiner's running swkotor.exe differs from yours ("E_EXE").
+; refuse (the default) turns them away. allow lets them in with a W_EXE warning on both
+; screens - for widescreen or other patches that edit the exe. The mod reads and calls the game
+; at fixed addresses, so a patch that moved one can misbehave or crash: mention it in bug reports.
+; Steam and GOG copies match already and need nothing here. A joiner's own value is ignored.
+exe_mismatch = refuse
+
 ; A CLIENT'S own fallback for auto_adopt_world: if adopting the host's world can't reach it
 ; over TCP at all (a UDP-only tunnel or NAT path forwards the co-op session's own UDP traffic
 ; fine but drops the separate TCP world-transfer connection - found live 2026-09-10 testing a

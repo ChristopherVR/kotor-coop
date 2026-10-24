@@ -129,6 +129,12 @@ fallback (they agree here — `CoopIniExampleDocSyncTests` checks it).
 | `stun_servers` | two well-known public servers¹² | HOST only: STUN servers asked for the host's public IP:port; empty disables discovery | [network-topology.md](research/network-topology.md) |
 | `upnp` | ON | HOST only: attempt a UPnP router port mapping; fails soft | [network-topology.md](research/network-topology.md) |
 
+### Compatibility
+
+| Key | Default (shipped) | Meaning | Doc |
+| --- | --- | --- | --- |
+| `exe_mismatch` | `refuse` | HOST only: `allow` admits a joiner whose running `swkotor.exe` differs (a widescreen or other exe patch) with a `W_EXE` warning instead of refusing with `E_EXE`; engine addresses are then unchecked. A joiner's own value is ignored | [steam-support.md](research/steam-support.md) §8 |
+
 ### Advanced
 
 | Key | Default (shipped) | Meaning | Doc |

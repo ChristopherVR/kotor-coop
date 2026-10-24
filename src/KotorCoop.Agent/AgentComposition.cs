@@ -298,6 +298,7 @@ internal static class AgentComposition
             Digest = digest,
             Behaviour = behaviourDigest,
             RequireIdenticalSave = options.RequireIdenticalSave,
+            AllowExeMismatch = config?.AllowExeMismatch ?? false,
             Password = sessionPassword.Length > 0 ? sessionPassword : fallbackPassword,
             PeerIdentity = peerIdentity,
             PvpArenaReady = arenaReady,

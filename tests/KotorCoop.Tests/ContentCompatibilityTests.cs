@@ -36,6 +36,44 @@ public class ContentCompatibilityTests
     }
 
     [Fact]
+    public void AnAllowedExecutableMismatchIsAdmittedWithAWarning()
+    {
+        // coop.ini exe_mismatch = allow: the refusal becomes a W_EXE note that costs no channel,
+        // and both digests are named so a bug report shows which build each side ran.
+        CompatibilityVerdict v = ContentCompatibility.Compare(
+            Digest(exe: 0xC6962619), Digest(exe: 0x12345678), allowExeMismatch: true);
+
+        Assert.True(v.Admitted);
+        Assert.Equal(SessionCapabilities.All, v.Allowed);
+        CompatibilityNote note = Assert.Single(v.Notes);
+        Assert.Equal(CompatibilityCode.Executable, note.Code);
+        Assert.Equal("W_EXE", note.Tag);
+        Assert.Contains("C6962619", note.Text);
+        Assert.Contains("12345678", note.Text);
+    }
+
+    [Fact]
+    public void AllowingAnExecutableMismatchAddsNothingWhenTheExecutablesMatch()
+    {
+        CompatibilityVerdict v = ContentCompatibility.Compare(Digest(), Digest(), allowExeMismatch: true);
+
+        Assert.True(v.Admitted);
+        Assert.Empty(v.Notes);
+    }
+
+    [Fact]
+    public void AllowingAnExecutableMismatchStillAppliesTheOtherRules()
+    {
+        CompatibilityVerdict v = ContentCompatibility.Compare(
+            Digest(exe: 1), Digest(exe: 2, appearance: 9), allowExeMismatch: true);
+
+        Assert.True(v.Admitted);
+        Assert.Contains(v.Notes, n => n.Code == CompatibilityCode.Executable);
+        Assert.Contains(v.Notes, n => n.Code == CompatibilityCode.Appearance);
+        Assert.False(v.Allowed.HasFlag(SessionCapabilities.Appearance));
+    }
+
+    [Fact]
     public void DifferentAppearanceTableDropsOnlyTheAppearanceChannel()
     {
         // A reordered appearance.2da would paint the wrong body or index off the end.
