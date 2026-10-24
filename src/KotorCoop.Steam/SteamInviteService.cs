@@ -58,6 +58,10 @@ public sealed class SteamInviteService : IDisposable
     /// <summary>This account's own SteamID64 while <see cref="IsActive"/>, else 0.</summary>
     public ulong SteamId64 => _native?.SteamId ?? 0;
 
+    /// <summary>Whether the last <see cref="TryActivate"/> failed only because
+    /// <c>steam_api64.dll</c> is missing, so a status reply can name that cause.</summary>
+    public bool LibraryMissing { get; private set; }
+
     /// <summary>
     /// Brings Steam up if it is not already, exactly once per process. A failed attempt is
     /// remembered: retrying every tick would mean a `LoadLibrary` per tick for the large
@@ -81,6 +85,7 @@ public sealed class SteamInviteService : IDisposable
         SteamNative native = new();
         if (!native.TryLoad(_appId, _log))
         {
+            LibraryMissing = native.LibraryMissing;
             native.Dispose();
             return false;
         }
