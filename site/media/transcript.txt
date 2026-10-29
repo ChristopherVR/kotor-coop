@@ -1,0 +1,53 @@
+KOTOR CO-OP — gameplay trailer
+
+00:00–00:14  Original title and crawl over a procedural starfield.
+KOTOR CO-OP. An experimental fan-made mod.
+A familiar galaxy. A friend beside you. Explore distant worlds.
+Face the same enemies. Share the adventure.
+Licensed orchestral music accompanies the opening, with quiet captured game ambience.
+
+00:14–00:23  EXPLORE TOGETHER — KORRIBAN
+Paired views show two characters moving forward in distinct armor.
+
+00:23–00:40  SHARE THE CONVERSATION — DANTOOINE
+One player is already speaking to Belaya. The second selects the same
+character and joins. The first chooses a reply. Both views follow Belaya
+as she describes her Jedi training and Master Zhar. Only the host game
+voice is mixed, so speech is not doubled; the licensed score is ducked beneath it.
+
+00:40–00:53  FIGHT SIDE BY SIDE — DANTOOINE
+Both players wield blue and yellow sabers against original kath hounds.
+Their initial shared enemy dies naturally; nearby combat continues.
+
+00:53–00:57  Closing title and project website.
+christophervr.github.io/kotor-coop
+KOTOR 1 required for each player.
+
+Scenes were staged using disposable saves and native development controls.
+God mode sustained combat filming. These shots do not demonstrate ordinary
+combat balance or full-campaign reliability. See provenance.json for hashes
+and per-shot evidence.
+
+
+LICENSED MUSIC MIX
+The picture and scene timing remain unchanged.
+Music: "Heroic Age" Kevin MacLeod (incompetech.com)
+Licensed under Creative Commons: By Attribution 4.0 License
+https://creativecommons.org/licenses/by/4.0/
+Source: https://incompetech.com/music/royalty-free/index.html?Search=Search&isrc=USUAN1100848
+Recording identifier: ISRC USUAN1100848
+
+Changes: excerpted, loudness adjusted, faded and volume-ducked for this trailer.
+The gameplay audio was recorded separately from the host game process.
+Kevin MacLeod composed and supplied the licensed music recording; the trailer
+edit, original title/crawl graphics and gameplay capture are separate work.
+No endorsement by the composer is implied.
+
+The full music license is included in music-license.txt. CC BY 4.0 section 1(a)
+expressly includes music synchronized with moving images as Adapted Material;
+section 2(a)(1) permits reproduction and sharing of that material, subject to
+the license conditions, including attribution and indication of changes.
+The music is offered without warranties, as stated in section 5 of the license.
+This music license does not license the underlying game's intellectual property.
+The project's separate restrictive software license does not apply to this music.
+Retain this credit and license link when sharing this trailer.

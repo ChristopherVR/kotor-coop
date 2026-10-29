@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#08090b">
+  <title>KOTOR Co-op — played together</title>
+  <meta name="description" content="An experimental co-op mod for Knights of the Old Republic. Your own character, a shared world, and a friend beside you.">
+  <meta property="og:title" content="KOTOR Co-op — played together">
+  <meta property="og:description" content="Your own character. A shared adventure. An experimental co-op mod for KOTOR 1 on Windows.">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header>
+    <a class="brand" href="./"><img src="favicon.svg" width="30" height="30" alt=""><span>KOTOR CO-OP</span></a>
+    <nav aria-label="Main navigation">
+      <a href="#experience">The experience</a><a href="#start">Getting started</a>
+      <a href="https://github.com/ChristopherVR/kotor-coop" class="external">GitHub ↗</a>
+    </nav>
+  </header>
+  <main id="main">
+    <section class="hero">
+      <div class="eyebrow"><span class="signal"></span> A FREE FAN MOD · EXPERIMENTAL BETA</div>
+      <h1>KOTOR,<br><em>played together.</em></h1>
+      <div class="hero-bottom">
+        <p class="lead">Return to Knights of the Old Republic with a friend. Explore, fight and share the story — each with your own character in one hosted world.</p>
+        <a class="button" href="#release">Release status <span>↗</span></a>
+      </div>
+      <div class="specs"><span>KOTOR 1 / v1.0.3</span><span>WINDOWS</span><span>GOG &amp; STEAM TARGETS</span><span>ONE GAME COPY PER PLAYER</span></div>
+    </section>
+
+    <figure class="gameplay" id="trailer">
+      <video controls playsinline preload="metadata" width="1920" height="1080" poster="media/trailer-poster.jpg" aria-label="KOTOR Co-op gameplay trailer">
+        <source src="media/trailer.mp4" type="video/mp4">
+        <a href="media/trailer.mp4">Watch the gameplay trailer</a>.
+      </video>
+      <figcaption>
+        <span>Two players. One adventure. Recorded gameplay from a staged two-instance playtest.</span>
+        <span><a href="media/transcript.txt">Scene transcript</a><br><a href="media/music-credits.txt">Music: “Heroic Age” · Kevin MacLeod · CC BY 4.0</a></span>
+      </figcaption>
+    </figure>
+
+    <section id="experience" class="section">
+      <div class="section-intro"><span class="eyebrow">01 / THE EXPERIENCE</span><h2>A familiar world.<br>A different party.</h2><p>One player hosts. Friends join as their own characters. The world follows the host; what you bring to it is yours.</p></div>
+      <div class="features">
+        <article><span class="number">01</span><h3>Travel together.</h3><p>See each other in the world, move between areas and face the same enemies. Quest progress keeps the party moving in the same direction.</p></article>
+        <article><span class="number">02</span><h3>Your character. Your gear.</h3><p>Your backpack and credits stay personal. Quest items are shared so the story can move forward together.</p></article>
+        <article><span class="number">03</span><h3>One conversation.<br>Everyone involved.</h3><p>The player who begins a conversation chooses the replies. The other player can select the same character to watch. Story scenes bring the party together.</p></article>
+        <article><span class="number">04</span><h3>Pick up where you left off.</h3><p>Co-op saving and automatic rejoining are implemented. Keep your own save backups: a crash can still cost unsaved progress.</p></article>
+      </div>
+    </section>
+
+    <section class="limits section" id="limits">
+      <span class="eyebrow">AN ADVENTURE STILL IN TESTING</span>
+      <div class="limits-grid"><h2>Start with two.<br>Expect rough edges.</h2><div><p>Selected early and later scenes have been tested. A complete co-op campaign has not yet been verified. Three-to-eight-player campaign reliability remains experimental.</p><p>Internet play may require port forwarding or a tunnel. Dialogue, containers, companion behavior and recovery still need wider ordinary-player testing.</p></div></div>
+      <div class="status-line"><span>2</span><p>players recommended<br>for your first session</p><span>8</span><p>player capacity<br>larger groups are experimental</p></div>
+    </section>
+
+    <section class="section" id="start">
+      <div class="section-intro"><span class="eyebrow">02 / GETTING STARTED</span><h2>A copy each.<br>A version in common.</h2><p>Check your game version, then run the one-click installer.</p></div>
+      <div class="guide-links"><a href="install.html">Installation guide →</a><a href="play.html">Host and join →</a><a href="limitations.html">Current limitations →</a></div>
+      <ol class="steps">
+        <li><h3>Own the game.</h3><p>Each player needs a lawfully acquired KOTOR 1 v1.0.3 installation on Windows. GOG and Steam are target installations.</p></li>
+        <li><h3>Back up your saves.</h3><p>Keep a separate copy of your saves before trying the beta. Use matching co-op versions and matching game mods for your first session.</p></li>
+        <li><h3>Host. Connect. Play.</h3><p>Once installed, use the in-game Co-op menu. One person hosts; the other connects. Follow the release’s installation and network instructions.</p></li>
+      </ol>
+    </section>
+
+    <section class="release section" id="release">
+      <div><span class="eyebrow">03 / DOWNLOADS</span><h2>One download.<br>One click.</h2><p>Download <code>kotor-coop-&lt;version&gt;-setup.exe</code> from the latest release, run it, and it finds your GOG or Steam copy and installs the mod. A plain ZIP is there too. The mod is also listed on Nexus Mods.</p></div>
+      <div class="release-detail"><span class="tag">LATEST RELEASE</span><p>Each release includes the setup program, a Windows ZIP, a Linux/Steam Deck tarball and SHA-256 checksums. Releases are built by GitHub Actions from the tagged source.</p><p class="muted">The files are not code-signed, so Windows SmartScreen may warn. Keep your antivirus enabled; report any detection for investigation.</p><a class="button" href="https://github.com/ChristopherVR/kotor-coop/releases">View releases <span>↗</span></a></div>
+    </section>
+
+    <section class="faq section" aria-labelledby="faq-heading">
+      <span class="eyebrow">A FEW THINGS TO KNOW</span><h2 id="faq-heading">Before you return.</h2>
+      <details><summary>Is the original game included?</summary><p>No. This is an unofficial mod. Every player needs their own lawful game installation; no game executable, keys or DRM bypass are supplied.</p></details>
+      <details><summary>Does this replace the single-player game?</summary><p>The mod loads alongside the game and hooks it while running. Back up saves before using the beta and follow the release’s removal instructions.</p></details>
+      <details><summary>Can I use Steam invites?</summary><p>Steam game support and the optional Steam invite feature are separate. Invites need their own setup and validation; a running Steam client alone does not provide the optional invite library. Direct joining is the baseline.</p></details>
+      <details><summary>Can I contribute?</summary><p>Yes. The mod’s original code is available under GNU GPLv3. Read the <a href="https://github.com/ChristopherVR/kotor-coop/blob/main/docs/CONTRIBUTING.md">contribution guide</a> for build instructions, tests and pull requests. Game assets and separately licensed material retain their own terms.</p></details>
+      <details><summary>Where do I report a problem?</summary><p><a href="https://github.com/ChristopherVR/kotor-coop/issues">Open a GitHub issue</a> with the release version and steps to reproduce it. Review logs before sharing; remove passwords, addresses and personal paths. For security reports, follow <a href="https://github.com/ChristopherVR/kotor-coop/blob/main/SECURITY.md">SECURITY.md</a>.</p></details>
+    </section>
+  </main>
+  <footer><a class="brand" href="./">KOTOR CO-OP</a><p>An unofficial fan project. Not endorsed by or affiliated with the game’s rights holders.<br>Game and trademark rights remain with their respective owners.</p><a href="https://github.com/ChristopherVR/kotor-coop/blob/main/LICENSE">Project license ↗</a></footer>
+</body>
+</html>
