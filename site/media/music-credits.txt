@@ -1,0 +1,20 @@
+Music: "Heroic Age" Kevin MacLeod (incompetech.com)
+Licensed under Creative Commons: By Attribution 4.0 License
+https://creativecommons.org/licenses/by/4.0/
+Source: https://incompetech.com/music/royalty-free/index.html?Search=Search&isrc=USUAN1100848
+Recording identifier: ISRC USUAN1100848
+
+Changes: excerpted, loudness adjusted, faded and volume-ducked for this trailer.
+The gameplay audio was recorded separately from the host game process.
+Kevin MacLeod composed and supplied the licensed music recording; the trailer
+edit, original title/crawl graphics and gameplay capture are separate work.
+No endorsement by the composer is implied.
+
+The full music license is included in music-license.txt. CC BY 4.0 section 1(a)
+expressly includes music synchronized with moving images as Adapted Material;
+section 2(a)(1) permits reproduction and sharing of that material, subject to
+the license conditions, including attribution and indication of changes.
+The music is offered without warranties, as stated in section 5 of the license.
+This music license does not license the underlying game's intellectual property.
+The project's separate restrictive software license does not apply to this music.
+Retain this credit and license link when sharing this trailer.

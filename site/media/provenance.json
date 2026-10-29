@@ -1,0 +1,373 @@
+{
+  "kind": "Actual gameplay trailer",
+  "audio": "Host-process gameplay audio plus licensed Heroic Age orchestral recording; music ducked under dialogue.",
+  "noInputs": [
+    "Extracted soundtrack files",
+    "Extracted logo",
+    "Microphone",
+    "Desktop loopback"
+  ],
+  "fontLicense": "DejaVu-LICENSE.txt",
+  "shots": [
+    {
+      "seconds": 14.0,
+      "kind": "intro",
+      "pictureFile": "intro-picture.mp4",
+      "pictureSha256": "afc98ddfbb7b2af1a508fb17c63b86dfaa75878b101de9a4cd5ab1e9fc2477fd",
+      "audioSourceFile": "gameplay.mp4",
+      "audioSourceSha256": "2b3a39212e6e2b542805f399fea310a39df0a0031407137611860728ca7e24b1",
+      "audioTrimStart": 0.0,
+      "audioGainDb": 8.0,
+      "note": "Original title typography and procedural starfield; audio is captured game ambience.",
+      "pluginSha256": [
+        "11ab747eff42e276e8a844e438cda4c3f7df3dcd784273e46175ea0fc0b64e87"
+      ],
+      "agentSha256": [
+        {
+          "executable": "b3238993000888f1c90495d25e27fce35cda5f0f07ab820b6f364cfc975fc79f",
+          "assembly": "255af9c2a2907537cf561804fff0c36bd62c306d3f19e2a59e048a86164bebc4"
+        }
+      ],
+      "start": 0
+    },
+    {
+      "start": 14.0,
+      "seconds": 9.0,
+      "caption": "EXPLORE TOGETHER",
+      "location": "KORRIBAN",
+      "sourceFile": "gameplay.mp4",
+      "sourceSha256": "258353aee9945395e03f3092776f4fad6e45784d8e1f451d402df311f0a73020",
+      "sourceTrimStart": 0.5,
+      "captureDateUtc": "2026-10-24T04:36:30.252830+00:00",
+      "captions": [
+        {
+          "at": 0,
+          "text": "EXPLORE TOGETHER"
+        }
+      ],
+      "gameExecutableSha256": [
+        "d3432b321dbde12a35c46a7a7b4795b5f947c6fe90e3a7a30c382d6c173e381a",
+        "d3432b321dbde12a35c46a7a7b4795b5f947c6fe90e3a7a30c382d6c173e381a"
+      ],
+      "pluginSha256": [
+        "11ab747eff42e276e8a844e438cda4c3f7df3dcd784273e46175ea0fc0b64e87",
+        "11ab747eff42e276e8a844e438cda4c3f7df3dcd784273e46175ea0fc0b64e87"
+      ],
+      "agentSha256": [
+        {
+          "executable": "b3238993000888f1c90495d25e27fce35cda5f0f07ab820b6f364cfc975fc79f",
+          "assembly": "255af9c2a2907537cf561804fff0c36bd62c306d3f19e2a59e048a86164bebc4"
+        },
+        {
+          "executable": "083f2e583bee36624fd392514136c19756afbeac426cac6532d9e35352c81ec8",
+          "assembly": "255af9c2a2907537cf561804fff0c36bd62c306d3f19e2a59e048a86164bebc4"
+        }
+      ],
+      "evidence": "Two connected players in distinct armor travel steadily in the same direction; peer movement is visible in the paired views. Capture measured 29.4 fresh pairs per second.",
+      "staging": "Disposable owned-game Trailer saves; host warp to Korriban; teleport to parallel starting positions; both native walkto actions started before capture. Auto-follow off. Native cursor centered, virtual pad off, chat overlay temporarily disabled and restored. God mode inherited from combat staging. Armor supplied for readability; no normal campaign-progression claim."
+    },
+    {
+      "start": 23.0,
+      "seconds": 17.15,
+      "caption": "SHARE THE CONVERSATION",
+      "location": "DANTOOINE",
+      "sourceFile": "gameplay.mp4",
+      "sourceSha256": "713a420e3745369824b7d907efe583b7fa1928eca80d0e186a2ae7e4266422bd",
+      "sourceTrimStart": 0.0,
+      "captureDateUtc": "2026-10-24T04:30:41.572662+00:00",
+      "captions": [
+        {
+          "at": 0,
+          "text": "ONE PLAYER STARTS THE CONVERSATION"
+        },
+        {
+          "at": 3,
+          "text": "SELECT THE SAME CHARACTER TO JOIN"
+        },
+        {
+          "at": 6,
+          "text": "SHARE THE CONVERSATION"
+        }
+      ],
+      "gameExecutableSha256": [
+        "d3432b321dbde12a35c46a7a7b4795b5f947c6fe90e3a7a30c382d6c173e381a",
+        "d3432b321dbde12a35c46a7a7b4795b5f947c6fe90e3a7a30c382d6c173e381a"
+      ],
+      "pluginSha256": [
+        "11ab747eff42e276e8a844e438cda4c3f7df3dcd784273e46175ea0fc0b64e87",
+        "11ab747eff42e276e8a844e438cda4c3f7df3dcd784273e46175ea0fc0b64e87"
+      ],
+      "agentSha256": [
+        {
+          "executable": "b3238993000888f1c90495d25e27fce35cda5f0f07ab820b6f364cfc975fc79f",
+          "assembly": "255af9c2a2907537cf561804fff0c36bd62c306d3f19e2a59e048a86164bebc4"
+        },
+        {
+          "executable": "083f2e583bee36624fd392514136c19756afbeac426cac6532d9e35352c81ec8",
+          "assembly": "255af9c2a2907537cf561804fff0c36bd62c306d3f19e2a59e048a86164bebc4"
+        }
+      ],
+      "evidence": "Host holds an ordinary Belaya conversation while joiner is outside in world view. Joiner selects the same NPC and enters that conversation. Host chooses the reply; both screens advance to the same native lines. Verified follower adoption and nodes 18 to 24 to 25; host reply serial increased, joiner local reply serial stayed unchanged. Capture measured 20.625 fresh pairs per second.",
+      "staging": "Disposable Trailer saves; scene and positions staged before capture. Native mouse clicks at observed coordinates select/join the NPC at 3 and 4 seconds, then choose the host reply at 10 seconds. Host process audio only, without doubled joiner voice. Cut ends at the measured gap before the next utterance; no full-campaign reliability claim."
+    },
+    {
+      "start": 40.15,
+      "seconds": 13.0,
+      "caption": "FIGHT SIDE BY SIDE",
+      "location": "DANTOOINE",
+      "sourceFile": "gameplay.mp4",
+      "sourceSha256": "352c889c4c93cea97ba4515f51e6ae28d4a2d83fc250975465b9b556b7b4a130",
+      "sourceTrimStart": 0.5,
+      "captureDateUtc": "2026-10-24T04:34:55.303466+00:00",
+      "captions": [
+        {
+          "at": 0,
+          "text": "FIGHT SIDE BY SIDE"
+        }
+      ],
+      "gameExecutableSha256": [
+        "d3432b321dbde12a35c46a7a7b4795b5f947c6fe90e3a7a30c382d6c173e381a",
+        "d3432b321dbde12a35c46a7a7b4795b5f947c6fe90e3a7a30c382d6c173e381a"
+      ],
+      "pluginSha256": [
+        "11ab747eff42e276e8a844e438cda4c3f7df3dcd784273e46175ea0fc0b64e87",
+        "11ab747eff42e276e8a844e438cda4c3f7df3dcd784273e46175ea0fc0b64e87"
+      ],
+      "agentSha256": [
+        {
+          "executable": "b3238993000888f1c90495d25e27fce35cda5f0f07ab820b6f364cfc975fc79f",
+          "assembly": "255af9c2a2907537cf561804fff0c36bd62c306d3f19e2a59e048a86164bebc4"
+        },
+        {
+          "executable": "083f2e583bee36624fd392514136c19756afbeac426cac6532d9e35352c81ec8",
+          "assembly": "255af9c2a2907537cf561804fff0c36bd62c306d3f19e2a59e048a86164bebc4"
+        }
+      ],
+      "evidence": "Both players visibly swing blue and yellow sabers against original kath hounds. The initial shared target receives verified peer damage and dies naturally; native fighting continues against nearby enemies. Capture measured 29.611 fresh pairs per second.",
+      "staging": "Host warp to Dantooine; teleport, distinct armor, blue/yellow sabers and native attack requests staged before capture. Both initially attack the same mapped original kath hound. God mode enabled with a minimum-health floor to sustain filming. No forced target damage or slay during the take. This demonstrates visible shared combat, not ordinary combat balance."
+    },
+    {
+      "seconds": 4.0,
+      "kind": "outro",
+      "pictureFile": "outro-picture.mp4",
+      "pictureSha256": "55bb93df75a17608459ea3ba8efa2091ad8f34cbad5c1c79093c2f34fe3962de",
+      "audioSourceFile": "gameplay.mp4",
+      "audioSourceSha256": "2b3a39212e6e2b542805f399fea310a39df0a0031407137611860728ca7e24b1",
+      "audioTrimStart": 12.0,
+      "audioGainDb": 8.0,
+      "note": "Original title typography and procedural starfield; audio is captured game ambience.",
+      "pluginSha256": [
+        "11ab747eff42e276e8a844e438cda4c3f7df3dcd784273e46175ea0fc0b64e87"
+      ],
+      "agentSha256": [
+        {
+          "executable": "b3238993000888f1c90495d25e27fce35cda5f0f07ab820b6f364cfc975fc79f",
+          "assembly": "255af9c2a2907537cf561804fff0c36bd62c306d3f19e2a59e048a86164bebc4"
+        }
+      ],
+      "start": 53.15
+    }
+  ],
+  "durationSeconds": 57.15,
+  "buildNote": "Recorded from the disposable development rig on 2026-10-24. These capture hashes are not the separately scanned release candidate. Staged scenes do not establish full campaign reliability.",
+  "sha256": {
+    "trailer.mp4": "103be8dafc20388eef418ef44a94cf0c76e3cc856d7dafb6ff5b60f995635cb6",
+    "trailer-poster.jpg": "a097fac4725bc4d9906acfd176bf189dc14201f223cfffff2b83557748492a06",
+    "transcript.txt": "2f1251af5d6e261f88101bc9ec5b14be71f81a90e97839ffdac99c351db7e822",
+    "music-credits.txt": "b29034085d4bcd2dafcc36ecf2c385e872ef34fdfa5f637dcea0cf5b5ffc40ec",
+    "music-license.txt": "9ba9550ad48438d0836ddab3da480b3b69ffa0aac7b7878b5a0039e7ab429411",
+    "DejaVu-LICENSE.txt": "f88d5294af5a772f9114eb385009e3478d62b21f3e5bbc34d159d328047c8867"
+  },
+  "review": {
+    "reviewedAtUtc": "2026-10-24T04:48:40.678509+00:00",
+    "status": "Scored trailer prepared for authorized publication",
+    "visual": "Sequential source frames and all final scenes checked: steady forward paired movement, actual joiner conversation adoption, both native combat swings, title/crawl and closing card.",
+    "audio": "Licensed score plus undoubled host-process audio. Measured -14.61 LUFS, -1.29 dBTP; score is more than 15 dB below game sound during the selected spoken line. Signal checks only; no subjective listening claim.",
+    "decode": "Full H.264/AAC decode completed without errors.",
+    "durationSeconds": 57.209,
+    "resolution": "1920x1080",
+    "containerFps": 30,
+    "freshSourceFps": {
+      "movement": 29.4166666667,
+      "dialogue": 20.625,
+      "combat": 29.6111111111
+    },
+    "publication": "No public media copy, export or upload performed.",
+    "pictureUnchanged": true,
+    "audioMetrics": {
+      "checkedAtUtc": "2026-10-24T04:49:20.643699+00:00",
+      "integratedLufs": -14.61,
+      "truePeakDbtp": -1.29,
+      "loudnessRangeLu": 6.7,
+      "samplePeakDbfs": -1.3,
+      "sections": {
+        "opening": {
+          "start": 1,
+          "end": 13,
+          "mixRmsDbfs": -17.71,
+          "scoreRmsDbfs": -17.75,
+          "gameRmsDbfs": -36.31
+        },
+        "running": {
+          "start": 15,
+          "end": 22,
+          "mixRmsDbfs": -20.59,
+          "scoreRmsDbfs": -22.83,
+          "gameRmsDbfs": -24.38
+        },
+        "dialogue": {
+          "start": 23,
+          "end": 40.15,
+          "mixRmsDbfs": -15.55,
+          "scoreRmsDbfs": -48.3,
+          "gameRmsDbfs": -15.51
+        },
+        "spokenLine": {
+          "start": 33,
+          "end": 40,
+          "mixRmsDbfs": -14.79,
+          "scoreRmsDbfs": -50.45,
+          "gameRmsDbfs": -14.71
+        },
+        "combat": {
+          "start": 41,
+          "end": 53,
+          "mixRmsDbfs": -15.74,
+          "scoreRmsDbfs": -29.46,
+          "gameRmsDbfs": -15.89
+        },
+        "outro": {
+          "start": 53.65,
+          "end": 55.4,
+          "mixRmsDbfs": -15.43,
+          "scoreRmsDbfs": -15.4,
+          "gameRmsDbfs": -43.51
+        }
+      },
+      "subjectiveListening": false,
+      "fullDecodeErrors": "",
+      "videoStreamIdenticalToFinal02": true
+    }
+  },
+  "music": {
+    "title": "Heroic Age",
+    "composerAndRecordingProvider": "Kevin MacLeod (incompetech.com)",
+    "isrc": "USUAN1100848",
+    "sourceUrl": "https://incompetech.com/music/royalty-free/index.html?Search=Search&isrc=USUAN1100848",
+    "downloadUrl": "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Heroic%20Age.mp3",
+    "sourceSha256": "d0bbd367ab8c6d744e18f317df12de67e1b40f8b5d1c3812d7025eec9e9a0e7b",
+    "license": "CC BY 4.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
+    "licenseFile": "music-license.txt",
+    "licenseSha256": "9ba9550ad48438d0836ddab3da480b3b69ffa0aac7b7878b5a0039e7ab429411",
+    "creditsFile": "music-credits.txt",
+    "retrievedAtUtc": "2026-10-24T04:46:27.2280579Z",
+    "changes": "Excerpt starting at 0 seconds, loudness adjusted, faded, ducked and mixed with separately captured game sound.",
+    "musicGainEnvelope": [
+      [
+        0,
+        0
+      ],
+      [
+        0.25,
+        1.25
+      ],
+      [
+        13.4,
+        1.25
+      ],
+      [
+        14.4,
+        0.63
+      ],
+      [
+        21.7,
+        0.63
+      ],
+      [
+        22.7,
+        0.055
+      ],
+      [
+        40.15,
+        0.055
+      ],
+      [
+        41.15,
+        0.5
+      ],
+      [
+        52.65,
+        0.5
+      ],
+      [
+        53.65,
+        1.25
+      ],
+      [
+        55.4,
+        1.25
+      ],
+      [
+        57.15,
+        0
+      ]
+    ],
+    "gameGainEnvelope": [
+      [
+        0,
+        0.12
+      ],
+      [
+        13.4,
+        0.12
+      ],
+      [
+        14,
+        1
+      ],
+      [
+        23,
+        1
+      ],
+      [
+        24,
+        1.12
+      ],
+      [
+        39.9,
+        1.12
+      ],
+      [
+        40.15,
+        1
+      ],
+      [
+        53.15,
+        1
+      ],
+      [
+        53.65,
+        0.12
+      ],
+      [
+        55.4,
+        0.12
+      ],
+      [
+        57.15,
+        0
+      ]
+    ],
+    "privateEvidenceSha256": {
+      "track-page.html": "0aaccc3d496fc4ae189e27e3fe2d4f5216266e3bcccf2e0ba77fb1b57a28fa94",
+      "faq.html": "f5fb799a8c719568be80dab1edb201dbe6e91309c786b2d100e9cce3fe171ba6",
+      "Heroic Age.mp3": "d0bbd367ab8c6d744e18f317df12de67e1b40f8b5d1c3812d7025eec9e9a0e7b",
+      "music-license.txt": "9ba9550ad48438d0836ddab3da480b3b69ffa0aac7b7878b5a0039e7ab429411",
+      "pieces.json": "54802ad340562624b9d1c9c97aa9f005e2b9bf79001f8a1a07ed857e68b2164a",
+      "rendered-track-page.json": "45a19ddce6fb8c8a22125f10dca4138f4eb5f216350a662594d734e246458b00"
+    }
+  },
+  "pictureSourceSha256": "fa8e73e39417258ba02514678268ac11ca50754415b0714b4b452da25d96ecda",
+  "encodedVideoHash": "SHA256=be0d359c3140920f739387141ca26b63c14558a30e8843f7a2a25fdf386733fb"
+}
