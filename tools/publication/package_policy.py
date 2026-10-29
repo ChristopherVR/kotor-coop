@@ -1,7 +1,7 @@
-"""Strict boundary between private development and public Windows downloads.
+"""Strict inventory of the Windows release zip.
 
-Only the enumerated runtime files may leave this repository. No git history,
-recordings, source, symbols or diagnostic logs are publication inputs.
+Only the enumerated runtime files may ship in the player package. No git history,
+recordings, source, symbols or diagnostic logs are package inputs.
 """
 import hashlib
 import io
@@ -173,8 +173,6 @@ def inspect_package_bytes(payload, archive_name, version, root=ROOT, extract=Non
                 raise ValueError("Oversized package entry")
             data = z.read(entry)
             source = SOURCE_FILES.get(entry.filename) or BINARY_FILES.get(entry.filename)
-            if entry.filename == 'KotorCoop.LEGAL.txt' and (root / 'site/public/LEGAL.md').is_file():
-                source = 'site/public/LEGAL.md'
             if source and data != (root / source).read_bytes():
                 raise ValueError(f"Stale or modified publication input: {entry.filename}")
             if entry.filename == "README.txt" and data != expected_readme:

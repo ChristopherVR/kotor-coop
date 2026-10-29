@@ -14,8 +14,8 @@ and the collected notice bundle. See [exact provenance](third-party/address-data
 for the matching historical revision and current license revision. The matched
 historical revision did not contain LICENSE; this records the current upstream
 license, not a claim that the original import already carried that notice.
-The database is a private development reference and is not included in player
-archives or the separate public repository. The upstream grant does not supply
+The database is a development reference (`tools/kotor1_0_3.db`) and is not included in player
+archives. The upstream grant does not supply
 rights in the game itself.
 
 Restored agent metadata inspected on 2026-10-03 declares MIT for Terminal.Gui,

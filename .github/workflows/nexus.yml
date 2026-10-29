@@ -1,0 +1,41 @@
+# Optional: push a published GitHub release's zip to Nexus Mods. Manual only.
+# Setup and the manual route are in nexus/README.md. Verify the inputs below against
+# https://github.com/Nexus-Mods/upload-action before the first run; Nexus maintains them.
+name: Nexus upload
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to upload, e.g. v0.1.0-beta.3'
+        required: true
+permissions:
+  contents: read
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    env:
+      NEXUSMODS_API_KEY: ${{ secrets.NEXUSMODS_API_KEY }}
+      NEXUSMODS_FILE_ID: ${{ secrets.NEXUSMODS_FILE_ID }}
+    steps:
+      - name: Check configuration
+        run: |
+          if [ -z "$NEXUSMODS_API_KEY" ] || [ -z "$NEXUSMODS_FILE_ID" ]; then
+            echo 'Add the NEXUSMODS_API_KEY and NEXUSMODS_FILE_ID secrets (see nexus/README.md).'
+            exit 1
+          fi
+      - name: Download the release zip
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "${{ inputs.tag }}" --repo "$GITHUB_REPOSITORY" --pattern '*-windows.zip' --dir nexus-upload
+          ls -l nexus-upload
+      - name: Upload to Nexus Mods
+        uses: Nexus-Mods/upload-action@v1
+        with:
+          api_key: ${{ secrets.NEXUSMODS_API_KEY }}
+          file_id: ${{ secrets.NEXUSMODS_FILE_ID }}
+          filename: nexus-upload/*-windows.zip
+          version: ${{ inputs.tag }}
+          display_name: KOTOR Co-op ${{ inputs.tag }}
+          file_category: main
+          description: See the GitHub release notes for this version.

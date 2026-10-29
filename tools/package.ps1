@@ -26,9 +26,9 @@
 # from a bug report back into file/line, and a publish only produces them alongside a fresh
 # build, not on demand later. See docs/research/proton.md for why the exe is self-contained.
 #
-# Does NOT touch a game install and does NOT run the game. Public publication uses
-# Publish-PublicRelease.ps1 to rebuild, scan and verify the reviewed snapshot.
-# The symbols zip stays private and is never attached to a public player release.
+# Does NOT touch a game install and does NOT run the game. Releases are built by
+# .github/workflows/release.yml, which calls this script on the tagged commit.
+# The symbols zip is never attached to a release.
 #
 #   pwsh tools\package.ps1                 # dist\kotor-coop-<git describe>-windows.zip + -linux.tar.gz
 #                                          # (+ -setup.exe when Inno Setup 6 is installed; see

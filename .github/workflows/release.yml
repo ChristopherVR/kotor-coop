@@ -1,24 +1,25 @@
-# Private development workflow. Reviewed Windows binaries, scan evidence and exact
-# GPL corresponding source are sent to the independent public repository.
-# Private Git refs/history never cross over; source must already be cleanly exported.
-name: Public release candidate
+# Cut a release by pushing a tag that matches the VERSION file:
+#
+#   (edit VERSION, write docs/release-notes/public-playtest-<VERSION>.md, commit)
+#   git tag v<VERSION> && git push origin v<VERSION>
+#
+# The workflow builds from that exact tag, runs the tests, packages the one-click
+# setup.exe, the Windows zip and the Linux tarball, checks the packaged installer,
+# writes SHA256SUMS.txt and creates the GitHub release. GitHub attaches the tagged source
+# archive to every release; that archive is the GPL "corresponding source" for the binaries.
+# Run it by hand (workflow_dispatch) to rehearse everything except publishing.
+name: Release
 on:
+  push:
+    tags: ['v*']
   workflow_dispatch:
-    inputs:
-      reviewed_for_public_release:
-        description: 'Confirm asset, legal, gameplay and release-note review is complete'
-        type: boolean
-        required: true
-        default: false
 permissions:
-  contents: read
+  contents: write
 concurrency:
-  group: public-release-candidate
+  group: release
   cancel-in-progress: false
 jobs:
-  candidate:
-    if: inputs.reviewed_for_public_release
-    environment: public-release
+  release:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -27,15 +28,19 @@ jobs:
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
-      - name: Validate configuration
+
+      - name: Check version
+        id: version
         shell: pwsh
-        env:
-          PUBLIC_RELEASE_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
         run: |
-          if (-not $env:PUBLIC_RELEASE_TOKEN) { throw 'Configure a token limited to Contents write on ChristopherVR/kotor-coop in the public-release environment.' }
           $version = (Get-Content VERSION -Raw).Trim()
-          if ($version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') { throw 'Invalid VERSION' }
-          if (-not (Test-Path "docs/release-notes/public-playtest-$version.md")) { throw 'Reviewed standalone public release notes are required.' }
+          if ($version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') { throw "Invalid VERSION: $version" }
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -cne "v$version") {
+            throw "Tag $env:GITHUB_REF_NAME does not match VERSION ($version)."
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "prerelease=$($version.Contains('-').ToString().ToLower())" >> $env:GITHUB_OUTPUT
+
       - name: Build and test
         shell: pwsh
         run: |
@@ -45,11 +50,83 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m unittest discover -s tools/publication -p 'test_*.py'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Rebuild, scan and create a draft in the public repository
+
+      - name: Ensure Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y }
+          if (-not (Test-Path $iscc)) { throw 'Inno Setup 6 is not available' }
+
+      - name: Package
+        shell: pwsh
+        run: |
+          pwsh tools/package.ps1 -Version '${{ steps.version.outputs.version }}' -WarnAsError -OutDir dist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($suffix in 'setup.exe', 'windows.zip', 'linux.tar.gz') {
+            if (-not (Test-Path "dist/kotor-coop-${{ steps.version.outputs.version }}-$suffix")) { throw "Missing $suffix" }
+          }
+
+      - name: Verify the packaged installer
+        shell: pwsh
+        run: |
+          Expand-Archive -LiteralPath "dist/kotor-coop-${{ steps.version.outputs.version }}-windows.zip" -DestinationPath artifacts/windows-package
+          pwsh tools/verify-package.ps1 -PackageDirectory artifacts/windows-package -WorkDirectory artifacts/windows-installer-check
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged installer verification failed' }
+
+      # Defender on the runner scans the zip and its extracted files. Informational: a
+      # runner whose definitions cannot update must not block a release, but a detection
+      # is visible in the log and the report is attached when it was produced.
+      - name: Antivirus scan (Windows Defender)
+        id: scan
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          pwsh tools/Scan-PublicPackage.ps1 -Archive "dist/kotor-coop-${{ steps.version.outputs.version }}-windows.zip" -Version '${{ steps.version.outputs.version }}' -OutputDirectory artifacts/scan
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Checksums and release notes
+        shell: pwsh
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          Set-Location dist
+          $files = Get-ChildItem "kotor-coop-$version-setup.exe", "kotor-coop-$version-windows.zip", "kotor-coop-$version-linux.tar.gz"
+          $files | ForEach-Object { "$((Get-FileHash $_ -Algorithm SHA256).Hash.ToLower())  $($_.Name)" } | Set-Content -Encoding ascii SHA256SUMS.txt
+          if (Test-Path ../artifacts/scan/scan-report.json) { Copy-Item ../artifacts/scan/scan-report.json . }
+          $notes = @("../docs/release-notes/public-playtest-$version.md", "../docs/release-notes/v$version.md") | Where-Object { Test-Path $_ } | Select-Object -First 1
+          $body = if ($notes) { Get-Content $notes -Raw } else { '' }
+          $body += @"
+
+          ---
+          **Install:** run ``kotor-coop-$version-setup.exe`` (it finds your GOG or Steam copy), or extract the ZIP into its own folder and run ``KotorCoop.Agent.exe``. Steam Deck / Linux: use the tarball and its ``install.sh``.
+          **Verify:** compare the SHA-256 of what you downloaded with ``SHA256SUMS.txt``. The files are not code-signed, so SmartScreen may warn.
+          **Source:** the "Source code" archive on this release is the exact corresponding source for these binaries (GPL-3.0-only with the KOTOR 1 linking permission).
+          Experimental software: back up your saves before first use.
+          "@
+          Set-Content -Encoding utf8 ../release-notes.md $body
+
+      - name: Publish the GitHub release
+        if: github.ref_type == 'tag'
         shell: pwsh
         env:
-          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          $version = (Get-Content VERSION -Raw).Trim()
-          pwsh tools/Publish-PublicRelease.ps1 -Version $version -Directory artifacts/public-candidate -NotesFile "docs/release-notes/public-playtest-$version.md" -ReleaseReviewed
+          $version = '${{ steps.version.outputs.version }}'
+          $assets = @(Get-ChildItem dist/kotor-coop-$version-setup.exe, dist/kotor-coop-$version-windows.zip, dist/kotor-coop-$version-linux.tar.gz, dist/SHA256SUMS.txt, dist/scan-report.json -ErrorAction SilentlyContinue | ForEach-Object FullName)
+          $flags = @()
+          if ('${{ steps.version.outputs.prerelease }}' -eq 'true') { $flags += '--prerelease' }
+          gh release create "$env:GITHUB_REF_NAME" @assets --title "kotor-coop $version" --notes-file release-notes.md @flags
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # For a manual rehearsal the packages are kept for a few days instead of published.
+      - name: Keep rehearsal packages
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-rehearsal
+          path: |
+            dist/kotor-coop-*-setup.exe
+            dist/kotor-coop-*-windows.zip
+            dist/kotor-coop-*-linux.tar.gz
+            dist/SHA256SUMS.txt
+          retention-days: 3
