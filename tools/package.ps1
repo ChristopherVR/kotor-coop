@@ -204,9 +204,7 @@ Copy-Item (Join-Path $repo 'THIRD-PARTY-NOTICES.md') (Join-Path $staging 'KotorC
     -AgentDepsPath (Join-Path $agentPublishDir '..\KotorCoop.Agent.deps.json') `
     -PluginAssetsPath (Join-Path $repo 'src\KotorCoop.Plugin\obj\project.assets.json') `
     -Destination (Join-Path $staging 'KotorCoop.THIRD-PARTY-NOTICES.txt')
-$legalSource = Join-Path $repo 'site\public\LEGAL.md'
-if (-not (Test-Path -LiteralPath $legalSource -PathType Leaf)) { $legalSource = Join-Path $repo 'docs\LEGAL.md' }
-Copy-Item -LiteralPath $legalSource -Destination (Join-Path $staging 'KotorCoop.LEGAL.txt')
+Copy-Item -LiteralPath (Join-Path $repo 'docs\LEGAL.md') -Destination (Join-Path $staging 'KotorCoop.LEGAL.txt')
 Copy-Item (Join-Path $PSScriptRoot 'install.ps1') (Join-Path $staging 'install.ps1')
 Copy-Item (Join-Path $PSScriptRoot 'KotorCoop.CollectLogs.cmd') (Join-Path $staging 'KotorCoop.CollectLogs.cmd')
 # Settings migration runs in the agent; no separate PowerShell drift table is required.
