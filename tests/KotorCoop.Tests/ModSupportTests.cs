@@ -132,6 +132,8 @@ public sealed class ModSupportTests : IDisposable
         File.WriteAllText(texture, "texture A");
         var a = ModContentManifest.Compute(_directory);
         File.WriteAllText(texture, "texture B");
+        // Same size: bump the mtime so the size + mtime manifest cache sees the change.
+        File.SetLastWriteTimeUtc(texture, File.GetLastWriteTimeUtc(texture).AddSeconds(5));
         var b = ModContentManifest.Compute(_directory);
         Assert.Equal(a.Digest(file => file.Gameplay), b.Digest(file => file.Gameplay));
         Assert.NotEqual(a.Digest(_ => true), b.Digest(_ => true));
