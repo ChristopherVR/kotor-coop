@@ -17,13 +17,13 @@ connect. Friends drop in and drop out of the same world.
 > and [Other KOTOR co-op projects](#other-kotor-co-op-projects) before you invest an evening in it.
 
 [Website and player guides](https://christophervr.github.io/kotor-coop/) ·
-[Latest release](https://github.com/ChristopherVR/kotor-coop/releases/latest) ·
+[Latest release](https://github.com/ChristopherVR/kotor-coop/releases) ·
 [Limitations](docs/limitations.md) · [Troubleshooting](docs/TROUBLESHOOTING.md)
 
 ## Install (one click)
 
 1. Download **`kotor-coop-<version>-setup.exe`** from the
-   [latest release](https://github.com/ChristopherVR/kotor-coop/releases/latest) (it is also on Nexus Mods).
+   [latest release](https://github.com/ChristopherVR/kotor-coop/releases) (it is also on Nexus Mods).
 2. Close KOTOR and run it. It finds your GOG or Steam copy (or lets you pick the folder), shows a
    short options page, and installs. Say yes to the firewall question if you want to host.
 3. Start KOTOR and press **Co-op** on the main menu.
@@ -225,8 +225,10 @@ Full design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ### Releases
 
-A release is a tag. Push `v<VERSION>` and GitHub Actions rebuilds from it, runs the tests and installer
-checks, and publishes `setup.exe`, the zip, the tarball and `SHA256SUMS.txt`. The release checklist is
+Every push to `main` that passes CI automatically increments the release version and publishes
+`setup.exe`, the Windows zip, the Linux tarball and `SHA256SUMS.txt` on GitHub, then uploads the
+installer to Nexus Mods and updates the mod page's version. Beta releases appear in the
+[releases list](https://github.com/ChristopherVR/kotor-coop/releases). The release checklist is
 [docs/RELEASE-READINESS.md](docs/RELEASE-READINESS.md). The Nexus Mods listing text and upload steps are
 in [nexus/](nexus/README.md).
 

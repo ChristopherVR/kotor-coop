@@ -146,12 +146,25 @@ The release checklist and remaining live gates are in
 CI builds, tests and packages every branch push and pull request (`.github/workflows/ci.yml`),
 including the graphical `setup.exe`, the Windows zip, the Linux tarball and the installer checks.
 
-A release is a tag. Bump `VERSION`, write `docs/release-notes/public-playtest-<VERSION>.md`, then
-`git tag v<VERSION> && git push origin v<VERSION>`; `.github/workflows/release.yml` rebuilds from the
-tag, re-runs the tests and installer checks, and publishes the files with `SHA256SUMS.txt`.
-Rehearse with **Actions > Release > Run workflow** on a branch. `VERSION` is the numbered release;
-local snapshots carry a commit suffix. See [RELEASE-READINESS.md](RELEASE-READINESS.md) for the
-checklist and [../nexus/README.md](../nexus/README.md) for the Nexus Mods listing.
+Every push to `main`, including site-only changes, publishes after CI succeeds. The Release
+workflow checks out that exact tested commit, increments the highest version tag (for example,
+`0.1.0-beta.3` to `0.1.0-beta.4`, or `0.1.0` to `0.1.1`), and stamps `VERSION` in a release-only
+commit. Its tag contains the exact source and version used to build the packages. Nothing is
+committed back to `main`; `VERSION` there is a baseline. Raise it above existing tags to start
+a new version series or promote a beta to stable. A retry of the same source reuses its tag.
+
+Release re-runs the build, tests and Windows installer checks before publishing `setup.exe`,
+the Windows zip, Linux tarball, `SHA256SUMS.txt` and the Nexus installer zip. It then uploads
+the installer to Nexus, archives the previous file version and updates the mod page's version.
+Missing Nexus configuration fails that job; retry **failed jobs** after fixing configuration.
+Pending releases queue together through Nexus publication (GitHub's maximum queue is 100).
+
+**Actions > Release > Run workflow** on `main` publishes by default. Check **dry_run** to
+rehearse on any branch and keep packages for three days without publishing. Explicit `v<VERSION>`
+tag pushes remain supported and must match the tagged `VERSION` file. Optional notes live in
+`docs/release-notes/public-playtest-<version>.md` or `docs/release-notes/v<version>.md`.
+Local snapshots still carry a commit suffix. See [RELEASE-READINESS.md](RELEASE-READINESS.md)
+for the checklist and [../nexus/README.md](../nexus/README.md) for the Nexus Mods listing.
 
 ## Running the live rig
 

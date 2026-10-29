@@ -1,25 +1,28 @@
 # Release readiness
 
 kotor-coop is an **experimental beta**, developed and released from this one repository.
-This page says what a release must pass before the tag is pushed, and what stays
+This page says what a release must pass before publication, and what stays
 unverified and is disclosed instead.
 
-## Before pushing a release tag
+## Before pushing to main
 
-1. `VERSION` is bumped and `docs/release-notes/public-playtest-<VERSION>.md` is written.
-   The notes stand alone for a reader who has never seen the repo.
+1. Every successful push CI on `main` triggers a release. The workflow increments the highest
+   release tag automatically; raise `VERSION` above it only to select a new version series.
+   Optional `docs/release-notes/public-playtest-<version>.md` notes should stand alone for a
+   reader who has never seen the repo. Without them the workflow supplies installation notes.
 2. `dotnet build KotorCoop.slnx -warnaserror` and `pwsh src/KotorCoop.Plugin/build.ps1 -WarnAsError`
    are clean (the solution build does not compile the plugin), and
    the **full** suite passes on your machine with `pwsh tools/test-full.ps1` (CI skips the four heaviest
    real-socket classes, tagged `LocalOnly`, to keep CI around five minutes of tests).
 3. The Release workflow's packaged-installer check passes (`tools/verify-package.ps1`).
-   It runs automatically on the tag; rehearse it first with **Actions > Release > Run workflow**
-   on a branch, which builds everything and keeps the packages for three days instead of publishing.
+   It runs automatically before publication; rehearse it with **Actions > Release > Run workflow**
+   and **dry_run** checked, which keeps the packages for three days instead of publishing.
 4. Run the affected scenarios from [live-verification.md](live-verification.md) on a two-instance
    rig with the exact packaged bytes, and record what you ran. Mark anything not run **unverified**.
-5. `git tag v<VERSION> && git push origin v<VERSION>`. The workflow publishes the setup program,
+5. Push to `main`. After CI succeeds, the workflow publishes the setup program,
    Windows zip, Linux tarball and `SHA256SUMS.txt` to a GitHub release (a prerelease while the
-   version has a `-beta` suffix). Then upload to Nexus Mods by following [nexus/README.md](../nexus/README.md).
+   version has a `-beta` suffix). It then uploads to Nexus Mods and updates the mod page's version;
+   see [nexus/README.md](../nexus/README.md) for one-time configuration.
 
 Releases are built from the tag by GitHub Actions, never from a developer machine. The files are
 not code-signed. The tagged source archive that GitHub attaches to the release is the GPL

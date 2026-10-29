@@ -47,7 +47,7 @@ Suggested page fields:
 
 ## One-time setup for the automated upload
 
-The `nexus` job in `.github/workflows/release.yml` runs after every tagged release and uses the
+The `nexus` job in `.github/workflows/release.yml` runs after every GitHub release and uses the
 [Nexus Mods upload action](https://github.com/Nexus-Mods/upload-action):
 
 1. On the mod page, upload a first file by hand (any zip) so a **file group** exists.
@@ -55,6 +55,12 @@ The `nexus` job in `.github/workflows/release.yml` runs after every tagged relea
    (Settings > Secrets and variables > Actions > Variables).
 3. Put your Nexus API key in the repository **secret** `NEXUSMODS_API_KEY`.
 
-Without both, the job logs a warning and is skipped; the GitHub release is unaffected. The
-description on Nexus is the release notes as plain text. The page description itself
+Every successful push CI on `main` triggers an incremented release. Manual Release runs on
+`main` also publish unless **dry_run** is checked. The upload uses the version from the release
+job, archives the previous file version and sets `update_mod_version: true` so the mod page
+shows the new version too. The Nexus zip is downloaded from the GitHub release assets.
+
+Without both settings, the Nexus job fails visibly; the GitHub release remains available.
+Fix configuration and use **Re-run failed jobs** to retry the Nexus upload. The description
+on Nexus is the release notes as plain text. The page description itself
 (`description.bbcode`) is pasted by hand and is not touched by the workflow.

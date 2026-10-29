@@ -1,51 +1,63 @@
-# Cut a release by pushing a tag that matches the VERSION file:
-#
-#   (edit VERSION, write docs/release-notes/public-playtest-<VERSION>.md, commit)
-#   git tag v<VERSION> && git push origin v<VERSION>
-#
-# The workflow builds from that exact tag, runs the tests, packages the one-click
-# setup.exe, the Windows zip and the Linux tarball, checks the packaged installer,
-# writes SHA256SUMS.txt and creates the GitHub release. GitHub attaches the tagged source
-# archive to every release; that archive is the GPL "corresponding source" for the binaries.
-# Run it by hand (workflow_dispatch) to rehearse everything except publishing.
-#
-# After the GitHub release, the `nexus` job uploads a zip holding the one-click setup.exe to
-# the Nexus Mods page (mod 1910) with the Nexus-Mods/upload-action, archiving the previous
-# file version. It needs the NEXUSMODS_API_KEY secret and the NEXUS_FILE_ID repository
-# variable (the numeric id of the mod page's main file group, created once by hand: see
-# nexus/README.md). Without either, that job is skipped with a warning, not failed.
+# Every successful push CI on main publishes an incremented release, then updates Nexus.
+# Check out the tested SHA, not the moving main tip. A release-only commit stamps VERSION
+# so the tagged source matches the binaries, without a bot commit/push loop on main.
+# Manual runs publish on main by default; dry_run explicitly rehearses on any branch.
 name: Release
 on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build and verify without publishing (allowed on any branch)
+        type: boolean
+        default: false
 permissions:
   contents: write
 concurrency:
   group: release
   cancel-in-progress: false
+  # Preserve pending releases when several pushes finish CI during another release.
+  queue: max
 jobs:
   release:
+    if: >-
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository) ||
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
     steps:
+      - name: Validate manual publication target
+        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main' && !inputs.dry_run
+        shell: pwsh
+        run: throw 'Manual publication requires main. Select dry_run to rehearse another branch.'
+
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           fetch-depth: 0
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.113'  # exact: the SDK picks the runtime pack, and third-party/manifest.json audits 10.0.13
 
-      - name: Check version
+      - name: Prepare release version and source tag
         id: version
         shell: pwsh
         run: |
-          $version = (Get-Content VERSION -Raw).Trim()
-          if ($version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') { throw "Invalid VERSION: $version" }
-          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -cne "v$version") {
-            throw "Tag $env:GITHUB_REF_NAME does not match VERSION ($version)."
-          }
-          "version=$version" >> $env:GITHUB_OUTPUT
-          "prerelease=$($version.Contains('-').ToString().ToLower())" >> $env:GITHUB_OUTPUT
+          $arguments = @()
+          if ($env:GITHUB_REF_TYPE -eq 'tag') { $arguments = @('--tag', $env:GITHUB_REF_NAME) }
+          python tools/publication/release_version.py @arguments
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build and test
         shell: pwsh
@@ -138,33 +150,40 @@ jobs:
           Compress-Archive -Path "$stage/*" -DestinationPath "artifacts/nexus/kotor-coop-$version-nexus.zip" -Force
           $notes = if (Test-Path release-notes.md) { Get-Content release-notes.md -Raw } else { '' }
           $notes = ($notes -replace '(?m)^#+\s*', '' -replace '\*\*', '' -replace '`', '').Trim()
-          "KOTOR Co-op $version`n`n$notes`n`nSource and checksums: https://github.com/${{ github.repository }}/releases/tag/$env:GITHUB_REF_NAME" |
+          "KOTOR Co-op $version`n`n$notes`n`nSource and checksums: https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.tag }}" |
             Set-Content -Encoding utf8 artifacts/nexus/description.txt
 
-      - name: Keep the Nexus file for the upload job
-        if: github.ref_type == 'tag'
-        uses: actions/upload-artifact@v7
-        with:
-          name: nexus
-          path: artifacts/nexus/*
-          retention-days: 3
-
       - name: Publish the GitHub release
-        if: github.ref_type == 'tag'
+        if: ${{ !inputs.dry_run }}
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $version = '${{ steps.version.outputs.version }}'
-          $assets = @(Get-ChildItem dist/kotor-coop-$version-setup.exe, dist/kotor-coop-$version-windows.zip, dist/kotor-coop-$version-linux.tar.gz, dist/SHA256SUMS.txt, dist/scan-report.json -ErrorAction SilentlyContinue | ForEach-Object FullName)
+          $tag = '${{ steps.version.outputs.tag }}'
+          git push origin "refs/tags/$tag"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Keep published bytes on retries; resume a draft if an asset upload was interrupted.
+          $existing = gh release view $tag --json isDraft 2>$null
+          $exists = $LASTEXITCODE -eq 0
+          if ($exists -and -not ($existing | ConvertFrom-Json).isDraft) { exit 0 }
+          $assets = @(Get-ChildItem dist/kotor-coop-$version-setup.exe, dist/kotor-coop-$version-windows.zip, dist/kotor-coop-$version-linux.tar.gz, dist/SHA256SUMS.txt, artifacts/nexus/* | ForEach-Object FullName)
+          if (Test-Path dist/scan-report.json) { $assets += (Resolve-Path dist/scan-report.json).Path }
           $flags = @()
           if ('${{ steps.version.outputs.prerelease }}' -eq 'true') { $flags += '--prerelease' }
-          gh release create "$env:GITHUB_REF_NAME" @assets --title "kotor-coop $version" --notes-file release-notes.md @flags
+          if (-not $exists) {
+            gh release create $tag --draft --verify-tag --title "kotor-coop $version" --notes-file release-notes.md @flags
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          gh release upload $tag @assets --clobber
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          gh release edit $tag --draft=false
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "Published https://github.com/${{ github.repository }}/releases/tag/$tag" >> $env:GITHUB_STEP_SUMMARY
 
       # For a manual rehearsal the packages are kept for a few days instead of published.
       - name: Keep rehearsal packages
-        if: github.ref_type != 'tag'
+        if: inputs.dry_run
         uses: actions/upload-artifact@v7
         with:
           name: release-rehearsal
@@ -175,59 +194,73 @@ jobs:
             dist/SHA256SUMS.txt
           retention-days: 3
 
-  # Uploads to Nexus Mods and archives the previous version. Never cancelled, and a newer
-  # run queues behind it so two uploads cannot race on the archive-existing-version step.
+  # The workflow-level queue serializes GitHub and Nexus publication together.
   nexus:
     needs: release
-    if: github.ref_type == 'tag'
+    if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
-    concurrency:
-      group: release-nexus
-      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ needs.release.outputs.tag }}
     steps:
-      # `if:` can read vars but not secrets, so resolve both here into one step output.
+      - name: Check whether this release already reached Nexus
+        id: published
+        run: |
+          published=$(gh release view "$RELEASE_TAG" --json assets --jq 'any(.assets[]; .name == "nexus-published.json")')
+          echo "done=$published" >> "$GITHUB_OUTPUT"
+
       - name: Check for Nexus Mods credentials
-        id: gate
+        if: steps.published.outputs.done != 'true'
         env:
           NEXUSMODS_API_KEY: ${{ secrets.NEXUSMODS_API_KEY }}
           FILE_ID: ${{ vars.NEXUS_FILE_ID }}
         run: |
-          if [ -n "$NEXUSMODS_API_KEY" ] && [ -n "$FILE_ID" ]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::NEXUSMODS_API_KEY secret and/or NEXUS_FILE_ID variable not set; skipping the Nexus Mods upload."
+          if [ -z "$NEXUSMODS_API_KEY" ] || ! [[ "$FILE_ID" =~ ^[0-9]+$ ]]; then
+            echo "::error::Set NEXUSMODS_API_KEY and a numeric NEXUS_FILE_ID; Nexus publication is required."
+            exit 1
           fi
 
-      - name: Download the Nexus file
-        if: steps.gate.outputs.enabled == 'true'
-        uses: actions/download-artifact@v8
-        with:
-          name: nexus
-          path: nexus
+      # Use the immutable release assets, including on retries, with no Actions storage dependency.
+      - name: Download the published Nexus file
+        if: steps.published.outputs.done != 'true'
+        run: gh release download "$RELEASE_TAG" --pattern '*-nexus.zip' --pattern 'description.txt' --dir nexus
 
-      - name: Read the version
+      - name: Read the description
+        if: steps.published.outputs.done != 'true'
         id: version
-        if: steps.gate.outputs.enabled == 'true'
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          delimiter="NEXUS_$(cat /proc/sys/kernel/random/uuid)"
           {
-            echo "body<<__NEXUS_EOF__"
+            echo "body<<$delimiter"
             cat nexus/description.txt
-            echo "__NEXUS_EOF__"
+            echo "$delimiter"
           } >> "$GITHUB_OUTPUT"
 
       - name: Upload to Nexus Mods (mod 1910)
-        if: steps.gate.outputs.enabled == 'true'
+        if: steps.published.outputs.done != 'true'
+        id: upload
         uses: Nexus-Mods/upload-action@v1.0.0-beta.11
         with:
           api_key: ${{ secrets.NEXUSMODS_API_KEY }}
           file_id: ${{ vars.NEXUS_FILE_ID }}
-          filename: nexus/kotor-coop-${{ steps.version.outputs.version }}-nexus.zip
-          version: ${{ steps.version.outputs.version }}
-          display_name: KOTOR Co-op ${{ steps.version.outputs.version }} (one-click installer)
+          filename: nexus/kotor-coop-${{ needs.release.outputs.version }}-nexus.zip
+          version: ${{ needs.release.outputs.version }}
+          display_name: KOTOR Co-op ${{ needs.release.outputs.version }} (one-click installer)
           description: ${{ steps.version.outputs.body }}
           category: main
           primary_mod_manager_download: true
           archive_existing_version: true
+          update_mod_version: true
+
+      - name: Record the Nexus publication for retries
+        if: steps.published.outputs.done != 'true'
+        env:
+          NEXUS_VERSION_ID: ${{ steps.upload.outputs.version_id }}
+          RELEASE_VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          test -n "$NEXUS_VERSION_ID" || { echo '::error::Nexus returned no version ID'; exit 1; }
+          jq -n --arg version "$RELEASE_VERSION" --arg id "$NEXUS_VERSION_ID" \
+            '{version: $version, nexusVersionId: $id}' > nexus-published.json
+          gh release upload "$RELEASE_TAG" nexus-published.json --clobber
+          echo "Published KOTOR Co-op $RELEASE_VERSION to https://www.nexusmods.com/mod/1910" >> "$GITHUB_STEP_SUMMARY"
