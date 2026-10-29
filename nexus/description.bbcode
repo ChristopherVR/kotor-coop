@@ -1,0 +1,49 @@
+[center][size=6][b]KOTOR Co-op[/b][/size]
+[size=4]Seamless drop-in, drop-out co-op for Star Wars: Knights of the Old Republic[/size][/center]
+
+[b][color=#ff9900]EXPERIMENTAL BETA.[/color][/b] Read [b]What to expect[/b] below before you install. Back up your saves first.
+
+[size=5][b]What it does[/b][/size]
+Two to eight people each run their own copy of KOTOR 1 and play in one shared world, each as their own character. It is modelled on the Elden Ring "seamless co-op" style of mod: nobody sets up a server, and there is no lobby to leave the game for. You start the game, press [b]Co-op[/b] on the main menu, and host or connect. Players can drop in and out.
+
+[list]
+[*]See each other as real in-game characters, walk through the same doors and fly to the same planets
+[*]Fight the same enemies (they scale up with more players) and watch the same conversations
+[*]Your own backpack and credits; quest items, doors, chests, the journal and merchant stock are shared
+[*]Saving, loading, quitting to the menu and even the host crashing are handled; the other player rejoins on its own
+[*]In-game console (~) and chat (Enter)
+[*]Works with GOG and Steam copies, version 1.0.3. KOTOR 2 is not touched.
+[/list]
+
+[size=5][b]Install[/b][/size]
+[b]Easiest:[/b] download [b]kotor-coop-<version>-setup.exe[/b], close KOTOR, and run it. It finds your GOG or Steam copy, lets you pick the folder if it cannot, and installs. Say yes to the firewall question if you want to host.
+
+[b]Prefer a zip:[/b] download the Windows zip, extract it into its [i]own[/i] folder (not over the game), and run [b]KotorCoop.Agent.exe[/b]. It does the same job as the setup program.
+
+Then start KOTOR and press [b]Co-op[/b] on the main menu: [b]Host[/b], or pick your friend's server and [b]Connect[/b]. Over the internet, use a tunnel program such as playit.gg (there is no relay server).
+
+[b]Both players need the same mod version.[/b] If another mod already uses [i]dinput8.dll[/i] (ReShade, an ASI loader and similar) the installer detects it and sets the two up side by side. To remove the mod, use the uninstaller in Windows "Installed apps", or run [i]KotorCoop.Agent.exe uninstall[/i].
+
+[size=5][b]What to expect[/b][/size]
+[list]
+[*]This is a hobby experiment released as open source. [b]A complete two-player run from start to finish has not been played yet.[/b] The early game and selected later scenes have been tried on two real copies; expect rough edges.
+[*]One conversation at a time: whoever starts it chooses the replies.
+[*]The host leads the party. Minigames (Pazaak, swoop racing, turrets) are single-seat.
+[*]The game runs at its own 800x600 size in co-op; wide-screen resolutions fell back to 800x600 when tried.
+[*]The files are not code-signed, so Windows SmartScreen may warn ("More info", then "Run anyway"). Compare the SHA-256 on the GitHub release page if you want to check. Please report antivirus detections rather than adding exclusions.
+[/list]
+The honest, area-by-area list is in the project's limitations page (linked below).
+
+[size=5][b]How it works, and other co-op mods[/b][/size]
+This began as an experiment in how far a 2003 game can be taken purely by scanning and hooking its memory; the mod is a side effect. The game executable on disk is never changed. A small plugin loaded as [i]dinput8.dll[/i] hooks the running game, and an external helper talks to the other players. There are other, more recent KOTOR co-op projects built on different approaches (a dedicated server; an engine re-implementation), and they may well do better in the long run. This one is open source (GPL-3.0), so take whatever is useful.
+
+[size=5][b]Links[/b][/size]
+[list]
+[*]Source, issues and full documentation: https://github.com/ChristopherVR/kotor-coop
+[*]Player guides: https://christophervr.github.io/kotor-coop/
+[*]Current limitations: https://github.com/ChristopherVR/kotor-coop/blob/main/docs/limitations.md
+[*]Troubleshooting: https://github.com/ChristopherVR/kotor-coop/blob/main/docs/TROUBLESHOOTING.md
+[/list]
+
+[size=5][b]Permissions and credits[/b][/size]
+Licensed GPL-3.0-only with an additional KOTOR 1 linking permission. You may fork, modify and redistribute under those terms. Third-party notices ship inside the package. This is an unofficial fan project and is not endorsed by or affiliated with the game's rights holders. It contains no game files; you need your own copy of the game.

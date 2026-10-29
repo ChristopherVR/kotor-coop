@@ -1,7 +1,7 @@
 # Corresponding source
 
 Every official GPL player download must have a matching project source archive,
-`CORRESPONDING-SOURCE.md` and `corresponding-source.json` beside the Windows ZIP.
+this document. For this repository the source archive is the release tag's "Source code" download, which GitHub attaches to every release.
 Use the archive for that exact release rather than the moving default branch.
 The source includes original mod code, checked-in generated assets, their
 generators, and the scripts that control compilation and installation.
@@ -22,5 +22,5 @@ The game and optional Steam API DLL are not included in either archive.
 See [GNU GPL version 3, section 6](https://www.gnu.org/licenses/gpl-3.0.html#section6)
 for object-code source-delivery terms. The release-specific section below and its
 JSON companion provide the immutable project revision and dependency directions.
-Report an unavailable source link through the public repository so it can be
+Report an unavailable source link through the repository issue tracker so it can be
 restored. Do not treat a newer source tree as a replacement for missing release source.

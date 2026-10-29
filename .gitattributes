@@ -27,4 +27,4 @@ third-party/grammar-origins.json text eol=lf
 third-party/embedded-resource-provenance.json text eol=lf
 
 # Reviewed trailer provenance hashes include its accompanying credit/license files.
-site/public/media/* -text
+site/media/* -text

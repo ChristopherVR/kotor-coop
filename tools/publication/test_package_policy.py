@@ -179,14 +179,6 @@ class PackagePolicyTests(unittest.TestCase):
             with self.subTest(data=data), self.assertRaisesRegex(ValueError, "Stale.*README.txt"):
                 self.inspect(self.archive({"README.txt": data}))
 
-    def test_curated_public_legal_takes_precedence_over_private_review(self):
-        legal = self.root / 'site/public/LEGAL.md'
-        legal.parent.mkdir(parents=True)
-        legal.write_bytes(b'Public legal scope\n')
-        self.inspect(self.archive({'KotorCoop.LEGAL.txt': legal.read_bytes()}))
-        with self.assertRaisesRegex(ValueError, 'Stale.*KotorCoop.LEGAL.txt'):
-            self.inspect()
-
     def test_rejects_version_not_declared_by_checkout(self):
         with self.assertRaisesRegex(ValueError, "match VERSION"):
             self.inspect(version="9.9.9", archive_name="kotor-coop-9.9.9-windows.zip")

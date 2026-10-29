@@ -1,8 +1,7 @@
-# KOTOR Co-op 0.1.0-beta.3 — experimental public playtest candidate
+# KOTOR Co-op 0.1.0-beta.3 — experimental public playtest
 
-These are prepared release notes, not an announcement that a download is available.
-The first public build is intended for volunteer testing by two players on Windows.
-It is not a stable release or a verified complete co-op campaign.
+This is the first public build, intended for volunteer testing by two players on Windows.
+It is experimental: not a stable release and not a verified complete co-op campaign.
 
 Each player needs a lawful KOTOR 1 v1.0.3 installation and the same mod package.
 Back up saves first. Use a separate test save rather than your only campaign copy.
@@ -24,8 +23,7 @@ The Windows candidate built from source commit
 `59e6e2b687a35819f95f172de027bb057ee0feb0` passed a warnings-as-errors build,
 234 focused Steam/join/boss tests and 50 packaged-installer checks. Defender scanned
 both the ZIP and extracted files with no detections on 24 October 2026. These results
-apply to that exact candidate, not subsequent menu/loader changes. Publication must
-rebuild and rescan the final selected source before supplying the release files.
+apply to that exact candidate, not subsequent menu/loader changes. The release workflow rebuilds from the tagged source.
 
 Controlled two-instance testing on one PC demonstrated direct joining, automatic
 world adoption, entering an existing conversation, shared enemy damage/death, and

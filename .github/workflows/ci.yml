@@ -1,7 +1,7 @@
 name: CI
 
 # A site-only change (site/, published by pages.yml) does not need a 20-minute native
-# build. Releases require separate manual promotion of a tested tag.
+# build. Releases are cut by pushing a v* tag (release.yml).
 on:
   push:
     branches: ['**']
@@ -27,7 +27,7 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Test publication boundary
+      - name: Test package policy
         run: python -m unittest discover -s tools/publication -p 'test_*.py'
 
       - name: Build solution
@@ -48,9 +48,22 @@ jobs:
       # an analyzer warning in the plugin (a CA2014 stackalloc-in-loop, say) fails the job
       # rather than scrolling past in a log. The MSVC x86 toolset the native builds need ships
       # on windows-latest; tools/devenv.ps1 finds it through vswhere.
-      - name: Package releases (Windows zip + Linux tarball)
+      # package.ps1 builds the graphical setup.exe only when Inno Setup's ISCC.exe is found.
+      # Install it when the runner image lacks it, so a missing compiler can never silently
+      # drop the one-click installer from the package.
+      - name: Ensure Inno Setup
         shell: pwsh
-        run: pwsh tools/package.ps1 -WarnAsError -OutDir dist
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y }
+          if (-not (Test-Path $iscc)) { throw 'Inno Setup 6 is not available' }
+
+      - name: Package releases (setup.exe + Windows zip + Linux tarball)
+        shell: pwsh
+        run: |
+          pwsh tools/package.ps1 -WarnAsError -OutDir dist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Get-ChildItem dist/kotor-coop-*-setup.exe)) { throw 'setup.exe was not built' }
 
       - name: Verify packaged Windows installer
         shell: pwsh
@@ -70,6 +83,7 @@ jobs:
         with:
           name: kotor-coop
           path: |
+            dist/kotor-coop-*-setup.exe
             dist/kotor-coop-*-windows.zip
             dist/kotor-coop-*-linux.tar.gz
           if-no-files-found: error

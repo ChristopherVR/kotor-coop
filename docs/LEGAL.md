@@ -1,4 +1,4 @@
-# Rights, licensing and public-release status
+# Rights, licensing and release status
 
 ## Current decision — 24 October 2026
 
@@ -8,13 +8,18 @@ On 24 October 2026, in response to a question explicitly covering ownership and 
 
 This unofficial fan project claims no endorsement by or affiliation with Lucasfilm, Disney, LucasArts, BioWare, Electronic Arts, Aspyr or other game rights holders. Each player needs a lawfully acquired, properly licensed game. The code license supplies no game license or permission to distribute game copies, keys, cracks or DRM bypasses. Game assets and trademarks retain their owners' rights; separately licensed material retains its own terms.
 
-## Distribution boundary
+## Distribution
 
-Private development/history remains at ChristopherVR/kotor-coop-dev. The separate public ChristopherVR/kotor-coop has independent history. At this update it contains player information, Pages and reviewed gameplay media, with no public player binary. An explicit schema-2 source-export allowlist prepares a clean current source/build/test snapshot; final committed inputs, integrated export validation and an exported-checkout build/test remain necessary. This does not authorize mirroring private Git history. See [PUBLICATION.md](PUBLICATION.md) and the [distribution review](research/distribution-review-2026-10-24.md).
+The project is developed and released from a single public repository, `ChristopherVR/kotor-coop`.
+Releases are built from tags by GitHub Actions. The repository contains no game files, extracted game
+music, voices, textures or models. Earlier private development used a separate repository with
+research recordings and game-derived media; that material was left out when the repository was made
+public and its history was not carried over.
 
-Private legacy recordings, extracted music/voices in media/trailer/audio/, the extracted media/trailer/logo.png, diagnostics, game files and unreviewed research remain excluded. The rejected original illustrative overview was deleted from the current public tree but remains in its earlier independent public history. The current trailer contains captured game picture, dialogue and ambience as well as separately licensed music; its rights question is distinct from source/binary publication.
+The current trailer contains captured game picture, dialogue and ambience as well as separately
+licensed music; its rights question is distinct from the source and binary release.
 
-The boss's procedural Cairn Sentinel geometry, animation and synthesized nonverbal audio replace prior character assets. Generated GFF blueprints record their stock field-layout/default references rather than embedding game media or compiled scripts. The address database has recorded exact-byte provenance and the current upstream MIT notice; it is not in the planned minimal source snapshot or player ZIP. These controls do not establish permission for the mod as a whole.
+The boss's procedural Cairn Sentinel geometry, animation and synthesized nonverbal audio replace prior character assets. Generated GFF blueprints record their stock field-layout/default references rather than embedding game media or compiled scripts. The address database has recorded exact-byte provenance and the current upstream MIT notice; it is not in the player ZIP. These controls do not establish permission for the mod as a whole.
 
 ## Identified game/store and media uncertainty
 

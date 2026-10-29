@@ -1,0 +1,2 @@
+0.1.0-beta.3
+- First public release. Experimental beta; see the GitHub release notes for known limitations.

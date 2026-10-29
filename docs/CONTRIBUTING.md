@@ -2,7 +2,7 @@
 
 ## Contribution permissions
 
-Read [LICENSE](../LICENSE). Fork the public repository, make a development branch,
+Read [LICENSE](../LICENSE). Fork the repository, make a branch,
 and open a pull request. Original-code contributions are submitted under the
 GPL version 3 only with the [KOTOR 1 linking permission](../KOTOR-LINKING-EXCEPTION.txt).
 By intentionally submitting original work for inclusion, you expressly apply
@@ -144,19 +144,15 @@ The latest local release-verification results and remaining live gates are in
 [release-verification-2026-10-03.md](release-verification-2026-10-03.md) and
 [RELEASE-READINESS.md](RELEASE-READINESS.md).
 
-CI validates branch pushes and pull requests in the private `kotor-coop-dev`
-repository. Public distribution uses the separate `ChristopherVR/kotor-coop`
-repository, with fresh history and curated files only. See [PUBLICATION.md](PUBLICATION.md)
-for the exact procedure. The former tested-tag promotion workflow is retired.
+CI builds, tests and packages every branch push and pull request (`.github/workflows/ci.yml`),
+including the graphical `setup.exe`, the Windows zip, the Linux tarball and the installer checks.
 
-The manual **Public release candidate** workflow runs build/tests, then freshly
-packages and scans the Windows ZIP and creates a draft in the public repository.
-It requires reviewed release notes and a target-scoped `PUBLIC_RELEASE_TOKEN` in
-its `public-release` environment. The local equivalent is
-`tools/Publish-PublicRelease.ps1`. Source is exported separately through the
-explicit source-snapshot policy; neither release path publishes historical recordings,
-symbols or private Actions logs. `VERSION` is the numbered release version;
-private development snapshots may still have a commit suffix.
+A release is a tag. Bump `VERSION`, write `docs/release-notes/public-playtest-<VERSION>.md`, then
+`git tag v<VERSION> && git push origin v<VERSION>`; `.github/workflows/release.yml` rebuilds from the
+tag, re-runs the tests and installer checks, and publishes the files with `SHA256SUMS.txt`.
+Rehearse with **Actions > Release > Run workflow** on a branch. `VERSION` is the numbered release;
+local snapshots carry a commit suffix. See [RELEASE-READINESS.md](RELEASE-READINESS.md) for the
+checklist and [../nexus/README.md](../nexus/README.md) for the Nexus Mods listing.
 
 ## Running the live rig
 
