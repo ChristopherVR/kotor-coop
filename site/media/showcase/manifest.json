@@ -2,7 +2,7 @@
   "source": "../trailer.mp4",
   "sourceSha256": "103be8dafc20388eef418ef44a94cf0c76e3cc856d7dafb6ff5b60f995635cb6",
   "captureProvenance": "../provenance.json",
-  "note": "Silent, real-time excerpts of staged two-instance gameplay on one PC. God mode sustained combat filming; no normal combat balance or full-campaign claim.",
+  "note": "Silent staged gameplay on two local game copies and disposable saves. Original trailer combat used god mode. New captures override the source, filter and provenance per clip; labeled cuts omit loading and save waits. No full-campaign or independent internet-play claim.",
   "filter": "fps=10,scale=720:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=96[p];[b][p]paletteuse=dither=bayer:bayer_scale=3",
   "loop": 0,
   "clips": [
@@ -26,6 +26,125 @@
       "durationSeconds": 6,
       "bytes": 3446013,
       "sha256": "a196fd8bf7fe9f878861072da9a4e356601e5cb22f675299812bf6eace4662b0"
+    },
+    {
+      "file": "host-from-menu.gif",
+      "source": "host-from-menu.mp4",
+      "sourceSha256": "9787e2ddbc6785dedd18df4a704dd179f92d80e23736293405690418328b2654",
+      "captureProvenance": "capture-20261030.json",
+      "startSeconds": 0,
+      "durationSeconds": 9.5,
+      "filter": "fps=10,split[a][b];[a]palettegen=max_colors=128[p];[b][p]paletteuse=dither=bayer:bayer_scale=3:diff_mode=rectangle",
+      "bytes": 1864904,
+      "sha256": "8a73b6a170731b450b6b83cb33f0e3f3a5cbdfacc4c0abdde351e74fbdf74234",
+      "edits": [
+        {
+          "source": "host-menu-complete",
+          "startSeconds": 0,
+          "durationSeconds": 4.5,
+          "label": "Co-op > Host"
+        },
+        {
+          "source": "host-menu-complete",
+          "startSeconds": 14.5,
+          "durationSeconds": 5,
+          "label": "Hosting / loading omitted"
+        }
+      ]
+    },
+    {
+      "file": "create-character.gif",
+      "source": "create-character.mp4",
+      "sourceSha256": "6f78b99668e9b1295a0b1f25f2924a44326fcc317a11c8e360cd7dc6266c3d2d",
+      "captureProvenance": "capture-20261030.json",
+      "startSeconds": 0,
+      "durationSeconds": 10.0,
+      "filter": "fps=10,split[a][b];[a]palettegen=max_colors=128[p];[b][p]paletteuse=dither=bayer:bayer_scale=3:diff_mode=rectangle",
+      "bytes": 2144799,
+      "sha256": "fdb1d5ede6fbf3d7d873bd20b32bf0e6be5bd547d9cc9aeadf33a5f13651e0ed",
+      "edits": [
+        {
+          "source": "choose-character",
+          "startSeconds": 0,
+          "durationSeconds": 3.5,
+          "label": "Choose a class"
+        },
+        {
+          "source": "customise-character",
+          "startSeconds": 0,
+          "durationSeconds": 6.5,
+          "label": "Choose a portrait / cut"
+        }
+      ]
+    },
+    {
+      "file": "personal-inventory.gif",
+      "source": "personal-inventory.mp4",
+      "sourceSha256": "bba6a2c4411240fe2b5111175fa1d2870d249befd1fef51839d6b4ae5adb8cde",
+      "captureProvenance": "capture-20261030.json",
+      "startSeconds": 0,
+      "durationSeconds": 9.5,
+      "filter": "fps=10,split[a][b];[a]palettegen=max_colors=128[p];[b][p]paletteuse=dither=bayer:bayer_scale=3:diff_mode=rectangle",
+      "bytes": 2187863,
+      "sha256": "883e1e0f6df99ddf9e02895f58f9fc28fda3c18fa08c0966b60b6af035e8b2bd",
+      "edits": [
+        {
+          "source": "personal-inventory",
+          "startSeconds": 0,
+          "durationSeconds": 9.5,
+          "label": ""
+        }
+      ]
+    },
+    {
+      "file": "in-game-chat.gif",
+      "source": "in-game-chat.mp4",
+      "sourceSha256": "ad76c5ec831ba7282970619dec08257ecb366e5b1d82ba3c9066cacd1da73659",
+      "captureProvenance": "capture-20261030.json",
+      "startSeconds": 0,
+      "durationSeconds": 8.5,
+      "filter": "fps=10,split[a][b];[a]palettegen=max_colors=128[p];[b][p]paletteuse=dither=bayer:bayer_scale=3:diff_mode=rectangle",
+      "bytes": 4129683,
+      "sha256": "e8117c793bab80c3e9fe7250683c5ee6b68eefb6cf697c095ab439463b8045c1",
+      "edits": [
+        {
+          "source": "in-game-chat-native",
+          "startSeconds": 0,
+          "durationSeconds": 8.5,
+          "label": ""
+        }
+      ]
+    },
+    {
+      "file": "leave-and-rejoin.gif",
+      "source": "leave-and-rejoin.mp4",
+      "sourceSha256": "ec7b8120175a3b94e471d78714005262795aa66e682db00d8d8f6f5229c77151",
+      "captureProvenance": "capture-20261030.json",
+      "startSeconds": 0,
+      "durationSeconds": 8.8,
+      "filter": "fps=10,split[a][b];[a]palettegen=max_colors=128[p];[b][p]paletteuse=dither=bayer:bayer_scale=3:diff_mode=rectangle",
+      "bytes": 2634823,
+      "sha256": "78604267602f3d42896418aa35dc175710e659f2d461715f79e0e85c21354158",
+      "edits": [
+        {
+          "source": "drop-out-rejoin-safe",
+          "startSeconds": 0,
+          "durationSeconds": 1.8,
+          "label": "Connected"
+        },
+        {
+          "source": "drop-out-rejoin-safe",
+          "startSeconds": 5.5,
+          "durationSeconds": 3,
+          "label": "Disconnected / cut"
+        },
+        {
+          "source": "drop-out-rejoin-safe",
+          "startSeconds": 12.5,
+          "durationSeconds": 4,
+          "label": "Reconnected / cut"
+        }
+      ]
     }
   ]
 }

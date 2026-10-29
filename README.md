@@ -24,9 +24,27 @@ story through the original game's menus, with a new **Co-op** button to bring yo
 
 ## See it in action
 
-These are short, silent loops from our [gameplay trailer](https://christophervr.github.io/kotor-coop/#trailer).
-Each shows **two connected game copies on one PC**, recorded in staged scenes on disposable saves.
-They illustrate the features, not a completed campaign or an independent internet playtest.
+Real game footage, recorded using **two game copies on one PC** and disposable saves.
+The menu, character, inventory, chat and reconnect clips were captured on **v0.1.0-beta.4**
+using the background game harness. Cuts are labeled; each new GIF has a pauseable MP4.
+The exploration, dialogue and combat clips come from our earlier
+[gameplay trailer](https://christophervr.github.io/kotor-coop/#trailer).
+
+### Host from the game menu
+
+![Opening Co-op from KOTOR's main menu, choosing Host, then entering Dantooine after loading](site/media/showcase/host-from-menu.gif)
+
+Open **Co-op → Host** to bring your save into a session. **Shown here:** starting a host in
+the Jedi Enclave on Dantooine. The loading wait is cut from the loop.
+[Watch or pause this clip](https://christophervr.github.io/kotor-coop/media/showcase/host-from-menu.mp4).
+
+### Create your own character
+
+![The joining player choosing a Soldier and cycling through portraits in KOTOR's character creator](site/media/showcase/create-character.gif)
+
+A first-time join opens the game's character creator. **Shown here:** class and portrait
+choices for the new Soldier who joined this session. The clip cuts between those two steps.
+[Watch or pause this clip](https://christophervr.github.io/kotor-coop/media/showcase/create-character.mp4).
 
 ### Explore together
 
@@ -51,8 +69,35 @@ Fight shared enemies with your own character and gear. **Shown here:** blue and 
 against kath hounds on Dantooine. God mode was used for filming; this clip demonstrates shared
 combat, not ordinary difficulty or balance.
 
-[Full trailer with sound](https://christophervr.github.io/kotor-coop/#trailer) ·
-[Capture details](site/media/provenance.json) · [GIF source and timings](site/media/showcase/manifest.json)
+### Your character. Your gear.
+
+![Both players opening their own inventory and character sheets, with different portraits, items and stats](site/media/showcase/personal-inventory.gif)
+
+Open your backpack and character sheet independently. **Shown here:** the established host
+has gear, while the newly created Soldier has an empty backpack and his own stats.
+[Watch or pause this clip](https://christophervr.github.io/kotor-coop/media/showcase/personal-inventory.mp4).
+
+### Keep talking while you explore
+
+![Player Two asking Ready to explore and Player One replying Ready, Lets go, with both messages visible in both game copies](site/media/showcase/in-game-chat.gif)
+
+Messages appear inside both players' games. **Shown here:** a two-way chat exchange in the
+Enclave courtyard, sent through the harness's console commands.
+[Watch or pause this clip](https://christophervr.github.io/kotor-coop/media/showcase/in-game-chat.mp4).
+
+### Leave and return
+
+![The second player's character disappearing from the host's world on disconnect and returning after reconnecting](site/media/showcase/leave-and-rejoin.gif)
+
+**Shown here:** Player Two disconnects and reconnects while the host stays in the courtyard.
+The character disappears and returns in the host's view. This is a session reconnect with
+both games still running; the loop cuts out the save and connection waits.
+[Watch or pause this clip](https://christophervr.github.io/kotor-coop/media/showcase/leave-and-rejoin.mp4).
+
+These staged clips illustrate selected features; a completed campaign and independent internet
+playtest remain unverified. [New capture details](site/media/showcase/capture-20261030.json) ·
+[Trailer capture details](site/media/provenance.json) ·
+[GIF sources, edits and hashes](site/media/showcase/manifest.json).
 
 ## Install, host, connect
 

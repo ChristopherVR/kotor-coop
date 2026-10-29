@@ -1,0 +1,178 @@
+{
+  "captureDateLocal": "2026-10-30",
+  "timezone": "Australia/Brisbane",
+  "release": "v0.1.0-beta.4",
+  "releaseUrl": "https://github.com/ChristopherVR/kotor-coop/releases/tag/v0.1.0-beta.4",
+  "packageSha256": "8ad7278bcca0d0cdfc3d852a0268df10c9700932e189e798e9a416aa0e7aff7d",
+  "installedFiles": {
+    "swkotor.exe": "d3432b321dbde12a35c46a7a7b4795b5f947c6fe90e3a7a30c382d6c173e381a",
+    "dinput8.dll": "9211e1251711ca7de6bf6d319081c580f4c5033dfc286abbf08eddb7a77f4584",
+    "KotorCoop.Agent.exe": "ab2e5e1998aa3b4ed0bf0d34a319c1c056933e661da4f580b462d76ca2a00ab6"
+  },
+  "setup": "Two disposable KOTOR 1 GOG directories, 800x600 each, private non-input Windows desktops, native GL_FRONT screenshot harness. Published release binaries, existing Dantooine host save, empty joiner saves and first-time Soldier creation. No desktop or audio capture.",
+  "controls": "Menu, portrait, movement and inventory actions use native harness input. Connect, chat (say), disconnect and reconnect use the existing agent console channel; these clips do not demonstrate typing with Enter or selecting an internet server.",
+  "editing": "Native images scaled with Lanczos, editorial title bars added above the game view, no game pixels replaced. Cuts explicitly labeled. GIFs derive from the accompanying public MP4s with the per-clip manifest filter. Screenshot samples repeat between observations; exported 10 FPS is not game performance.",
+  "recordingCaveat": "The screenshot and save harness share a command channel. The first leave/rejoin recording was excluded after a save timeout. The retained recording pauses capture commands for three seconds around disconnect/reconnect and cuts those waits. Agent logs confirm the dedicated disconnect save completed in 1325 ms before reconnect.",
+  "scope": "Staged local demonstration of these selected features, not a complete campaign, independent-PC internet test, inventory persistence audit or game-restart recovery test. The host has existing gear; the new joiner starts with an empty backpack. No combat in these new clips.",
+  "sourceFootage": {
+    "host-menu-complete": {
+      "sha256": "92eb673c8b04ac9142f9591b3d789880f65d687a9b90abaf01af7b2ad29c6242",
+      "seconds": 20,
+      "roles": [
+        "host"
+      ],
+      "actions": [
+        [
+          1,
+          "host",
+          "direct:103:click 487 445"
+        ],
+        [
+          4,
+          "host",
+          "direct:103:click 260 485"
+        ],
+        [
+          14,
+          "host",
+          "clear"
+        ]
+      ],
+      "captureSamplesPerSecond": 17.2
+    },
+    "choose-character": {
+      "sha256": "4c0a39bb334032653d04b4ce6358e97f63f83bc01ddb22bc9da921492c59286d",
+      "seconds": 6,
+      "roles": [
+        "joiner"
+      ],
+      "actions": [
+        [
+          2,
+          "joiner",
+          "direct:103:click 353 284"
+        ]
+      ],
+      "captureSamplesPerSecond": 17.833333333333332
+    },
+    "customise-character": {
+      "sha256": "5c5b63980b7d1973eb225fd743bb8d36070ab8366004f2e91fafd41528502a64",
+      "seconds": 8,
+      "roles": [
+        "joiner"
+      ],
+      "actions": [
+        [
+          1,
+          "joiner",
+          "direct:103:click 620 296"
+        ],
+        [
+          3,
+          "joiner",
+          "direct:103:click 620 296"
+        ],
+        [
+          5,
+          "joiner",
+          "direct:103:click 268 485"
+        ],
+        [
+          6.5,
+          "joiner",
+          "direct:103:click 542 254"
+        ]
+      ],
+      "captureSamplesPerSecond": 14.5
+    },
+    "personal-inventory": {
+      "sha256": "a3d5a90e1454e234a1089aca95eea3da134bedb97257ca6b2f5ff831a8a1f0c9",
+      "seconds": 10,
+      "roles": [
+        "host",
+        "joiner"
+      ],
+      "actions": [
+        [
+          1,
+          "host",
+          "direct:103:key 0x17 tap"
+        ],
+        [
+          2,
+          "joiner",
+          "direct:103:key 0x17 tap"
+        ],
+        [
+          4,
+          "host",
+          "direct:103:click 291 376"
+        ],
+        [
+          6,
+          "host",
+          "direct:103:click 307 126"
+        ],
+        [
+          6.5,
+          "joiner",
+          "direct:103:click 307 126"
+        ]
+      ],
+      "captureSamplesPerSecond": 15.8
+    },
+    "in-game-chat-native": {
+      "sha256": "94959c502737a5d36ae0042918e2ce8619d676352bd9dbcea3cb02e2f3e02a37",
+      "seconds": 10,
+      "roles": [
+        "host",
+        "joiner"
+      ],
+      "actions": [
+        [
+          1,
+          "joiner",
+          "say Ready to explore?"
+        ],
+        [
+          4,
+          "host",
+          "say Ready. Lets go!"
+        ],
+        [
+          7,
+          "joiner",
+          "direct:103:key 0x1e down"
+        ],
+        [
+          7.5,
+          "joiner",
+          "direct:103:key 0x1e up"
+        ]
+      ],
+      "captureSamplesPerSecond": 12.7
+    },
+    "drop-out-rejoin-safe": {
+      "sha256": "fdce4fa37c270093ddb309d426f3f9e36c28d591a99ebacabab495fd100a6ec3",
+      "seconds": 17,
+      "roles": [
+        "host",
+        "joiner"
+      ],
+      "actions": [
+        [
+          2,
+          "joiner",
+          "disconnect"
+        ],
+        [
+          9,
+          "joiner",
+          "reconnect"
+        ]
+      ],
+      "captureSamplesPerSecond": 9.529411764705882
+    }
+  },
+  "sourceFootageLocation": "Original recordings and recorder remain in the local artifacts/showcase-20261030 capture bundle; published edited MP4s are adjacent to their GIFs."
+}
