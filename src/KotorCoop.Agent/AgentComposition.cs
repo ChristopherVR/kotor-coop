@@ -794,6 +794,9 @@ internal static class AgentComposition
             parts.Add($"exe image {d.ExeDigest:X8}");
         }
 
+        if (!string.IsNullOrEmpty(d.KmrpInstallDigest))
+            parts.Add($"KMRP install {d.KmrpInstallDigest}");
+
         if (d.Knows(ContentDigest.Field.Appearance))
         {
             parts.Add($"{d.AppearanceRows} appearance rows");

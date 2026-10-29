@@ -7,7 +7,7 @@ namespace KotorCoop.Protocol;
 /// the wrong body, a differently-modded module shifting the object ids enemies and doors
 /// key on) is caught and turned into a refusal or a degraded channel instead.
 ///
-/// Every field is a 32-bit FNV-1a hash (or a plain count), because the goal is only to
+/// Most fields are a 32-bit FNV-1a hash (or a plain count), because the goal is only to
 /// answer "are these the same?" cheaply — never to reconstruct the content. A field that
 /// could not be computed (no read access, no override folder, an install this build does
 /// not understand) has its bit cleared in <see cref="KnownMask"/> and can only ever
@@ -18,6 +18,9 @@ namespace KotorCoop.Protocol;
 /// computed by the agent (from game files) and compared by <see cref="ContentCompatibility"/>
 /// on both host and client, so the verdict is identical everywhere.
 /// </summary>
+/// <param name="KmrpInstallDigest">Separate SHA-256 of the executable and supported KMRP
+/// runtime files/settings, or null when unavailable. Never substituted for ExeDigest:
+/// matching inputs may explain different runtime addresses without proving hook coexistence.</param>
 public readonly record struct ContentDigest(
     ushort KnownMask,
     uint ExeDigest,
@@ -30,11 +33,12 @@ public readonly record struct ContentDigest(
     uint TlkEntryCount,
     uint JournalDigest,
     uint ModulesCensus,
-    uint GameplayDigest = 0)
+    uint GameplayDigest = 0,
+    string? KmrpInstallDigest = null)
 {
     /// <summary>Bumped only if the set/order of fields changes. Lets a future build reject
     /// a digest it cannot interpret rather than misreading it.</summary>
-    public const byte CurrentScheme = 2;
+    public const byte CurrentScheme = 3;
 
     /// <summary>Which fields were actually computable. A cleared bit means "unknown", which
     /// downgrades any disagreement on that field to a warning.</summary>

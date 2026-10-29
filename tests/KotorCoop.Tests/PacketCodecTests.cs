@@ -5,6 +5,24 @@ namespace KotorCoop.Tests;
 
 public class PacketCodecTests
 {
+    [Fact]
+    public void KmrpIdentitySurvivesBothHandshakeDirectionsAndTruncationIsRejected()
+    {
+        byte[] buffer = new byte[ProtocolConstants.MaxPacketSize];
+        var digest = new ContentDigest((ushort)ContentDigest.Field.Exe, 42, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            KmrpInstallDigest: new string('A', 64));
+        var hello = new HelloPacket("Revan", "end_m01aa", 17, digest, SessionPassword.None, BehaviourDigest.Default);
+        int length = PacketCodec.Write(buffer, hello);
+        Assert.True(length > 0);
+        Assert.Equal(hello, PacketCodec.ReadHello(buffer.AsSpan(0, length)));
+        for (int i = 0; i < length; i++) Assert.Null(PacketCodec.ReadHello(buffer.AsSpan(0, i)));
+        var welcome = new WelcomePacket(2, 17, 30, 8, digest, BehaviourDigest.Default);
+        length = PacketCodec.Write(buffer, welcome);
+        Assert.True(length > 0);
+        Assert.Equal(welcome, PacketCodec.ReadWelcome(buffer.AsSpan(0, length)));
+        for (int i = 0; i < length; i++) Assert.Null(PacketCodec.ReadWelcome(buffer.AsSpan(0, i)));
+    }
+
     private static readonly PlayerState SampleState =
         new(new Vector3f(12.5f, -3.25f, 0.75f), 1.75f, "end_m01aa", 87, 42,
             Flags: PlayerState.FlagInDialogue | PlayerState.FlagInCombat | PlayerState.FlagInMinigame);

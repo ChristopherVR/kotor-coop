@@ -145,6 +145,7 @@ public static partial class PacketCodec
         w.WriteUInt32(digest.JournalDigest);
         w.WriteUInt32(digest.ModulesCensus);
         w.WriteUInt32(digest.GameplayDigest);
+        w.WriteString(digest.KmrpInstallDigest ?? "", 64);
     }
 
     private static ContentDigest ReadDigest(ref PacketReader r)
@@ -162,6 +163,7 @@ public static partial class PacketCodec
         uint journal = r.ReadUInt32();
         uint modules = r.ReadUInt32();
         uint gameplay = r.ReadUInt32();
+        string kmrp = r.ReadString(64);
 
         // An unrecognised scheme means a build we cannot interpret the fields of; treat it
         // as "no information" rather than misreading, so it warns instead of corrupting.
@@ -172,7 +174,7 @@ public static partial class PacketCodec
 
         return new ContentDigest(
             knownMask, exe, overrideCensus, overrideCount, twoDa, appearance, appearanceRows,
-            tlk, tlkCount, journal, modules, gameplay);
+            tlk, tlkCount, journal, modules, gameplay, kmrp.Length == 0 ? null : kmrp);
     }
 
     public static int Write(Span<byte> buffer, RejectPacket packet)

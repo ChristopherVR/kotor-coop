@@ -64,7 +64,8 @@ public static partial class PlainLanguage
                         + "Both players need the same release."
                     : "Your co-op mod version differs from the host's. Both players need the same release.";
             case "E_EXE":
-                return "Your game executable differs from the host's. Both players need KOTOR 1 version 1.03.";
+                return "Your game code or runtime patches differ from the host's. Both players need KOTOR 1 version 1.03 "
+                    + "and matching patches and patch settings. This can happen even with the same graphics mod version.";
             case "E_SAVE":
                 return "You and the host are on different saves. Rejoin to load the host's world.";
             case "E_PASSWORD":
@@ -128,6 +129,9 @@ public static partial class PlainLanguage
             CompatibilityCode.Executable =>
                 "Your game executable differs from the host's (a patched or modded swkotor.exe?). The host "
                 + "allows this, but co-op may misbehave or crash. Mention it in any bug report.",
+            CompatibilityCode.KmrpRuntime =>
+                "Your executable and KMRP patch files and settings match. Their code can load at different addresses, "
+                + "so co-op has allowed the connection. KMRP gameplay compatibility still needs testing.",
             _ => note.Text,
         };
     }

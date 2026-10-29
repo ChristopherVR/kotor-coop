@@ -35,6 +35,32 @@ public class ContentCompatibilityTests
         Assert.Equal(SessionCapabilities.None, v.Allowed);
     }
 
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData("", "")]
+    [InlineData("KMRP 1.5.1", "KMRP 1.5.1")]
+    [InlineData("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", null)]
+    [InlineData("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB")]
+    [InlineData("ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ", "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ")]
+    public void AbsentInvalidOrDifferentKmrpIdentityDoesNotBypassRefusal(string? a, string? b)
+    {
+        Assert.Equal(RefusalReason.Executable, ContentCompatibility.Compare(
+            Digest(exe: 1) with { KmrpInstallDigest = a },
+            Digest(exe: 2) with { KmrpInstallDigest = b }).Refusal);
+    }
+
+    [Fact]
+    public void MatchingKmrpStillAppliesOtherContentRules()
+    {
+        string identity = new('A', 64);
+        CompatibilityVerdict verdict = ContentCompatibility.Compare(
+            Digest(exe: 1) with { KmrpInstallDigest = identity },
+            Digest(exe: 2, appearance: 9) with { KmrpInstallDigest = identity });
+        Assert.True(verdict.Admitted);
+        Assert.Contains(verdict.Notes, n => n.Code == CompatibilityCode.KmrpRuntime);
+        Assert.False(verdict.Allowed.HasFlag(SessionCapabilities.Appearance));
+    }
+
     [Fact]
     public void AnAllowedExecutableMismatchIsAdmittedWithAWarning()
     {

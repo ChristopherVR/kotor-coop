@@ -63,6 +63,9 @@ public enum CompatibilityCode
     /// <summary>The running executables differ and the host admitted the peer anyway
     /// (coop.ini <c>exe_mismatch = allow</c>): a patched exe may break any engine address.</summary>
     Executable,
+
+    /// <summary>Live code differs, but the complete KMRP install inputs match.</summary>
+    KmrpRuntime,
 }
 
 /// <summary>
@@ -97,6 +100,7 @@ public readonly record struct CompatibilityNote(
         CompatibilityCode.Difficulty => "W_DIFFICULTY",
         CompatibilityCode.Gameplay => "W_GAMEPLAY",
         CompatibilityCode.Executable => "W_EXE",
+        CompatibilityCode.KmrpRuntime => "W_KMRP",
         _ => "W_NONE",
     };
 
@@ -148,7 +152,7 @@ public sealed record CompatibilityVerdict(
     public string Summary => Refusal switch
     {
         RefusalReason.ProtocolVersion => "E_PROTO: incompatible co-op version",
-        RefusalReason.Executable => "E_EXE: different swkotor.exe (addresses would not match)",
+        RefusalReason.Executable => "E_EXE: executable or runtime patches differ; matching install identity not established",
         RefusalReason.SaveGame => "E_SAVE: different save; rejoin to adopt the host's world",
         _ => Notes.Count == 0 ? "compatible" : $"compatible, {Notes.Count} note(s): {Tags}",
     };
@@ -242,16 +246,23 @@ public static class ContentCompatibility
         // reads and calls have no such guard, which is why this stays a loud warning.
         if (BothKnow(local, remote, ContentDigest.Field.Exe) && local.ExeDigest != remote.ExeDigest)
         {
-            if (!allowExeMismatch)
+            // KMRP allocates code dynamically, so identical patch inputs can produce
+            // different branch operands. Keep the raw image check and use the separate
+            // complete install identity only for this recognized runtime layout.
+            bool matchingKmrp = IsKmrpIdentity(local.KmrpInstallDigest)
+                && string.Equals(local.KmrpInstallDigest, remote.KmrpInstallDigest, StringComparison.Ordinal);
+            if (!allowExeMismatch && !matchingKmrp)
             {
                 return Refuse(RefusalReason.Executable);
             }
 
             notes.Add(new CompatibilityNote(
-                CompatibilityCode.Executable,
+                matchingKmrp ? CompatibilityCode.KmrpRuntime : CompatibilityCode.Executable,
                 SessionCapabilities.None,
                 $"swkotor.exe differs (image {local.ExeDigest:X8} here, {remote.ExeDigest:X8} on the peer); "
-                + "admitted because the host allows exe_mismatch, so engine addresses are unchecked"));
+                + (matchingKmrp
+                    ? "admitted because executable and KMRP runtime files/settings match; runtime addresses can differ, hook coexistence is not verified"
+                    : "admitted because the host allows exe_mismatch, so engine addresses are unchecked")));
         }
 
         // ...and say so when it could NOT be checked. One side without a published image
@@ -473,6 +484,9 @@ public static class ContentCompatibility
 
     private static bool BothKnow(in ContentDigest a, in ContentDigest b, ContentDigest.Field field) =>
         a.Knows(field) && b.Knows(field);
+
+    private static bool IsKmrpIdentity(string? value) => value is { Length: 64 }
+        && value.All(c => c is >= '0' and <= '9' or >= 'A' and <= 'F');
 
     private static CompatibilityVerdict Refuse(RefusalReason reason) =>
         new(reason, SessionCapabilities.None, []);

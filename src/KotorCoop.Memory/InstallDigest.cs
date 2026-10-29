@@ -106,9 +106,11 @@ public static class InstallDigest
             files?.Dispose();
         }
 
+        string kmrp = liveImageDigest.HasValue ? KmrpInstallIdentity.Compute(gameDirectory, executablePath) : "";
         return new ContentDigest(
             (ushort)known, exe, overrideCensus, overrideCount, twoDa, appearance, appearanceRows,
-            tlk, tlkEntryCount, journal, modules, gameplay);
+            tlk, tlkEntryCount, journal, modules, gameplay,
+            kmrp.Length == 0 ? null : kmrp);
     }
 
     /// <summary>

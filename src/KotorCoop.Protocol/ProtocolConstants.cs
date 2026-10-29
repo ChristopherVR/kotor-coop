@@ -342,7 +342,8 @@ public static class ProtocolConstants
     // 82: companion occupant generations/templates plus host-world namespaces.
     // Version85 binds reliable enemy effects and ACKs to host world and native capture incarnation.
     // 86: HostConversationRequest (107), the host-start conversation relay.
-    public const byte Version = 86;
+    // v87 adds a separate deterministic KMRP install identity to the handshake (scheme 3).
+    public const byte Version = 87;
 
     /// <summary>Journal quest tags are resrefs plus a little slack.</summary>
     public const int MaxJournalTagLength = 32;

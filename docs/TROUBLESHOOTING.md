@@ -241,6 +241,19 @@ then let in, and both screens show a `W_EXE` warning. The mod uses fixed engine 
 a patch that changed one of them can still misbehave or crash. Mention `W_EXE` in a bug report.
 The 4GB (large-address) patch does not change the `exe image` value.
 
+**Both players installed KMRP but get an executable mismatch:** KMRP patches code in
+memory, and its allocated addresses can differ even with the same release. Builds with
+the KMRP compatibility fix compare the executable file, runtime binaries and patch settings
+as a separate check. Update both players to the same co-op build and restart both games.
+Matching supported installs connect with a `W_KMRP` note; display resolutions may differ.
+Different patch options, missing runtime files or unsupported layouts still need attention.
+The agent log includes a `KMRP install` identity when this check is available.
+
+On an older co-op release, the host's existing `exe_mismatch = allow` option is a workaround
+for testing, with the fixed-address risks described above. A successful connection does not
+establish full KMRP gameplay compatibility; that still needs a two-player playtest. See
+[the investigation and limits](research/kmrp-compatibility.md).
+
 If a session logs `executable identity unchecked: one side published no live image digest`, one
 peer's plugin did not publish one (an older plugin, or a plugin that failed to read its own
 image — its log says which). The session still runs; the executable check is simply not in
