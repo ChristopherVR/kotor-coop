@@ -23,6 +23,7 @@ namespace KotorCoop.Tests;
 /// opening, with no buy ever issued).
 /// </summary>
 [Trait("Category", "Slow")]
+[Trait("Category", "LocalOnly")]
 public class StoreLoopbackTests
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(15);

@@ -115,7 +115,7 @@ hook installed, all three modules visible in the process.
 ## CI and releases
 
 `.github/workflows/ci.yml` runs on every push and pull request: `dotnet build -warnaserror`,
-the test suite (`--filter "Category!=Soak"` — everything except the opt-in ten-minute soak,
+the test suite (`--filter "Category!=Soak&Category!=LocalOnly"` — everything except the opt-in ten-minute soak,
 below; no test is excluded for flakiness), then
 `tools/package.ps1 -WarnAsError`, which builds the NativeAOT plugin, the C loader and the
 agent (a self-contained single-file `win-x64` publish — the runtime is inside the exe, so a

@@ -20,6 +20,7 @@ namespace KotorCoop.Tests;
 /// delta history.
 /// </summary>
 [Trait("Category", "Slow")]
+[Trait("Category", "LocalOnly")]
 public class SharedInventoryV2LoopbackTests
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(15);

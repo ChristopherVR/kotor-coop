@@ -13,4 +13,7 @@ using Xunit;
 // Because the assembly is serial, the real-socket loopback/integration classes (party pool,
 // shared inventory, stores, disconnect/host loss...) are ~90% of its ten minutes. They carry
 // [Trait("Category", "Slow")]; tools/test-fast.ps1 skips them for the everyday loop (about a
-// minute) and CI still runs them (it only filters Category=Soak).
+// minute). The four heaviest (party pool, shared inventory, stores, disconnect recovery:
+// about 7 of the 12 minutes) also carry [Trait("Category", "LocalOnly")]: CI and the release
+// workflow skip those, so run the full suite (no filter but Soak) on your machine before a tag.
+// The lighter Slow classes still run in CI.
