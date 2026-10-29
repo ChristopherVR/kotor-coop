@@ -1,96 +1,131 @@
-# kotor-coop
+# KOTOR, played together.
+
+![KOTOR Co-op — an experimental co-op mod for Knights of the Old Republic](nexus/images/1-cover-title.jpg)
 
 [![CI](https://github.com/ChristopherVR/kotor-coop/actions/workflows/ci.yml/badge.svg)](https://github.com/ChristopherVR/kotor-coop/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/ChristopherVR/kotor-coop)](https://github.com/ChristopherVR/kotor-coop/releases/latest)
 [![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue)](LICENSE)
-![Status: experimental](https://img.shields.io/badge/status-experimental-orange)
+![Status: experimental beta](https://img.shields.io/badge/status-experimental_beta-orange)
 
-A free, open-source mod that lets two to eight people play **Star Wars: Knights of the Old
-Republic** (the GOG or Steam version) together. Each player runs their own copy of the game, on
-one desk or over the internet, and the mod keeps everyone in one shared world, each as their own
-character.
+**Your own character. A shared adventure. A friend beside you.**
 
-It is built in the spirit of **Elden Ring's Seamless Co-op**: nobody sets up a server and there
-is no lobby to leave the game for. You start KOTOR, press **Co-op** on the main menu, and host or
-connect. Friends drop in and drop out of the same world.
+A free, open-source co-op mod for **Star Wars: Knights of the Old Republic**. One player hosts;
+friends join the same world from their own copies of the game. Explore, fight and share the
+story through the original game's menus, with a new **Co-op** button to bring you together.
 
-> **This is an experiment, and it is rough.** Read [Where this came from](#where-this-came-from)
-> and [Other KOTOR co-op projects](#other-kotor-co-op-projects) before you invest an evening in it.
+**[Download the latest release](https://github.com/ChristopherVR/kotor-coop/releases/latest)** ·
+[Get it on Nexus Mods](https://www.nexusmods.com/mod/1910) ·
+[Watch the trailer](https://christophervr.github.io/kotor-coop/#trailer) ·
+[Player guides](https://christophervr.github.io/kotor-coop/)
 
-[Website and player guides](https://christophervr.github.io/kotor-coop/) ·
-[Latest release](https://github.com/ChristopherVR/kotor-coop/releases) ·
-[Limitations](docs/limitations.md) · [Troubleshooting](docs/TROUBLESHOOTING.md)
+> **Experimental beta — start with two players and back up your saves.** Selected scenes have
+> been tested on real game copies; a complete co-op campaign has not been verified. Up to eight
+> players can connect, but larger-group campaign reliability remains experimental.
 
-## Install (one click)
+## See it in action
 
-1. Download **`kotor-coop-<version>-setup.exe`** from the
-   [latest release](https://github.com/ChristopherVR/kotor-coop/releases) (it is also on Nexus Mods).
-2. Close KOTOR and run it. It finds your GOG or Steam copy (or lets you pick the folder), shows a
-   short options page, and installs. Say yes to the firewall question if you want to host.
-3. Start KOTOR and press **Co-op** on the main menu.
+These are short, silent loops from our [gameplay trailer](https://christophervr.github.io/kotor-coop/#trailer).
+Each shows **two connected game copies on one PC**, recorded in staged scenes on disposable saves.
+They illustrate the features, not a completed campaign or an independent internet playtest.
 
-Both players need the **same mod version**. Prefer no installer? Download the Windows zip, extract it
-into its own folder (not over the game), and run `KotorCoop.Agent.exe`; it does the same job.
-Steam Deck / Linux players use the tarball and `install.sh` (see [Steam](#steam-and-linux)).
+### Explore together
 
-The files are not code-signed, so Windows SmartScreen may say "Windows protected your PC": choose
-**More info**, then **Run anyway**. Every release lists SHA-256 checksums so you can verify what you
-downloaded. If antivirus removes a file, please report it rather than adding an exclusion.
+![Two connected players moving through Korriban, shown from both game copies](site/media/showcase/explore-together.gif)
 
-### Your first session
+See your friend as a character in the world. Walk together, follow each other through area changes,
+and take the same trip between planets. **Shown here:** paired views of movement on Korriban.
 
-- **Host:** press **Co-op > Host** (from any save, or from a new game once you reach the first autosave).
-- **Everyone else:** pick the host in the list and press **Connect**, or choose **Connect to an
-  address...** and type what the host gives you. Over the internet, use a tunnel program such as
-  [playit.gg](https://playit.gg); there is no relay server.
-- The first time you join, the normal character-creation screen opens and you build your own
-  character. It is yours on every later join, and your single-player saves are not touched.
-- Press `~` for the console and **Enter** to chat ([console reference](docs/CONSOLE.md)).
+### Share the conversation
 
-Back up your `saves` folder before the first session. While connected, load the save called **Co-op**
-to keep your progress, not Auto Save. Your own autosave is kept first as "Autosave before co-op".
-Everything the installer changes, and how to remove it, is in [What the mod changes](#what-the-mod-changes).
+![One player talking to Belaya while the second selects her and joins the same conversation](site/media/showcase/share-conversations.gif)
 
-## Requirements
+Whoever starts a conversation chooses the replies. The other player selects the same character
+to watch; story-triggered scenes bring the party in automatically. **Shown here:** joining a
+conversation with Belaya on Dantooine. One conversation runs at a time.
 
-- 64-bit Windows (Linux and Steam Deck through Proton, see below).
-- **KOTOR 1, version 1.0.3**, from GOG or Steam. KOTOR 2 is not touched.
-- The game runs at its own 800x600 size in co-op; wide-screen resolutions fell back to 800x600 when tried.
-- Two copies on one PC need a second copy of the game folder, and at least one of the two must be GOG
-  (Steam allows only one running copy).
+### Fight side by side
 
-## What to expect
+![Two players fighting the same kath hounds on Dantooine with blue and yellow lightsabers](site/media/showcase/fight-together.gif)
 
-Two people (up to eight) each run KOTOR. You see each other as real characters, walk through the same
-doors, fly to the same planets, fight the same enemies, watch the same conversations, and keep your own
-backpack and credits. Saving, loading, quitting to the menu and even the host's game crashing are
-handled; the other player rejoins on its own.
+Fight shared enemies with your own character and gear. **Shown here:** blue and yellow sabers
+against kath hounds on Dantooine. God mode was used for filming; this clip demonstrates shared
+combat, not ordinary difficulty or balance.
 
-- **One conversation at a time.** Whoever starts talking chooses the replies; the other player clicks
-  the same person to watch.
-- **The host leads the party.** Only the host switches the active party member and picks the party before
-  a departure.
-- **Backpacks and credits are personal.** Quest items are the exception, so the story works for both.
-- **Minigames are single-seat.** One of you races or plays; the other waits.
-- **Enemies get tougher with more players.** Playing alone changes nothing.
-- **A complete two-player run from start to finish has not been played yet.** The early game and selected
-  later scenes have been tried on two real copies; expect rough edges elsewhere.
+[Full trailer with sound](https://christophervr.github.io/kotor-coop/#trailer) ·
+[Capture details](site/media/provenance.json) · [GIF source and timings](site/media/showcase/manifest.json)
 
-The activity-by-activity list is [docs/limitations.md](docs/limitations.md). Read it before planning a long session.
+## Install, host, connect
 
-| Area | Status | Details |
+1. **Download** `kotor-coop-<version>-setup.exe` from the
+   [latest release](https://github.com/ChristopherVR/kotor-coop/releases/latest).
+   On Nexus, extract the Main file ZIP to find the same setup program.
+2. **Close KOTOR and run setup.** It finds your GOG or Steam copy, or lets you choose the folder.
+   Allow the firewall rule if you want to host. Install through setup, not Vortex.
+3. **Start KOTOR → Co-op → Host.** Use an existing save, or a new game after the first autosave.
+4. **Your friend chooses Co-op → Connect**, selects the host, or enters the host's address.
+   On the first join, the normal character-creation screen lets them make their own character.
+
+Both players need **the same co-op version**. Start with matching game mods too. Internet hosting
+may need port forwarding or a tunnel; the mod does not supply a relay server. See the
+[host/join guide](https://christophervr.github.io/kotor-coop/play.html).
+
+While connected, load the save called **Co-op** to resume your session. Your own autosave is
+backed up as **Autosave before co-op**. Press **Enter** to chat and **~** for the console.
+
+<details>
+<summary>ZIP installation, Windows prompts and Linux packages</summary>
+
+Prefer the plain Windows ZIP? Extract it into its own folder (not over the game) and run
+`KotorCoop.Agent.exe`. It provides the same installation flow. The files are not code-signed,
+so SmartScreen may warn. Release assets include `SHA256SUMS.txt` to verify your download;
+report antivirus detections rather than adding exclusions.
+
+The Linux / Steam Deck tarball includes `install.sh` for Proton or Wine. The Linux installer
+is tested; Linux gameplay remains unverified. See [Steam and Linux](#steam-and-linux).
+
+</details>
+
+## What works, and where the limits are
+
+| Feature | What you can do | Current limit |
 | --- | --- | --- |
-| Getting into a game together | Works, with catches | [limitations](docs/limitations.md#getting-into-a-game-together) |
-| Moving around the world | Works, with catches | [limitations](docs/limitations.md#moving-around-the-world) |
-| Fighting | Works, with catches | [limitations](docs/limitations.md#fighting) |
-| Talking to people | Works, with catches | [limitations](docs/limitations.md#talking-to-people) |
-| Party, items and shops | Works, with catches | [limitations](docs/limitations.md#the-party-items-and-shops) |
-| Minigames (Pazaak, swoop racing, turrets) | Works, with catches | [limitations](docs/limitations.md#minigames) |
-| Story paths | Tried in staged scenes, not a full run | [limitations](docs/limitations.md#story-paths) |
-| Controls | Works, with catches | [limitations](docs/limitations.md#controls-and-interface) |
+| Join and reconnect | Host from the game menu, join as your own character, leave and return | Separate-PC internet and automatic router setup need wider testing |
+| Explore and travel | See each other, change areas, take the same planet trip | Brief position correction can happen after loading |
+| Combat | Fight the same enemies with your own gear; enemies scale for a group | Staged fights are tested; full-campaign balance is not verified |
+| Dialogue and story | Watch the same conversation; share quest and journal progress | One speaker chooses replies; recent dialogue fixes still need ordinary retesting |
+| Inventory and shops | Keep personal backpacks and credits; share quest items and merchant stock | The host controls companion equipment; simultaneous container access needs retesting |
+| Saves and recovery | Save/load in co-op and automatically rejoin after a game disconnect | Unsaved progress can be lost; a host helper crash requires hosting again |
+| Minigames | Play Pazaak, swoop racing and turret encounters | One player plays; everyone else waits |
+| Larger parties | Connect up to eight players; group travel and combat have been demonstrated | Start with two; three-to-eight-player campaign reliability is experimental |
 
-**Mods do not have to match.** When you connect, the two installs compare notes and tell you on screen what
-differs and what was switched off because of it. For a first session, use matching game mods and the same
-co-op version.
+These are summaries of recorded results, not a promise that every scene works. **Recent fixes
+for dialogue over equipment menus, Trask disappearing, container access, save-name input,
+subtitles/skipping and the post-save enemy banner still need ordinary in-game confirmation.**
+A complete two-player campaign, the full ending chain and independent-PC/Steam invite scenarios
+remain unverified unless specifically recorded.
+
+[Detailed player limitations](docs/limitations.md) ·
+[Engineering status and evidence](docs/status-engineering.md) ·
+[Current release checklist](docs/RELEASE-READINESS.md)
+
+## What you need
+
+- **KOTOR 1 v1.0.3**, GOG or Steam, lawfully owned by each player. KOTOR 2 is not supported.
+- **64-bit Windows** for the verified gameplay baseline. Linux/Steam Deck packaging is available.
+- Matching co-op versions, matching game mods for your first session, and backed-up saves.
+- For two instances on one PC: separate game folders and at least one GOG copy; Steam allows
+  only one running copy. The baseline captures use the game's 800×600 view; full widescreen
+  and replacement-menu compatibility remain under test.
+
+## About the project
+
+This began as an experiment in adding co-op to a 2003 game through memory scanning and engine
+hooks, without its source code. The design takes inspiration from Elden Ring's Seamless Co-op:
+one player hosts, friends drop in, and each keeps their own character. The reverse-engineering
+notes and unsuccessful experiments are kept alongside the code for other modders to use.
+
+<details>
+<summary>The experiment, how it grew, and other KOTOR co-op projects</summary>
 
 ## Where this came from
 
@@ -164,6 +199,8 @@ notes, can be reused by them or by anyone else.
 
 (Descriptions are from each project's public page and may be out of date; check them directly.)
 
+</details>
+
 ## Steam and Linux
 
 The Steam copy is the same game wrapped in a copy-protection layer, so installing is identical. Steam-to-Steam
@@ -227,8 +264,9 @@ Full design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 Every push to `main` that passes CI automatically increments the release version and publishes
 `setup.exe`, the Windows zip, the Linux tarball and `SHA256SUMS.txt` on GitHub, then uploads the
-installer to Nexus Mods and updates the mod page's version. Beta releases appear in the
-[releases list](https://github.com/ChristopherVR/kotor-coop/releases). The release checklist is
+installer to Nexus Mods and updates the mod page's version. Each published release is marked
+**Latest** on GitHub so it appears in the repository sidebar. Beta status remains in the version
+name and release notes. The release checklist is
 [docs/RELEASE-READINESS.md](docs/RELEASE-READINESS.md). The Nexus Mods listing text and upload steps are
 in [nexus/](nexus/README.md).
 

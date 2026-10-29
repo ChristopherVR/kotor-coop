@@ -169,15 +169,15 @@ jobs:
           if ($exists -and -not ($existing | ConvertFrom-Json).isDraft) { exit 0 }
           $assets = @(Get-ChildItem dist/kotor-coop-$version-setup.exe, dist/kotor-coop-$version-windows.zip, dist/kotor-coop-$version-linux.tar.gz, dist/SHA256SUMS.txt, artifacts/nexus/* | ForEach-Object FullName)
           if (Test-Path dist/scan-report.json) { $assets += (Resolve-Path dist/scan-report.json).Path }
-          $flags = @()
-          if ('${{ steps.version.outputs.prerelease }}' -eq 'true') { $flags += '--prerelease' }
           if (-not $exists) {
-            gh release create $tag --draft --verify-tag --title "kotor-coop $version" --notes-file release-notes.md @flags
+            gh release create $tag --draft --verify-tag --title "kotor-coop $version" --notes-file release-notes.md
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
           gh release upload $tag @assets --clobber
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          gh release edit $tag --draft=false
+          # GitHub excludes prereleases from Latest and the repository's Releases sidebar.
+          # Keep beta status in the version/title and notes, but publish a normal release.
+          gh release edit $tag --draft=false --prerelease=false --latest
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "Published https://github.com/${{ github.repository }}/releases/tag/$tag" >> $env:GITHUB_STEP_SUMMARY
 

@@ -7,6 +7,13 @@ the code do not drift.
 | --- | --- |
 | `description.bbcode` | Paste into the mod page's **Description** box (Nexus uses BBCode). |
 | `changelog.txt` | The per-version change text for each uploaded file. |
+| `../site/media/showcase/*.gif` | Animated exploration, dialogue and combat clips shared with the GitHub README. |
+
+The description embeds GIFs from the public repository. Push the media before pasting the
+BBCode into Nexus. The clips are silent excerpts of the existing trailer, with source hash,
+timings and output hashes in `../site/media/showcase/manifest.json`. They show staged gameplay
+on two local game copies; their captions retain those limits. The release workflow updates
+Nexus file versions, but the mod page description still needs to be pasted into Nexus itself.
 
 ## Page checklist
 

@@ -20,8 +20,9 @@ unverified and is disclosed instead.
 4. Run the affected scenarios from [live-verification.md](live-verification.md) on a two-instance
    rig with the exact packaged bytes, and record what you ran. Mark anything not run **unverified**.
 5. Push to `main`. After CI succeeds, the workflow publishes the setup program,
-   Windows zip, Linux tarball and `SHA256SUMS.txt` to a GitHub release (a prerelease while the
-   version has a `-beta` suffix). It then uploads to Nexus Mods and updates the mod page's version;
+   Windows zip, Linux tarball and `SHA256SUMS.txt` to a GitHub release marked **Latest**.
+   Beta status stays in the version and release notes; GitHub's prerelease flag is off so the
+   release appears in the repository sidebar. It then uploads to Nexus Mods and updates the mod page's version;
    see [nexus/README.md](../nexus/README.md) for one-time configuration.
 
 Releases are built from the tag by GitHub Actions, never from a developer machine. The files are

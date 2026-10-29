@@ -158,6 +158,9 @@ the Windows zip, Linux tarball, `SHA256SUMS.txt` and the Nexus installer zip. It
 the installer to Nexus, archives the previous file version and updates the mod page's version.
 Missing Nexus configuration fails that job; retry **failed jobs** after fixing configuration.
 Pending releases queue together through Nexus publication (GitHub's maximum queue is 100).
+Each newly published release is explicitly marked **Latest**, including beta versions. Beta
+status remains in the version and notes; GitHub's prerelease flag is off because it excludes
+the release from the repository sidebar and `/releases/latest`.
 
 **Actions > Release > Run workflow** on `main` publishes by default. Check **dry_run** to
 rehearse on any branch and keep packages for three days without publishing. Explicit `v<VERSION>`

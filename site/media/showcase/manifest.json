@@ -1,0 +1,31 @@
+{
+  "source": "../trailer.mp4",
+  "sourceSha256": "103be8dafc20388eef418ef44a94cf0c76e3cc856d7dafb6ff5b60f995635cb6",
+  "captureProvenance": "../provenance.json",
+  "note": "Silent, real-time excerpts of staged two-instance gameplay on one PC. God mode sustained combat filming; no normal combat balance or full-campaign claim.",
+  "filter": "fps=10,scale=720:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=96[p];[b][p]paletteuse=dither=bayer:bayer_scale=3",
+  "loop": 0,
+  "clips": [
+    {
+      "file": "explore-together.gif",
+      "startSeconds": 15,
+      "durationSeconds": 5,
+      "bytes": 5218982,
+      "sha256": "a206ebef7774f49c851e48d45fb97d5a5b49013857543a1dc596745c21d9d2bc"
+    },
+    {
+      "file": "share-conversations.gif",
+      "startSeconds": 24,
+      "durationSeconds": 10,
+      "bytes": 1102151,
+      "sha256": "eae6dc4f0eb529a31b823b026c81a48eb451d85ae9b6c5d9fa6550673853f18b"
+    },
+    {
+      "file": "fight-together.gif",
+      "startSeconds": 41.5,
+      "durationSeconds": 6,
+      "bytes": 3446013,
+      "sha256": "a196fd8bf7fe9f878861072da9a4e356601e5cb22f675299812bf6eace4662b0"
+    }
+  ]
+}
