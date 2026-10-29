@@ -8,17 +8,18 @@ the code do not drift.
 | `description.bbcode` | Paste into the mod page's **Description** box (Nexus uses BBCode). |
 | `changelog.txt` | The per-version change text for each uploaded file. |
 
-## What to upload
+## What gets uploaded
 
-Every GitHub release carries the same files; upload these to Nexus from it:
+Mod page: <https://www.nexusmods.com/mod/1910> (mod id 1910).
 
-| Nexus file slot | File | Notes |
-| --- | --- | --- |
-| Main file | `kotor-coop-<version>-setup.exe` | One-click installer. If Nexus rejects an `.exe`, make the zip the Main file instead. |
-| Optional file | `kotor-coop-<version>-windows.zip` | Same content; extract to its own folder and run `KotorCoop.Agent.exe`. |
+The Release workflow uploads one **Main** file per version: `kotor-coop-<version>-nexus.zip`,
+which holds the one-click `kotor-coop-<version>-setup.exe` and a `READ-ME-FIRST.txt`. (Nexus
+discourages a bare `.exe` as the main file, so it is zipped.) The previous version is archived
+automatically. The GitHub release carries the same setup program plus the plain Windows zip and
+the Linux tarball.
 
-Both are a *game-directory image*, not a Vortex-style "drop into Override" mod, so the page
-says **use the installer / manual install** and does not rely on Vortex deploying it.
+The program is a *game-directory installer*, not a Vortex-style "drop into Override" mod, so the
+page says **run the installer** and does not rely on Vortex deploying it.
 
 Suggested page fields:
 
@@ -27,15 +28,16 @@ Suggested page fields:
 - **Tags:** multiplayer, co-op, experimental.
 - **Images:** `site/media/trailer-poster.jpg`; the trailer video is `site/media/trailer.mp4`.
 
-## Automated upload (optional)
+## One-time setup for the automated upload
 
-`.github/workflows/nexus.yml` can push a release's zip to Nexus with the
-[Nexus Mods upload action](https://github.com/Nexus-Mods/upload-action). One-time setup:
+The `nexus` job in `.github/workflows/release.yml` runs after every tagged release and uses the
+[Nexus Mods upload action](https://github.com/Nexus-Mods/upload-action):
 
-1. Create the mod page by hand and upload the first file manually.
-2. Add repository secrets `NEXUSMODS_API_KEY` and `NEXUSMODS_FILE_ID` (the file group id
-   shown in the mod page's file manager).
-3. Run the workflow from the Actions tab with the release tag.
+1. On the mod page, upload a first file by hand (any zip) so a **file group** exists.
+2. Put the numeric **file id** of that group in the repository **variable** `NEXUS_FILE_ID`
+   (Settings > Secrets and variables > Actions > Variables).
+3. Put your Nexus API key in the repository **secret** `NEXUSMODS_API_KEY`.
 
-The action is maintained by Nexus and its inputs may change: read its README and compare it
-with the workflow before the first run. The manual route above always works.
+Without both, the job logs a warning and is skipped; the GitHub release is unaffected. The
+description on Nexus is the release notes as plain text. The page description itself
+(`description.bbcode`) is pasted by hand and is not touched by the workflow.
