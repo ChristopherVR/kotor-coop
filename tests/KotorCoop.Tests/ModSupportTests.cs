@@ -66,10 +66,14 @@ public sealed class ModSupportTests : IDisposable
         File.WriteAllText(module, "module A");
         var first = ModContentManifest.Compute(_directory);
         File.WriteAllText(script, "same size B");
+        // Same size: bump the mtime so the size + mtime manifest cache sees the change.
+        File.SetLastWriteTimeUtc(script, File.GetLastWriteTimeUtc(script).AddSeconds(5));
         var second = ModContentManifest.Compute(_directory);
         Assert.NotEqual(first.Digest(file => file.Gameplay), second.Digest(file => file.Gameplay));
         Assert.Equal(new[] { "override/recruit.ncs" }, first.Differences(second));
         File.WriteAllText(module, "module B");
+        // Same size: bump the mtime so the size + mtime manifest cache sees the change.
+        File.SetLastWriteTimeUtc(module, File.GetLastWriteTimeUtc(module).AddSeconds(5));
         var third = ModContentManifest.Compute(_directory);
         Assert.NotEqual(second.Digest(file => file.Gameplay), third.Digest(file => file.Gameplay));
         Assert.Equal(new[] { "modules/bos_ship.mod" }, second.Differences(third));
@@ -165,6 +169,8 @@ public sealed class ModSupportTests : IDisposable
         File.WriteAllText(path, """{"schema":1,"id":"a"}""");
         var first = ModContentManifest.Compute(_directory);
         File.WriteAllText(path, """{"schema":1,"id":"b"}""");
+        // Same size: bump the mtime so the size + mtime manifest cache sees the change.
+        File.SetLastWriteTimeUtc(path, File.GetLastWriteTimeUtc(path).AddSeconds(5));
         var second = ModContentManifest.Compute(_directory);
         Assert.NotEqual(first.Digest(file => file.Gameplay), second.Digest(file => file.Gameplay));
         Assert.Equal(new[] { ModSupportProfile.FileName }, first.Differences(second));

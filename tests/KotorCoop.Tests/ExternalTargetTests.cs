@@ -133,7 +133,16 @@ public sealed class ExternalTargetTests : IDisposable
         using ProfileGameBridge bridge = new(memory, SignatureProfile(), ownsMemory: false);
 
         Assert.True(bridge.TryResolveAnchor(out string diagnostic), diagnostic);
-        Assert.True(bridge.TryReadLocalState(out PlayerState state), "could not read the target's player state");
+        // The mock rewrites the module name in place (clear, then write), so a read that lands
+        // between the two sees an empty name. Re-read until the block is settled.
+        PlayerState state = default;
+        bool read = false;
+        for (int i = 0; i < 40 && !(read && state.IsPlausible && state.Module.Length > 0); i++)
+        {
+            if (i > 0) Thread.Sleep(25);
+            read = bridge.TryReadLocalState(out state);
+        }
+        Assert.True(read, "could not read the target's player state");
 
         Assert.True(state.IsPlausible);
         Assert.Contains(state.Module, MockWorld.Modules);
