@@ -10,7 +10,8 @@ unverified and is disclosed instead.
    The notes stand alone for a reader who has never seen the repo.
 2. `dotnet build KotorCoop.slnx -warnaserror` and `pwsh src/KotorCoop.Plugin/build.ps1 -WarnAsError`
    are clean (the solution build does not compile the plugin), and
-   `dotnet test tests/KotorCoop.Tests --filter "Category!=Soak"` passes.
+   the **full** suite passes on your machine with `pwsh tools/test-full.ps1` (CI skips the four heaviest
+   real-socket classes, tagged `LocalOnly`, to keep CI around five minutes of tests).
 3. The Release workflow's packaged-installer check passes (`tools/verify-package.ps1`).
    It runs automatically on the tag; rehearse it first with **Actions > Release > Run workflow**
    on a branch, which builds everything and keeps the packages for three days instead of publishing.

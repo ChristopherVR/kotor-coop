@@ -18,6 +18,7 @@ namespace KotorCoop.Tests;
 /// the first.
 /// </summary>
 [Trait("Category", "Slow")]
+[Trait("Category", "LocalOnly")]
 public class DisconnectRecoveryTests
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(25);

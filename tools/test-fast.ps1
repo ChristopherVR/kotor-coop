@@ -1,6 +1,7 @@
 # The everyday test run: everything except the slow real-socket loopback/integration classes
 # (tagged [Trait("Category", "Slow")]) and the opt-in soak. About a minute instead of ten.
-# CI and a pre-push check still run the full suite (Category!=Soak).
+# CI runs everything except Soak and LocalOnly (the four heaviest loopback classes); run
+# tools	est-full.ps1 on your machine before tagging a release.
 #
 #   pwsh tools\test-fast.ps1                 # fast tier
 #   pwsh tools\test-fast.ps1 -Filter Store   # fast tier, names containing "Store"

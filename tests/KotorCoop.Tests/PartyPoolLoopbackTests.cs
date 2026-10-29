@@ -36,6 +36,7 @@ namespace KotorCoop.Tests;
 /// key exclusion) — see <c>PartyPoolPump.cs</c>'s own doc comment.
 /// </summary>
 [Trait("Category", "Slow")]
+[Trait("Category", "LocalOnly")]
 public class PartyPoolLoopbackTests
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(15);

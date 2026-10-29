@@ -52,7 +52,7 @@ jobs:
         run: |
           dotnet build KotorCoop.slnx -warnaserror
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          dotnet test tests/KotorCoop.Tests --no-build --filter 'Category!=Soak'
+          dotnet test tests/KotorCoop.Tests --no-build --filter 'Category!=Soak&Category!=LocalOnly'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m unittest discover -s tools/publication -p 'test_*.py'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
