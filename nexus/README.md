@@ -8,6 +8,20 @@ the code do not drift.
 | `description.bbcode` | Paste into the mod page's **Description** box (Nexus uses BBCode). |
 | `changelog.txt` | The per-version change text for each uploaded file. |
 
+## Page checklist
+
+| Field | Value |
+| --- | --- |
+| Name | KOTOR Co-op |
+| Summary (short description) | Seamless drop-in, drop-out co-op for KOTOR 1: two to eight players, each with their own character, in one shared world. Experimental, open source. |
+| Description | Paste `description.bbcode` |
+| Version | the release version, e.g. `0.1.0-beta.3` |
+| Category | Miscellaneous (or Gameplay / Multiplayer if offered) |
+| Primary image | `images/1-cover-title.jpg` |
+| Gallery | the other three images in `images/` |
+| Source / donation links | `https://github.com/ChristopherVR/kotor-coop` |
+| Adult content | No |
+
 ## What gets uploaded
 
 Mod page: <https://www.nexusmods.com/mod/1910> (mod id 1910).
@@ -26,7 +40,10 @@ Suggested page fields:
 - **Requirements:** Star Wars: Knights of the Old Republic (GOG or Steam), v1.0.3, 64-bit Windows.
 - **Permissions:** open source under GPL-3.0-only (see `LICENSE` and `KOTOR-LINKING-EXCEPTION.txt`).
 - **Tags:** multiplayer, co-op, experimental.
-- **Images:** `site/media/trailer-poster.jpg`; the trailer video is `site/media/trailer.mp4`.
+- **Images:** the gallery is in `images/`, taken from the public trailer (two real game copies side by
+  side): `1-cover-title.jpg` is the **primary image**, then the three gameplay shots in order.
+  Nexus wants videos as a YouTube or Vimeo link, so upload `site/media/trailer.mp4` there first
+  (the credit text for the music is in `site/media/music-credits.txt`; paste it into the video description).
 
 ## One-time setup for the automated upload
 
