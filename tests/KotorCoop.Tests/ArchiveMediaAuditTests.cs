@@ -48,6 +48,9 @@ public sealed class ArchiveMediaAuditTests : IDisposable
         string path = Write(relative, Encoding.ASCII.GetBytes("media A"));
         var a = ModContentManifest.Compute(_root);
         File.WriteAllText(path, "media B");
+        // Same size as "media A": the manifest cache keys on size + mtime, and two writes in
+        // one filesystem timestamp tick (fast CI disks) would otherwise look unchanged.
+        File.SetLastWriteTimeUtc(path, File.GetLastWriteTimeUtc(path).AddSeconds(5));
         var b = ModContentManifest.Compute(_root);
         Assert.Equal(new[] { relative.ToLowerInvariant() }, a.Differences(b));
         Assert.NotEqual(a.Digest(file => file.Gameplay), b.Digest(file => file.Gameplay));
