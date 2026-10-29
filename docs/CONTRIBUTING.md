@@ -140,7 +140,7 @@ run KOTOR or establish real third-party mod compatibility. For a local run:
 pwsh tools/verify-package.ps1 -PackageDirectory <extracted-package>
 ```
 
-The latest local release-verification results and remaining live gates are in
+The release checklist and remaining live gates are in
 [RELEASE-READINESS.md](RELEASE-READINESS.md).
 
 CI builds, tests and packages every branch push and pull request (`.github/workflows/ci.yml`),
