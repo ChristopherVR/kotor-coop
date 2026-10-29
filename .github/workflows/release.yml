@@ -8,6 +8,12 @@
 # writes SHA256SUMS.txt and creates the GitHub release. GitHub attaches the tagged source
 # archive to every release; that archive is the GPL "corresponding source" for the binaries.
 # Run it by hand (workflow_dispatch) to rehearse everything except publishing.
+#
+# After the GitHub release, the `nexus` job uploads a zip holding the one-click setup.exe to
+# the Nexus Mods page (mod 1910) with the Nexus-Mods/upload-action, archiving the previous
+# file version. It needs the NEXUSMODS_API_KEY secret and the NEXUS_FILE_ID repository
+# variable (the numeric id of the mod page's main file group, created once by hand: see
+# nexus/README.md). Without either, that job is skipped with a warning, not failed.
 name: Release
 on:
   push:
@@ -105,6 +111,44 @@ jobs:
           "@
           Set-Content -Encoding utf8 ../release-notes.md $body
 
+      # Nexus discourages a bare .exe as the main file and manages old versions itself, so the
+      # Nexus file is a zip holding the one-click setup program and a short note. The
+      # description is the release notes as plain text, so it reads the same whether or not
+      # the Nexus field renders BBCode.
+      - name: Build the Nexus file
+        id: nexusfile
+        shell: pwsh
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $stage = 'artifacts/nexus-stage'
+          New-Item -ItemType Directory -Force $stage | Out-Null
+          Copy-Item "dist/kotor-coop-$version-setup.exe" $stage
+          @"
+          KOTOR Co-op $version
+          ====================
+
+          1. Close KOTOR.
+          2. Run kotor-coop-$version-setup.exe. It finds your GOG or Steam copy (or lets you pick the folder).
+          3. Start KOTOR and press Co-op on the main menu.
+
+          Experimental: back up your saves first. Both players need the same version.
+          Source, issues, checksums and the full guide: https://github.com/ChristopherVR/kotor-coop
+          "@ -split "`n" | ForEach-Object { $_.TrimStart() } | Set-Content -Encoding utf8 "$stage/READ-ME-FIRST.txt"
+          New-Item -ItemType Directory -Force artifacts/nexus | Out-Null
+          Compress-Archive -Path "$stage/*" -DestinationPath "artifacts/nexus/kotor-coop-$version-nexus.zip" -Force
+          $notes = if (Test-Path release-notes.md) { Get-Content release-notes.md -Raw } else { '' }
+          $notes = ($notes -replace '(?m)^#+\s*', '' -replace '\*\*', '' -replace '`', '').Trim()
+          "KOTOR Co-op $version`n`n$notes`n`nSource and checksums: https://github.com/${{ github.repository }}/releases/tag/$env:GITHUB_REF_NAME" |
+            Set-Content -Encoding utf8 artifacts/nexus/description.txt
+
+      - name: Keep the Nexus file for the upload job
+        if: github.ref_type == 'tag'
+        uses: actions/upload-artifact@v7
+        with:
+          name: nexus
+          path: artifacts/nexus/*
+          retention-days: 3
+
       - name: Publish the GitHub release
         if: github.ref_type == 'tag'
         shell: pwsh
@@ -130,3 +174,60 @@ jobs:
             dist/kotor-coop-*-linux.tar.gz
             dist/SHA256SUMS.txt
           retention-days: 3
+
+  # Uploads to Nexus Mods and archives the previous version. Never cancelled, and a newer
+  # run queues behind it so two uploads cannot race on the archive-existing-version step.
+  nexus:
+    needs: release
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: release-nexus
+      cancel-in-progress: false
+    steps:
+      # `if:` can read vars but not secrets, so resolve both here into one step output.
+      - name: Check for Nexus Mods credentials
+        id: gate
+        env:
+          NEXUSMODS_API_KEY: ${{ secrets.NEXUSMODS_API_KEY }}
+          FILE_ID: ${{ vars.NEXUS_FILE_ID }}
+        run: |
+          if [ -n "$NEXUSMODS_API_KEY" ] && [ -n "$FILE_ID" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::NEXUSMODS_API_KEY secret and/or NEXUS_FILE_ID variable not set; skipping the Nexus Mods upload."
+          fi
+
+      - name: Download the Nexus file
+        if: steps.gate.outputs.enabled == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: nexus
+          path: nexus
+
+      - name: Read the version
+        id: version
+        if: steps.gate.outputs.enabled == 'true'
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          {
+            echo "body<<__NEXUS_EOF__"
+            cat nexus/description.txt
+            echo "__NEXUS_EOF__"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload to Nexus Mods (mod 1910)
+        if: steps.gate.outputs.enabled == 'true'
+        uses: Nexus-Mods/upload-action@v1.0.0-beta.11
+        with:
+          api_key: ${{ secrets.NEXUSMODS_API_KEY }}
+          file_id: ${{ vars.NEXUS_FILE_ID }}
+          filename: nexus/kotor-coop-${{ steps.version.outputs.version }}-nexus.zip
+          version: ${{ steps.version.outputs.version }}
+          display_name: KOTOR Co-op ${{ steps.version.outputs.version }} (one-click installer)
+          description: ${{ steps.version.outputs.body }}
+          category: main
+          primary_mod_manager_download: true
+          archive_existing_version: true
