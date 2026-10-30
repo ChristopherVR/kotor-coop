@@ -38,6 +38,13 @@ internal static unsafe partial class Odyssey
     /// <summary>CSWSObject + this = the current animation the gait is read from.</summary>
     private const int ObjAnimationField = 0xD4;
 
+    // CSWCCreature::GetPauseReadyAnimation, verified at 0x0060F020 (thiscall, ret).
+    // Returns 0x276C for the injured idle, checking server IsInjured and the engine's
+    // presentation restrictions. HP alone is insufficient: DriveBody owns the twin's
+    // looping id, bypassing the client's normal pause/ready selection.
+    private static readonly delegate* unmanaged[Thiscall]<nint, ushort> GetPauseReadyAnimationFn =
+        (delegate* unmanaged[Thiscall]<nint, ushort>)0x0060F020;
+
     /// <summary>
     /// Places a phantom exactly where its peer is, this frame, with the gait that matches how
     /// fast they are actually moving.
@@ -59,6 +66,15 @@ internal static unsafe partial class Odyssey
     {
         (bool wasRunning, float belowIdleSeconds) = AdvanceGaitHysteresis(creature, speed);
         int want = GaitRule.SelectAnimation(speed, moving, wasRunning, belowIdleSeconds);
+        if ((driveMask & (DriveSkipTwinGait | BisectBitDriveTwin | BisectBitDriveAnimation)) == 0)
+        {
+            nint twin = *(nint*)(creature + CreClientTwin);
+            if (twin != 0 && *(nint*)twin == ClientCreatureVtable)
+            {
+                want = GaitRule.ApplyInjury(want, GetPauseReadyAnimationFn(twin) == GaitRule.AnimInjuredIdle);
+            }
+        }
+
         DriveBody(creature, position, facing, speed, moving, want, GaitRule.IsRun(speed, wasRunning), driveMask);
     }
 

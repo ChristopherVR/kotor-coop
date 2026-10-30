@@ -133,7 +133,7 @@ internal static unsafe partial class Odyssey
     private static (bool WasRunning, float BelowIdleSeconds) AdvanceGaitHysteresis(nint creature, float speed)
     {
         int gaitSlot = GaitSlotOf(creature);
-        bool wasRunning = gaitSlot >= 0 && GaitLast[gaitSlot] == GaitRule.AnimRun;
+        bool wasRunning = gaitSlot >= 0 && GaitRule.IsRunningAnimation(GaitLast[gaitSlot]);
 
         int slot = GaitHysteresisSlotOf(creature);
         long nowMs = Environment.TickCount64;

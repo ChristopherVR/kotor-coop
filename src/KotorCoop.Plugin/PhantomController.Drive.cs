@@ -884,14 +884,11 @@ internal sealed unsafe partial class PhantomController
 
     /// <summary>
     /// Mirrors the peer's current/max hit points onto their stand-in. Nothing in this
-    /// plugin ever set them before, so a partner at 1/12 stood and walked on this screen as
-    /// if untouched (reported 2026-09-17 from the site's own fight clip: the host at 1 hp,
-    /// the joiner's copy of her walking normally). The point is not the numbers: the drive
-    /// above writes the walk/run gait through <c>CSWSCreature::SetAnimation</c>, which
-    /// substitutes the limping walk/run (0x2712->0x276D, 0x2714->0x276E) whenever
-    /// <c>CSWSCreature::IsInjured</c> (0x4EFF30) says current/max &lt; 0.2 - the same rule
-    /// that limps the peer on their own screen. With the fields mirrored, the engine's own
-    /// substitution does the rest, no new animation plumbing.
+    /// plugin set them before the 2026-09-17 fix. The engine's IsInjured decision needs
+    /// this ratio, but health alone does not fix presentation: DrivePhantom must also
+    /// select the injured gait before writing the client twin's looping animation.
+    /// Otherwise the direct drive replaces the stomach-holding pose with normal idle.
+    /// See docs/research/injured-phantom-animation.md for the 2026-10-30 follow-up.
     ///
     /// Max is written first (<c>ExecuteCommandSetMaxHitPoints</c>'s order: +0xE0, then the
     /// SetCurrentHitPoints call) and current is clamped to 1..max: a stand-in must never

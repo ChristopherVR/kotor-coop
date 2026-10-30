@@ -41,6 +41,23 @@ internal static class GaitRule
     public const int AnimWalk = 0x2712;
     public const int AnimRun = 0x2714;
 
+    public const int AnimInjuredIdle = 0x276C;
+    public const int AnimInjuredWalk = 0x276D;
+    public const int AnimInjuredRun = 0x276E;
+
+    /// <summary>Apply the engine's injury decision after selecting the speed-based gait.
+    /// The resolved id must also reach the twin and the change latch: otherwise a stationary
+    /// health change never updates the pose, or the twin overwrites it with normal idle.</summary>
+    public static int ApplyInjury(int gait, bool injured) => injured ? gait switch
+    {
+        AnimIdle => AnimInjuredIdle,
+        AnimWalk => AnimInjuredWalk,
+        AnimRun => AnimInjuredRun,
+        _ => gait,
+    } : gait;
+
+    public static bool IsRunningAnimation(int animation) => animation is AnimRun or AnimInjuredRun;
+
     /// <summary>
     /// Planar speed (units/second) a WALKING body must exceed to become a RUN. Only reachable
     /// from Walk — a body already running does not need to reach this again, it only has to

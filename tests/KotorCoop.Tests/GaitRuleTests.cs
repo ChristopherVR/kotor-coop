@@ -14,6 +14,47 @@ namespace KotorCoop.Tests;
 /// </summary>
 public class GaitRuleTests
 {
+    [Theory]
+    [InlineData(0f, false, GaitRule.AnimIdle, GaitRule.AnimInjuredIdle)]
+    [InlineData(1f, true, GaitRule.AnimWalk, GaitRule.AnimInjuredWalk)]
+    [InlineData(4f, true, GaitRule.AnimRun, GaitRule.AnimInjuredRun)]
+    public void InjuryAndHealingChangeThePoseWithoutChangingSpeed(float speed, bool moving, int healthy, int injured)
+    {
+        int last = GaitRule.SelectAnimation(speed, moving);
+        Assert.Equal(healthy, last);
+        foreach (bool hurt in new[] { true, false })
+        {
+            int want = GaitRule.ApplyInjury(GaitRule.SelectAnimation(speed, moving), hurt);
+            Assert.Equal(hurt ? injured : healthy, want);
+            Assert.True(GaitRule.ShouldReissue(last, want));
+            last = want;
+            // Holding the same health state must leave one-shots free to finish.
+            Assert.False(GaitRule.ShouldReissue(last,
+                GaitRule.ApplyInjury(GaitRule.SelectAnimation(speed, moving), hurt)));
+        }
+    }
+
+    [Fact]
+    public void InjuredRunKeepsHysteresisThroughHealingInTheSpeedDeadBand()
+    {
+        int last = GaitRule.AnimInjuredRun;
+        foreach (bool hurt in new[] { true, false, true })
+        {
+            int gait = GaitRule.SelectAnimation(2f, true, GaitRule.IsRunningAnimation(last));
+            last = GaitRule.ApplyInjury(gait, hurt);
+            Assert.Equal(hurt ? GaitRule.AnimInjuredRun : GaitRule.AnimRun, last);
+        }
+        int slow = GaitRule.SelectAnimation(1f, true, GaitRule.IsRunningAnimation(last));
+        Assert.Equal(GaitRule.AnimInjuredWalk, GaitRule.ApplyInjury(slow, true));
+    }
+
+    [Fact]
+    public void InjuryDoesNotReplaceAuthoredAnimations()
+    {
+        Assert.Equal(0x2716, GaitRule.ApplyInjury(0x2716, true)); // death
+        Assert.Equal(0x27AE, GaitRule.ApplyInjury(0x27AE, true)); // flourish
+    }
+
     [Fact]
     public void NotMovingIsAlwaysIdleRegardlessOfSpeed()
     {
