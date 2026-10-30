@@ -6,6 +6,45 @@ reasoned but not observed — a wrong one fails safe (no effect or mis-placed te
 crash), so confirming them is the point of this pass. For how to build and run the pieces
 this checklist exercises, see `docs/CONTRIBUTING.md`.
 
+## 2026-10-30: beginner usability candidate
+
+Local candidate `0.1.0-usability-review`, built from the uncommitted working tree;
+not a published release. Validation artifacts live under
+`artifacts/usability-20261030-package` and `artifacts/installer-preview-smoke`.
+
+- Solution build with warnings as errors passed. The full non-soak suite passed
+  6,503 tests; after the live findings below, 213 targeted regression tests passed.
+- Packaged installer checks passed 76 assertions covering plain/chained installs,
+  upgrades, opt-in settings migration and backups, uninstall, and support redaction.
+- Inno runtime smoke used the packaged agent/defaults, a unique installer identity,
+  and synthetic folders; it aborted before installing. It confirmed preview extraction,
+  navigation/consent preservation, optional Steam-component detection, and failure behavior.
+  This is not a visual or clean-machine installation test.
+- A single disposable GOG 1.03 copy at 800x600 ran on a private non-input desktop.
+  Harness-injected clicks opened Co-op, selected Create support report and produced
+  a local ZIP, then selected Host and loaded Dantooine. No second player participated.
+- This smoke found two usability regressions: clipped support/hosting directions,
+  and F9 selection resetting on repeated discovery updates. The fixes split help into
+  bounded lines and preserve selections by host address or action identity; both have
+  targeted regression coverage.
+- The rebuilt candidate repeated the native support-report and Host paths. F9 scrolled
+  to its final action without covering the footer, preserved selection as discovery
+  serials advanced, repeated Host without reloading, and Leave returned to no session.
+  Final support-report output and screenshots are saved under the artifact folder.
+- This modded fixture took about 2 minutes 25 seconds to finish helper startup checks.
+  A support-report action selected during that wait was processed once startup finished.
+  Startup latency is still a beginner usability limitation.
+- Holding Enter while confirming an F9 action also opened chat. A follow-up fix consumes
+  that key hold until release, with a regression for the browser/chat frame ordering.
+  A final private-desktop recheck loaded the disposable save through the native Load
+  Game menu: held Enter confirmed Retry without opening chat; after release, a fresh
+  Enter opened chat normally. The final package passed all 76 checks again. Test game
+  processes were shut down; no original game installation or saves were changed.
+
+These checks do not establish independent-PC internet connectivity, lossless recovery,
+ordinary physical/controller input, a full campaign, or beginner acceptance. No relay was
+added. Continue with the separate acceptance checklist in [PLAYTEST.md](PLAYTEST.md).
+
 ## Already confirmed live (2026-08-01) — no need to re-verify unless something regresses
 
 Session start from inside the game (Co-op button → panel → **Host** on one instance,

@@ -3,13 +3,35 @@
 This checklist mixes verification of implemented features with exploratory checks of known gaps
 (including duel rings and the dark-side branch). A passing unit suite does not prove these game
 paths, and some earlier rig limitations have since been overcome; see the dated review log.
-Each item says what to do, what should happen, and what to look for. After each session run
-`KotorCoop.Agent.exe logs` (see [TROUBLESHOOTING.md](TROUBLESHOOTING.md)) and attach the zip, whether it
+Each item says what to do, what should happen, and what to look for. After each session choose
+**Create support report** (see [TROUBLESHOOTING.md](TROUBLESHOOTING.md)) and review the zip before attaching it, whether it
 worked or not: a "worked" report is as useful as a bug.
 
 Two players, both on the current build, each with their own copy of the game. The host loads a save that
 has reached the point in the list. Log files are `kotorcoop-plugin.log` (in the game folder) and the agent
 log; "the joiner's log" means the joining player's copy.
+
+## Beginner acceptance check — not yet verified
+
+Use the exact packaged release on two independently installed PCs, with two people who have
+not developed the mod. Follow the [install guide](../site/install.html) and
+[play guide](../site/play.html). A maintainer typing commands or changing files for a player
+counts as assistance, not a pass. Record each result separately; a same-PC rig or automated
+test does not establish these results.
+
+| Check | Player task | Pass evidence |
+| --- | --- | --- |
+| Clean installation | Install as an ordinary Windows user on Steam and GOG copies; follow any Windows permission prompt. | Both find the game folder, complete setup and see Co-op without a terminal or manual file edits. Record the package version/hash and store/build. |
+| Honest options and update | Open setup without the optional Steam component. Upgrade an older configuration and inspect recommended settings changes; try both keeping and applying them. | Unavailable invites are explained. Choices persist, the original settings have a backup when changed, and the intended gameplay defaults match. |
+| Same-network joining | Host, discover the session, create the joining character and play together. | Both players reach the same world using only the guide and visible controls. Record time and any assistance. |
+| Different-network joining | Use two separate internet connections. Copy the connection address, then join; if it fails, follow Connection help. | Record whether direct joining succeeds and any required router/tunnel work. A copied public address or local self-test is not evidence of outside reachability. |
+| Save and return another day | Save, leave through F9, close both games, then host and rejoin on the next day. | Both recover the intended checkpoint, characters, inventories and credits without commands or save-folder manipulation. |
+| Disconnect and recover | Temporarily interrupt a connection, restore it, and use Retry last connection if needed. On disposable test saves, separately interrupt the host helper and host game. | Clear status, released controls, successful Start/resume hosting/rejoin, and explicit accounting of any unsaved progress lost. Test each fault separately. |
+| Useful support report | Create a report in game and with the double-click collector after the game closes. | Player locates the ZIP, understands READ-ME-FIRST.txt and attaches it without hunting for logs. Known private test addresses, paths and credentials are absent; diagnostic errors remain. |
+| Complete campaign | Play naturally from Endar Spire through an ending, including ordinary recruitment, training, Leviathan equipment return, Manaan and final duels. | Dated checkpoints and reports from both PCs; no developer warps, skipped blockers or unexplained item loss. Any workaround is recorded as a remaining limitation. |
+
+The new connection/recovery menu actions and installer migration flow also require ordinary
+in-game/desktop confirmation. Do not mark this checklist complete from unit or package tests.
 
 ## From a new game
 
@@ -70,7 +92,8 @@ log; "the joiner's log" means the joining player's copy.
 | 29 | As a Jedi with Force points, cast **Cure** or **Heal** on your hurt partner (`partner_buffs`, on by default). | Your partner's real health goes up once. | Partner's log: an `effect: applied` heal line. Proven on the rig: a host Cure healed the joiner 4 -> 12. |
 | 30 | Both players fight the same enemy; the joiner out-damages the host clearly. | The enemy turns on the joiner and stays on them instead of flipping back and forth. | Host log: `threat` retarget lines; whether the enemy keeps switching. The joiner-only case and the alternating equal-damage case are proven on the rig with the `attack` verb. |
 
-If something here crashes the game, `KotorCoop.Agent.exe logs` includes the crash record that survives a hard crash.
+If something here crashes the game, the support report includes a summary of the crash record
+that survives a hard crash. The raw stack stays in the original game folder for follow-up.
 
 ## Story-skip follow-up checks (2026-09-30)
 

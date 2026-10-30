@@ -21,6 +21,8 @@ public class ConsoleCommandVerbTableCoverageTests
         [CoopCommandKind.Disconnect] = "disconnect",
         [CoopCommandKind.Reconnect] = "reconnect",
         [CoopCommandKind.Status] = "status",
+        [CoopCommandKind.ConnectionHelp] = "connectionhelp",
+        [CoopCommandKind.SupportReport] = "supportreport",
         [CoopCommandKind.Say] = "say hello",
         [CoopCommandKind.Clear] = "clear",
         [CoopCommandKind.Servers] = "servers",

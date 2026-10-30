@@ -45,6 +45,28 @@ public sealed class SettingsMigrationTests : IDisposable
         Assert.Equal(AgentCommand.Support, AgentOptions.Parse(["support"]).Command);
         Assert.True(AgentOptions.Parse(["install", "--update-defaults"]).UpdateDefaults);
         Assert.False(AgentOptions.Parse(["install"]).UpdateDefaults);
+        AgentOptions preview = AgentOptions.Parse(["install", "--preview-defaults", "--set", "menu_button=0"]);
+        Assert.True(preview.PreviewDefaults);
+        Assert.False(preview.UpdateDefaults);
+        Assert.Single(preview.IniSettings);
+    }
+
+    [Fact]
+    public void ExplicitWizardChoicesAreExcludedFromBothPreviewAndMigration()
+    {
+        string player = Path.Combine(_directory, "coop.ini");
+        string template = Path.Combine(_directory, "defaults.ini");
+        const string original = "menu_button=0\nstore_sync=0\njoin_mode=custom\npassword=secret\n";
+        File.WriteAllText(player, original);
+        File.WriteAllText(template, "menu_button=1\nstore_sync=2\njoin_mode=auto\n");
+        IReadOnlyList<SettingsMigration.Change> changes = SettingsMigration.Find(player, template, ["MENU_BUTTON"]);
+        SettingsMigration.Change change = Assert.Single(changes);
+        Assert.Equal("store_sync", change.Key);
+        Assert.Contains("Shared merchant stock: off -> shared mode", SettingsMigration.Describe(change));
+        Assert.Equal(original, File.ReadAllText(player));
+        string backup = SettingsMigration.Apply(player, changes);
+        Assert.Equal(original, File.ReadAllText(backup));
+        Assert.Equal(original.Replace("store_sync=0", "store_sync=2"), File.ReadAllText(player));
     }
 
     [Fact]

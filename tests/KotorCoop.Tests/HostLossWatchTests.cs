@@ -51,7 +51,9 @@ public class HostLossWatchTests
     [Fact]
     public void TheAnnouncementsAreThePlayerFacingTexts()
     {
-        Assert.Equal("The host has stopped responding. Still trying - type `disconnect` to play on alone.", HostLossWatch.WarnLine);
-        Assert.Contains("reconnect", HostLossWatch.GiveUpLine, StringComparison.Ordinal);
+        Assert.Equal("Host not responding. Still trying. F9 > Connection help.", HostLossWatch.WarnLine);
+        Assert.Contains("Retry last connection", HostLossWatch.GiveUpLine, StringComparison.Ordinal);
+        Assert.InRange(HostLossWatch.WarnLine.Length, 1, PlayerHelpText.DefaultWidth);
+        Assert.InRange(HostLossWatch.GiveUpLine.Length, 1, PlayerHelpText.DefaultWidth);
     }
 }

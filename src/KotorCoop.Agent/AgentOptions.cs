@@ -239,6 +239,8 @@ public sealed record AgentOptions
     /// <summary>`firewall --add`: the hidden elevated child of interactive setup.</summary>
     public bool FirewallAdd { get; init; }
     public bool UpdateDefaults { get; init; }
+    /// <summary>install: read-only plain-language preview for the graphical setup wizard.</summary>
+    public bool PreviewDefaults { get; init; }
 
     /// <summary>install: <c>--set key=value</c> pairs written into the game's coop.ini after
     /// the copy (repeatable). What the graphical setup passes for its options page.</summary>
@@ -327,6 +329,7 @@ public sealed record AgentOptions
         bool firewallAdd = false;
         bool rescan = false;
         bool updateDefaults = false;
+        bool previewDefaults = false;
         List<KeyValuePair<string, string>> iniSettings = [];
         bool noFirewall = false;
         bool windowed = false;
@@ -442,6 +445,9 @@ public sealed record AgentOptions
                     break;
                 case "--update-defaults":
                     updateDefaults = true;
+                    break;
+                case "--preview-defaults":
+                    previewDefaults = true;
                     break;
 
                 case "--set":
@@ -673,6 +679,7 @@ public sealed record AgentOptions
             FirewallAdd = firewallAdd,
             Rescan = rescan,
             UpdateDefaults = updateDefaults,
+            PreviewDefaults = previewDefaults,
             IniSettings = iniSettings,
             NoFirewall = noFirewall,
             ViaSteam = viaSteam,
@@ -769,6 +776,9 @@ public sealed record AgentOptions
                     --no-firewall skips the Windows Firewall rule for hosting.
           install --update-defaults
                     Back up coop.ini and apply settings matching older defaults from the incoming template.
+                    Explicit --set choices take priority over migrated defaults.
+          install --preview-defaults
+                    Read-only list of recommended changes; --set keys are excluded without being written.
           install --check
                     Report the install layout found (plain / chain / foreign-only / none)
                     and verify it - every dinput8.chain entry exists, the loader and

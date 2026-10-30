@@ -1084,6 +1084,11 @@ public enum CoopCommandKind
     /// same as <see cref="Gamepad"/>/<see cref="Input"/>. Local only.
     /// </summary>
     Screenshot,
+
+    /// <summary>Plain-language connection checks for the in-game menu.</summary>
+    ConnectionHelp,
+    /// <summary>Create a local support report without uploading anything.</summary>
+    SupportReport,
 }
 
 /// <summary>
@@ -1232,6 +1237,8 @@ public static partial class ConsoleCommand
         new(["clear", "cls"], ParseClear),
         new(["servers", "browse", "list"], ParseServers),
         new(["status", "stat"], ParseStatus),
+        new(["connectionhelp"], _ => new(CoopCommandKind.ConnectionHelp)),
+        new(["supportreport"], _ => new(CoopCommandKind.SupportReport)),
         new(["lagstats"], ParseLagStats),
         new(["public_address", "publicaddress", "pubaddr"], ParsePublicAddress),
         new(["steamstatus", "steam_status"], ParseSteamStatus),

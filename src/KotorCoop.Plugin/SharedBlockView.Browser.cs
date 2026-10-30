@@ -40,6 +40,12 @@ internal sealed unsafe partial class SharedBlockView
     }
 
 
+    public void PublishMenuCommand(string command)
+    {
+        byte[] bytes = System.Text.Encoding.ASCII.GetBytes(command);
+        fixed (byte* source = bytes) PublishConsoleCommand(source, bytes.Length);
+    }
+
     // ---- chat overlay -----------------------------------------------------------
 
     public bool ChatOverlayEnabled => *U32(SharedBlock.OffsetChatOverlayEnabled) != 0;

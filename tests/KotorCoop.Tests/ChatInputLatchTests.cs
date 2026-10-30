@@ -29,4 +29,17 @@ public sealed class ChatInputLatchTests
         Assert.False(latch.ShouldOpen(false, false, true, false, false));
         Assert.True(latch.ShouldOpen(true, false, true, false, false));
     }
+
+    [Fact]
+    public void BrowserConfirmBeforeTheChatFrameCannotLeakEnterIntoChat()
+    {
+        var latch = new ChatInputLatch();
+        // Main-loop browser handles Enter and closes before SwapBuffers/chat gets a
+        // frame. Chat never observed the browser while the key was down.
+        latch.ConsumeCurrentPress();
+        Assert.False(latch.ShouldOpen(true, false, true, false, false));
+        Assert.False(latch.ShouldOpen(true, false, true, false, false));
+        Assert.False(latch.ShouldOpen(false, false, true, false, false));
+        Assert.True(latch.ShouldOpen(true, false, true, false, false));
+    }
 }

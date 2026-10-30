@@ -151,6 +151,7 @@ internal sealed unsafe partial class NativeBrowserController
 
         int count = (int)Math.Min(_block.BrowserCount, (uint)MaxRows);
         _serverRows = count;
+        _detailSelection = -2;
 
         int* rect = stackalloc int[4];
         rect[0] = 0;
@@ -159,7 +160,7 @@ internal sealed unsafe partial class NativeBrowserController
         rect[3] = RowHeight;
 
         // Every server (or the one placeholder), plus the address row last.
-        nint* rows = stackalloc nint[MaxRows + 2];
+        nint* rows = stackalloc nint[MaxRows + 2 + CoopMenuActions.Count];
         int built = 0;
 
         if (count == 0)
@@ -195,6 +196,15 @@ internal sealed unsafe partial class NativeBrowserController
             rows[built++] = addressRow;
         }
 
+        Array.Fill(_actionRows, -1);
+        for (int action = 0; action < CoopMenuActions.Count; action++)
+        {
+            nint row = BuildRow(proto, (nint)rect, CoopMenuActions.Caption(action));
+            if (row == 0) continue;
+            _actionRows[action] = built;
+            rows[built++] = row;
+        }
+
         // The caller-stack CExoArrayList triple {data, count, capacity}; AddControls copies
         // the pointers out, so stack storage is fine for the duration of the call. Flag 1 =
         // the listbox owns (and on the next clear, frees) the rows.
@@ -213,6 +223,10 @@ internal sealed unsafe partial class NativeBrowserController
         if (restoreAddress == AddressRowMarker && _addressRow >= 0)
         {
             select = _addressRow; // the player was on the address row: keep them there
+        }
+        else if (CoopMenuActions.FindMarker(restoreAddress) is int action && action >= 0 && _actionRows[action] >= 0)
+        {
+            select = _actionRows[action];
         }
         else if (restoreAddress is not null)
         {
@@ -248,7 +262,9 @@ internal sealed unsafe partial class NativeBrowserController
             ? ReadAscii(
                 _block.BrowserEntry(select) + SharedBlock.BrowserEntryAddress,
                 SharedBlock.BrowserEntryAddressLength)
-            : select == _addressRow ? AddressRowMarker : null;
+            : select == _addressRow ? AddressRowMarker
+            : Array.IndexOf(_actionRows, select) is int selectedAction && selectedAction >= 0
+                ? CoopMenuActions.Marker(selectedAction) : null;
     }
 
     /// <summary>

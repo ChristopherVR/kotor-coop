@@ -371,33 +371,15 @@ shipped `coop.ini.example`; the comment has since been corrected to say ON.
 was fixed, the agent's own copy (`CoopConfig.MovieRelayEnabled`) defaulted OFF when the key was
 absent, so the two readers disagreed the moment `movie_relay` was removed from `coop.ini`
 entirely; both now default ON, matching each other and the shipped file's explicit `=1`.
-³ **Corrected — this footnote used to claim `profiles/coop.ini.example` explicitly sets all four
-keys below to `1`. It does not; none of the four appear in the shipped file at all**, so all four
-run on whatever their own code fallback is. That fallback now differs between the two pairs:
+³ The current template explicitly sets `script_item_sync = 1`, `companion_xp_sync = 1`,
+`dialogue_recruit_sync = 1` and `companion_local_combat = 0`, matching the code fallbacks.
+Earlier templates omitted these keys, and older configurations can contain explicit values
+that differ. In particular, recruitment sync changed from OFF to ON on 2026-09-18;
+companion local combat still defaults OFF. The graphical updater offers a preview of settings
+that match historical defaults and backs up `coop.ini` before applying approved changes.
+A digest-only key's fallback must agree in `CoopConfig`, `PluginConfig.ReadBool` and
+`AgentComposition.Compose`; matching templates alone do not establish that agreement.
 
-- `script_item_sync` and `companion_xp_sync` were fixed 2026-08-28 to default **ON** when the key
-  is absent — `CoopConfig`'s own parse (`!ContainsKey(...) || IsTruthy(...)`) and its record-property
-  initializers agree, and `AgentComposition.Compose` now reads `config?.ScriptItemSync ?? true` /
-  `config?.CompanionXpSync ?? true`. A packaged install therefore really does ship with both ON,
-  just via the code default, not an explicit `coop.ini` line.
-- `dialogue_recruit_sync` was fixed the same way on **2026-09-18** (plugin `ReadBool(..., true)`,
-  `CoopConfig` record default and parse, `AgentComposition.Compose`'s `?? true`): the
-  seamless-playthrough review ([review-seamless-2026-09-18.md](review-seamless-2026-09-18.md))
-  found that shipping it OFF split every roster after Taris, while the evidence the OFF default
-  was waiting for (all nine slot templates statically verified, two live) had been in hand since
-  2026-08-24. `liveness_sync` and `map_reveal_sync` had the mirror-image bug the same day: the
-  PLUGIN default was ON (or the template line said 1) while `CoopConfig`'s digest default was
-  OFF, and because both peers' digests agreed, no `W_CFG` ever fired — for `liveness_sync` that
-  meant every shipped install between 2026-09-03 and 2026-09-18 ran without it. **Rule since
-  2026-09-18: a digest-only key's default in `CoopConfig` must equal the plugin's
-  `PluginConfig.ReadBool` fallback**, and `AgentComposition.Compose`'s `??` fallback (used when
-  coop.ini is missing) must equal both.
-- `companion_local_combat` still defaults **OFF** everywhere that reads it
-  (`PluginConfig.ReadBool("companion_local_combat", false)`, `AgentComposition.Compose`'s
-  `?? false`) and is not in the shipped template, so **a real packaged install ships with it
-  genuinely OFF** — the documented, on-purpose state (see its row above). Turning it on is a
-  one-line `coop.ini` edit and is exactly what the live-verified rounds cited in the status table
-  were run with.
 ⁴ Until 2026-08-27 the shipped `coop.ini.example` set `effect_sync=0` with a stale "OFF until
 live-verified" comment; it now ships `=1`, matching the code fallback and the live-verified
 state. A `coop.ini` installed before then keeps the old value (the installer never overwrites

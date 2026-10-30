@@ -116,6 +116,9 @@ may need port forwarding or a tunnel; the mod does not supply a relay server. Se
 
 While connected, load the save called **Co-op** to resume your session. Your own autosave is
 backed up as **Autosave before co-op**. Press **Enter** to chat and **~** for the console.
+Press **F9** for connection help, copying your hosting address, retrying, resuming hosting,
+leaving co-op or creating a support report. Copying an address does not prove that friends
+outside your network can reach it; internet hosting may still need router or tunnel setup.
 
 <details>
 <summary>ZIP installation, Windows prompts and Linux packages</summary>
@@ -272,6 +275,10 @@ installer is tested on Linux; gameplay on Linux is not a verified configuration.
 Updates preserve `coop.ini`. Everything lives in that one commented file
 (`profiles/coop.ini.example`; the full list is [docs/CONFIG.md](docs/CONFIG.md)). For a bug report,
 double-click `KotorCoop.CollectLogs.cmd` or run `KotorCoop.Agent.exe logs` to make a support zip.
+You can also choose **Create support report** in the Co-op browser. Open **READ-ME-FIRST.txt**
+inside the ZIP before sharing: recognized addresses, paths and credentials are removed from
+text automatically, but chat and other players' names may remain. Nothing is uploaded, and
+your original logs are unchanged. The report includes a crash summary, not raw stack memory.
 Problems are covered in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
 ## For developers

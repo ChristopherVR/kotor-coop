@@ -67,12 +67,15 @@ public sealed class LogsCommandTests : IDisposable
     [InlineData("KotorCoop-Plugin.LOG", true)]
     [InlineData("kotorcoop-agent.log", true)]
     [InlineData("kotorcoop-agent.log.2", true)]
+    [InlineData("kotorcoop-agent.3.log", true)]
+    [InlineData("kotorcoop-setup.log", true)]
     [InlineData("kotorcoop-crash.bin", true)]
     [InlineData("dinput8-chain.log", true)]
     [InlineData("swkotor.exe", false)]
     [InlineData("coop.ini", false)]
     [InlineData("kotorcoop-character.pifo", false)]
     [InlineData("kotorcoop-last-address.txt", false)]
+    [InlineData("kotorcoop-agent-private.log.zip", false)]
     [InlineData("", false)]
     public void OnlyTheSupportFilesAreCollected(string name, bool expected)
     {
@@ -90,14 +93,14 @@ public sealed class LogsCommandTests : IDisposable
         File.WriteAllText(Path.Combine(_dir, "swkotor.exe"), "not really");
         string zipPath = Path.Combine(_dir, "out.zip");
 
-        int files = LogsCommand.WriteBundle(_dir, zipPath, "test-1.0");
+        int files = LogsCommand.WriteBundle(_dir, zipPath, "1.0.0.0");
 
-        Assert.Equal(5, files); // 3 support files + coop.ini + system.txt
+        Assert.Equal(6, files); // 3 support files + coop.ini + system.txt + manifest
 
         using ZipArchive zip = ZipFile.OpenRead(zipPath);
         string[] names = zip.Entries.Select(e => e.FullName).OrderBy(n => n, StringComparer.Ordinal).ToArray();
         Assert.Equal(
-            ["coop.ini", "kotorcoop-agent.log", "kotorcoop-crash.bin", "kotorcoop-plugin.log", "system.txt"],
+            ["READ-ME-FIRST.txt", "coop.ini", "crash-summary.txt", "kotorcoop-agent.log", "kotorcoop-plugin.log", "system.txt"],
             names);
 
         using StreamReader ini = new(zip.GetEntry("coop.ini")!.Open());
@@ -107,7 +110,7 @@ public sealed class LogsCommandTests : IDisposable
 
         using StreamReader system = new(zip.GetEntry("system.txt")!.Open());
         string systemText = system.ReadToEnd();
-        Assert.Contains("test-1.0", systemText);
+        Assert.Contains("1.0.0.0", systemText);
         Assert.Contains("swkotor.exe", systemText);
         Assert.Contains("installed   unknown", systemText);
     }
@@ -118,7 +121,7 @@ public sealed class LogsCommandTests : IDisposable
         File.WriteAllText(Path.Combine(_dir, "dinput8-chain.log"), "failed to load KotorCoop.Plugin.dll\n");
         string zipPath = Path.Combine(_dir, "out.zip");
 
-        Assert.Equal(2, LogsCommand.WriteBundle(_dir, zipPath, "preview"));
+        Assert.Equal(3, LogsCommand.WriteBundle(_dir, zipPath, "preview"));
         using ZipArchive zip = ZipFile.OpenRead(zipPath);
         using StreamReader log = new(zip.GetEntry("dinput8-chain.log")!.Open());
         Assert.Contains("failed to load KotorCoop.Plugin.dll", log.ReadToEnd());
@@ -149,5 +152,73 @@ public sealed class LogsCommandTests : IDisposable
         using ZipArchive zip = ZipFile.OpenRead(Path.Combine(_dir, "out.zip"));
         using StreamReader reader = new(zip.GetEntry("kotorcoop-plugin.log")!.Open());
         Assert.Contains("still being written", reader.ReadToEnd());
+    }
+
+    [Fact]
+    public void SupportCopyRedactsSetupAndLogsWithoutChangingOriginalsOrIncludingRawStack()
+    {
+        const string secret = "session-secret";
+        const string logText = "connected 203.0.113.42:27140 and [2001:db8::9]:27140\n"
+            + "loaded from C:\\Users\\PrivatePerson\\Games\\KOTOR\\coop.ini\n"
+            + "PlayerNameOne joined private-host.example\npassword=session-secret\n"
+            + "invite kc1/private-host.example:27140/c2VjcmV0\n"
+            + "FIRST-CHANCE 0xC0000005 EIP=0x0040D386 module tar_m02aa\n";
+        string log = Path.Combine(_dir, "kotorcoop-agent.log");
+        File.WriteAllText(log, logText);
+        File.WriteAllText(Path.Combine(_dir, "kotorcoop-setup.log"), "--set name=PlayerNameOne\n" + logText);
+        File.WriteAllText(Path.Combine(_dir, "coop.ini"), $"password={secret}\nhost=private-host.example\nname=PlayerNameOne\n");
+        byte[] crash = new byte[280];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(crash.AsSpan(4), 0xC0000005);
+        System.Text.Encoding.UTF8.GetBytes("PRIVATE STACK CONTENT").CopyTo(crash, 24);
+        string crashPath = Path.Combine(_dir, "kotorcoop-crash.bin");
+        File.WriteAllBytes(crashPath, crash);
+        string output = Path.Combine(_dir, "out.zip");
+
+        LogsCommand.WriteBundle(_dir, output, "v0.1.0-beta");
+
+        using ZipArchive zip = ZipFile.OpenRead(output);
+        Assert.NotNull(zip.GetEntry("kotorcoop-setup.log"));
+        Assert.Null(zip.GetEntry("kotorcoop-crash.bin"));
+        string combined = string.Join("\n", zip.Entries.Select(entry =>
+        {
+            using StreamReader reader = new(entry.Open());
+            return reader.ReadToEnd();
+        }));
+        foreach (string privateValue in new[] { secret, "203.0.113.42", "2001:db8::9", "PrivatePerson",
+            "PlayerNameOne", "private-host.example", "c2VjcmV0", "PRIVATE STACK CONTENT", _dir })
+        {
+            Assert.DoesNotContain(privateValue, combined);
+        }
+        Assert.Contains("0xC0000005", combined);
+        Assert.Contains("0x0040D386", combined);
+        Assert.Contains("tar_m02aa", combined);
+        Assert.Contains("Other players' names and free-text chat may remain", combined);
+        Assert.Equal(logText, File.ReadAllText(log));
+        Assert.Equal(crash, File.ReadAllBytes(crashPath));
+    }
+
+    [Theory]
+    [InlineData("remote [fe80::1%12]:27140", "fe80::1")]
+    [InlineData("remote ::ffff:192.0.2.1", "192.0.2.1")]
+    [InlineData("--password \"multi word secret\" --join example.org", "multi word secret")]
+    [InlineData("connect example.org:27140 some secret", "some secret")]
+    [InlineData("path /home/sensitive/Games/Kotor", "sensitive")]
+    [InlineData("path \\\\private-server\\share\\game", "private-server")]
+    public void AlternateConnectionAndPathFormatsAreRedacted(string input, string privateValue)
+    {
+        Assert.DoesNotContain(privateValue, new SupportRedaction("").Redact(input));
+    }
+
+    [Fact]
+    public void ShortNamesDoNotDestroyDiagnosticWords()
+    {
+        Assert.Equal("<private> connected; map and party ready", new SupportRedaction("name=A").Redact("A connected; map and party ready"));
+    }
+
+    [Fact]
+    public void ConnectionAdviceIsNotMistakenForATypedCommand()
+    {
+        const string advice = "Cannot connect to the host. Check the firewall.";
+        Assert.Equal(advice, new SupportRedaction("").Redact(advice));
     }
 }

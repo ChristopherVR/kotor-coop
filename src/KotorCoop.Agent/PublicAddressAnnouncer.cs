@@ -26,11 +26,13 @@ public sealed class PublicAddressAnnouncer
     /// </summary>
     public static string Line(int port, IPEndPoint? publicEndPoint, UpnpMappingStatus upnp, ReachabilityVerdict reachability)
     {
-        string upnpNote = UpnpNote(upnp, port, reachability);
-
+        // This toast must fit the default chat overlay's 60-character width.
+        // Detailed reachability evidence remains in Connection help and status.
         return publicEndPoint is not null
-            ? $"co-op: hosting on port {port} - public address found, type public_address to show it ({upnpNote})"
-            : $"co-op: hosting on port {port} - public address unknown ({upnpNote})";
+            ? "Hosting. F9 > Copy connection address to invite a friend."
+            : upnp == UpnpMappingStatus.Pending || reachability == ReachabilityVerdict.Pending
+                ? "Hosting. Checking network. F9 > Connection help."
+                : "Hosting. No internet address yet. F9 > Connection help.";
     }
 
     /// <summary>

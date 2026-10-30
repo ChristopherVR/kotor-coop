@@ -438,11 +438,13 @@ Something is wrong
   swkotor.exe (read dinput8-chain.log if you use the chain loader).
 - Second instance on one machine exits immediately: start it through the helper (see
   Requirements), which renames the game's single-instance mutex.
-- The game crashed and you want to report it: double-click KotorCoop.CollectLogs.cmd
-  in the game folder or extracted package. It puts kotorcoop-support-<date>.zip on your
-  Desktop: the co-op logs, the crash record and a copy of coop.ini with the password and
-  host address blanked. Attach that one file. Nothing is uploaded, and the logs can still
-  show IP addresses and character names. For a crash the log itself can't explain (the game just vanishes,
+- To report a problem, choose Create support report in the Co-op browser (F9 in game),
+  or double-click KotorCoop.CollectLogs.cmd if the game cannot start. It puts a support
+  ZIP on your Desktop. Read READ-ME-FIRST.txt inside it before sharing. Recognized
+  addresses, paths and credentials are removed from text automatically; chat and other
+  players' names may remain. Nothing is uploaded, and originals are unchanged. The ZIP
+  includes setup/loader logs and a crash summary, not saved games or raw crash memory.
+  For a crash the log itself can't explain (the game just vanishes,
   nothing after "FATAL"), turn on Windows' own crash dumps for swkotor.exe:
 
       # from an Administrator PowerShell, in the extracted package folder:
@@ -451,7 +453,8 @@ Something is wrong
   This needs elevation (a plain PowerShell gets a clear error naming the reason) because it
   writes a machine-wide Windows Error Reporting setting, not a per-game file. The next crash
   leaves a .dmp file in <game folder>\crashdumps (or wherever -DumpFolder pointed) --
-  attach that to a bug report. Turn it back off with
+  keep it locally and share it privately only if requested: a dump may contain personal data.
+  Turn it back off with
   .\install.ps1 -GameDir "..." -DisableCrashDumps; it does not undo itself automatically.
 
 Public project information, downloads and issue tracker: https://github.com/ChristopherVR/kotor-coop

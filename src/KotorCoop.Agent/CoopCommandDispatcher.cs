@@ -165,6 +165,7 @@ public sealed partial class CoopCommandDispatcher(
                     ReflectPhase();
                     AnnouncePeerChanges();
                     AnnounceCompatibilityChanges();
+                    DrainPlayerHelp();
                     AnnounceConnectionStatus();
                     MaintainHostLossWatch();
                     AnnounceHostSaveAvailability();
@@ -319,6 +320,8 @@ public sealed partial class CoopCommandDispatcher(
         [CoopCommandKind.Clear] = _ => _kotor?.PostChatClear(),
         [CoopCommandKind.Servers] = _ => ListServers(),
         [CoopCommandKind.Status] = StatusCommand,
+        [CoopCommandKind.ConnectionHelp] = _ => ConnectionHelpCommand(),
+        [CoopCommandKind.SupportReport] = _ => SupportReportCommand(),
         [CoopCommandKind.Help] = _ => Reply(ConsoleCommand.HelpText),
 
         // Rides the existing agent->plugin travel channel (the same one peer-follow travel

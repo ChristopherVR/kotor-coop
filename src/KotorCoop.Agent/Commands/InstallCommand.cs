@@ -37,6 +37,14 @@ internal static class InstallCommand
         }
 
         string package = options.PackageDirectory ?? AppContext.BaseDirectory;
+        if (options.PreviewDefaults)
+        {
+            foreach (SettingsMigration.Change change in FindDefaults(package, game, options.IniSettings.Select(p => p.Key)))
+            {
+                Console.WriteLine(SettingsMigration.Describe(change));
+            }
+            return 0;
+        }
         ReportVersion(package, game);
         PackageInstaller.FirewallEnabled = !options.NoFirewall;
 
@@ -72,7 +80,7 @@ internal static class InstallCommand
         Console.WriteLine("picked up on next launch. Nothing else was modified; remove it with: KotorCoop.Agent.exe uninstall");
         if (ok)
         {
-            OfferDefaults(package, game, interactive: false, options.UpdateDefaults);
+            OfferDefaults(package, game, interactive: false, options.UpdateDefaults, options.IniSettings.Select(p => p.Key));
             ok = !options.Windowed || GameLauncher.TrySetWindowed(game);
         }
         return ok ? 0 : 1;
@@ -408,7 +416,7 @@ internal static class InstallCommand
         }
     }
 
-    private static void OfferDefaults(string package, string game, bool interactive, bool update)
+    private static IReadOnlyList<SettingsMigration.Change> FindDefaults(string package, string game, IEnumerable<string>? excludedKeys)
     {
         string template = Path.Combine(package, "KotorCoop.DEFAULTS.ini");
         if (!File.Exists(template))
@@ -418,9 +426,14 @@ internal static class InstallCommand
         string player = Path.Combine(game, "coop.ini");
         if (Path.GetFullPath(template).Equals(Path.GetFullPath(player), StringComparison.OrdinalIgnoreCase))
         {
-            return;
+            return [];
         }
-        IReadOnlyList<SettingsMigration.Change> changes = SettingsMigration.Find(player, template);
+        return SettingsMigration.Find(player, template, excludedKeys);
+    }
+
+    private static void OfferDefaults(string package, string game, bool interactive, bool update, IEnumerable<string>? excludedKeys = null)
+    {
+        IReadOnlyList<SettingsMigration.Change> changes = FindDefaults(package, game, excludedKeys);
         if (changes.Count == 0)
         {
             return;
@@ -428,11 +441,11 @@ internal static class InstallCommand
         Cli.Warn("These settings match older defaults; they may also be deliberate custom choices:");
         foreach (SettingsMigration.Change change in changes)
         {
-            Console.WriteLine($"  {change.Key}: {change.OldValue} -> {change.NewValue}");
+            Console.WriteLine($"  {SettingsMigration.Describe(change)}");
         }
         if (update || Ask("Apply these defaults and back up coop.ini first?", false, interactive))
         {
-            string backup = SettingsMigration.Apply(player, changes);
+            string backup = SettingsMigration.Apply(Path.Combine(game, "coop.ini"), changes);
             Cli.Success($"Updated settings. Previous settings: {backup}");
         }
         else

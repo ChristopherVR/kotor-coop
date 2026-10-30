@@ -6,6 +6,10 @@ internal sealed class ChatInputLatch
     private bool _wasDown;
     private bool _armed = true;
 
+    /// <summary>A menu can consume Enter and close before the next chat frame observes
+    /// it. Disarm that hold explicitly; only observing key-up can arm chat again.</summary>
+    public void ConsumeCurrentPress() => _armed = false;
+
     public bool ShouldOpen(bool down, bool consoleOpen, bool inGame, bool conversation, bool guiOpen)
     {
         bool rising = down && !_wasDown;

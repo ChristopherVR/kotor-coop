@@ -36,6 +36,9 @@ corresponding source ([CORRESPONDING-SOURCE.md](CORRESPONDING-SOURCE.md)).
 - Recent fixes for dialogue starting over the host's equipment menu, Trask disappearing on the
   joiner's screen, save-name input, dialogue presentation and the post-save enemy-sighted banner
   still need ordinary in-game confirmation.
+- The new connection/recovery menu actions, graphical settings migration and support-report
+  flow require the [beginner acceptance check](PLAYTEST.md#beginner-acceptance-check--not-yet-verified)
+  on packaged bytes. Automated tests do not establish that a new player can complete those steps.
 - Legal: no publisher permission is claimed for a fan mod of this kind. See [LEGAL.md](LEGAL.md).
 
 ## Scope to disclose rather than claim verified

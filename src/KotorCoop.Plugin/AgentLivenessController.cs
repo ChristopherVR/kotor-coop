@@ -28,7 +28,7 @@ internal sealed unsafe class AgentLivenessController(SharedBlockView block)
     private const float MessageLife = 0.5f;
 
     private const string StaleText =
-        "co-op agent stopped responding - phantoms frozen; type reconnect";
+        "Co-op helper stopped responding. Waiting for automatic restart.";
 
     private AgentLivenessState _lastState = AgentLivenessState.NeverLive;
     private string? _lastMessageText;
@@ -85,7 +85,7 @@ internal sealed unsafe class AgentLivenessController(SharedBlockView block)
         {
             AgentLivenessState.Stale or AgentLivenessState.Dead => StaleText,
             AgentLivenessState.Live when _needsRehost =>
-                "Host session ended. Press ~ and type host, or choose Co-op > Host on the main menu.",
+                "Host session ended. Press F9 and choose Start/resume hosting.",
 
             // A relaunch (or the player starting one by hand) can still land after this —
             // once the heartbeat moves at all the state leaves NeverLive and the line stops

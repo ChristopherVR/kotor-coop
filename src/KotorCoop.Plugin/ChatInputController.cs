@@ -23,14 +23,21 @@ namespace KotorCoop.Plugin;
 /// </summary>
 internal sealed unsafe class ChatInputController
 {
+    private static ChatInputController? _instance;
     private readonly ChatInputLatch _latch = new();
+
+    public ChatInputController() => _instance = this;
+
+    /// <summary>The browser confirms and closes on the main-loop hook, which can run
+    /// before this controller's frame. That Enter still belongs to the browser.</summary>
+    public static void ConsumeMenuEnter() => _instance?._latch.ConsumeCurrentPress();
 
     public void OnFrame()
     {
         bool down = NativeMethods.IsKeyDownHere(NativeMethods.VkReturn);
         if (!_latch.ShouldOpen(down, Odyssey.IsConsoleOpen, Odyssey.IsInGame,
             Odyssey.IsConversationActive, Odyssey.IsFullScreenGuiUp || PasswordEntryModal.IsAnyOpen
-            || PvpMenuController.ListOpen))
+            || PvpMenuController.ListOpen || ServerBrowserController.IsOpen))
         {
             return;
         }

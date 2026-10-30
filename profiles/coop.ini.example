@@ -218,6 +218,25 @@ world_transfer_udp_fallback = 1
 ; ------------------------------------------------------------------------------------------
 ; Advanced
 ; ------------------------------------------------------------------------------------------
+; Recommended shared-world defaults. These are written explicitly so setup can offer older
+; installations the same defaults as a fresh install. Leave them as supplied unless you
+; deliberately need a different behaviour; setup only changes old values with your consent.
+effect_sync = 1
+trigger_relay = 1
+map_reveal_sync = 1
+script_item_sync = 1
+companion_xp_sync = 1
+dialogue_recruit_sync = 1
+pazaak_detect = 1
+party_pool_sync = 2
+store_sync = 2
+enemy_effect_sync = 1
+partner_buffs = 1
+threat_retarget = 1
+liveness_sync = 1
+; Remote companion combat remains experimental and is not enabled by a defaults update.
+companion_local_combat = 0
+
 ; Plugin/agent log rotation: both kotorcoop-*.log and kotorcoop-agent.log rotate once they
 ; cross log_max_mb (megabytes), keeping log_keep prior generations (clamped 1-10).
 log_max_mb = 8

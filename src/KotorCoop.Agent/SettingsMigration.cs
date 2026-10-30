@@ -19,7 +19,7 @@ public static class SettingsMigration
         ["liveness_sync"] = "0", ["join_mode"] = "save", ["world_transfer_udp_fallback"] = "0",
     };
 
-    public static IReadOnlyList<Change> Find(string playerPath, string templatePath)
+    public static IReadOnlyList<Change> Find(string playerPath, string templatePath, IEnumerable<string>? excludedKeys = null)
     {
         if (!File.Exists(playerPath) || !File.Exists(templatePath))
         {
@@ -27,12 +27,49 @@ public static class SettingsMigration
         }
         Dictionary<string, string> template = Parse(File.ReadAllText(templatePath));
         Dictionary<string, string> player = Parse(File.ReadAllText(playerPath));
-        return Historical.Where(pair => player.TryGetValue(pair.Key, out string? value)
+        HashSet<string> excluded = new(excludedKeys ?? [], StringComparer.OrdinalIgnoreCase);
+        return Historical.Where(pair => !excluded.Contains(pair.Key) && player.TryGetValue(pair.Key, out string? value)
             && value.Equals(pair.Value, StringComparison.OrdinalIgnoreCase)
             && template.TryGetValue(pair.Key, out string? current)
             && !current.Equals(pair.Value, StringComparison.OrdinalIgnoreCase))
             .Select(pair => new Change(pair.Key, pair.Value, template[pair.Key])).ToArray();
     }
+
+    public static string Describe(Change change)
+    {
+        string label = change.Key.ToLowerInvariant() switch
+        {
+            "menu_button" => "Co-op button on the main menu",
+            "effect_sync" => "Share combat effects",
+            "trigger_relay" => "Share story triggers",
+            "map_reveal_sync" => "Reveal the map around your friend",
+            "script_item_sync" => "Share story item rewards",
+            "companion_xp_sync" => "Keep companion experience in step",
+            "companion_local_combat" => "Companion combat on the joining player's game",
+            "dialogue_recruit_sync" => "Share recruited companions",
+            "pazaak_detect" => "Recognise Pazaak games",
+            "party_pool_sync" => "Shared inventory synchronization",
+            "store_sync" => "Shared merchant stock",
+            "enemy_effect_sync" => "Share effects on enemies",
+            "partner_buffs" => "Share helpful powers with your friend",
+            "threat_retarget" => "Let enemies react to both players",
+            "liveness_sync" => "Keep creature deaths in step",
+            "join_mode" => "Automatic entry into the host's world",
+            "world_transfer_udp_fallback" => "Alternative connection for loading the host's world",
+            _ => change.Key,
+        };
+        return $"{label}: {DisplayValue(change.OldValue)} -> {DisplayValue(change.NewValue)} ({change.Key})";
+    }
+
+    private static string DisplayValue(string value) => value switch
+    {
+        "0" => "off",
+        "1" => "on",
+        "2" => "shared mode",
+        "save" => "manual save mode",
+        "auto" => "automatic",
+        _ => value,
+    };
 
     public static string Apply(string playerPath, IReadOnlyList<Change> changes)
     {

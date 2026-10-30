@@ -6,15 +6,20 @@ see [CONFIG.md](CONFIG.md) for its default and where it's read; for a console ve
 
 ## Reporting a problem: one file with everything
 
-Double-click **KotorCoop.CollectLogs.cmd** in the installed game folder or extracted package.
-From the game folder it collects that install; from a package it lets you select the game
-folder when needed. No terminal command is required. Alternatively, run
-`KotorCoop.Agent.exe logs` and add `--game-path` when multiple installs exist.
-It writes `kotorcoop-support-<date>.zip` to your Desktop with the plugin log, the agent log (both with their older
-rotated copies), the crash record that survives a hard crash, a copy of `coop.ini` with the `password` and `host` values
-blanked, and a short note on the game and mod files present. Attach that one file. Nothing is uploaded. The logs can
-still show IP addresses and character names, so open the zip first if that matters. `crashbin.ps1` and `crashlog.ps1`
-are developer tools and are not needed for a report.
+In the game, open **Co-op → Create support report**, or press **F9** and choose that action.
+If the game cannot start, double-click **KotorCoop.CollectLogs.cmd** in the installed game
+folder or extracted package. From a package it lets you select the game folder when needed.
+No terminal command is required. The optional command is `KotorCoop.Agent.exe logs`.
+
+The report is a `kotorcoop-support-<date>.zip` on your Desktop (or the game folder if no
+Desktop is available). Open **READ-ME-FIRST.txt** inside it for the contents and privacy
+summary. It includes plugin/agent logs and their older copies, setup and loader logs when
+present, a redacted configuration, a system note and a crash summary. Recognized addresses,
+paths, connection credentials and your configured player name are removed automatically
+from text. Other players' names and chat may remain; review the report before sharing.
+Nothing is uploaded, and the original files are unchanged. Saved games, game assets and raw
+crash stack memory are excluded. The original crash record remains in the game folder for
+any specifically requested follow-up.
 
 Use the [bug report form](https://github.com/ChristopherVR/kotor-coop/issues/new?template=bug_report.yml).
 Include the package version for every player, who was hosting, the area and last action,
@@ -46,7 +51,7 @@ to suppress a detection. `KotorCoop.Agent.exe install --check` says when the fil
 - **"No GOG or Steam KOTOR install found."** Point setup at the folder that holds
   `swkotor.exe`. On Steam, right-click the game, then Manage > Browse local files. In GOG
   Galaxy, open the game, click the settings cog, then Manage installation > Show folder.
-  Then run `KotorCoop.Agent.exe install --game-path "<that folder>"`.
+  Then choose that folder in the setup program and continue.
 - **It says it is running from inside the zip file.** Extract the whole zip into its own
   folder first, then run `KotorCoop.Agent.exe` from there.
 - **"Windows is blocking changes to this folder."** A game under Program Files (GOG
@@ -57,7 +62,7 @@ to suppress a detection. `KotorCoop.Agent.exe install --check` says when the fil
   Update or repair the game through GOG or Steam and run setup again.
 - **The host cannot be reached by friends.** Setup asks "Allow friends to connect to games
   you host?" and Windows then asks for permission. If you said no or never saw the prompt,
-  run `KotorCoop.Agent.exe` again and say yes.
+  run setup again and leave the firewall option enabled.
 
 ## Messages you may see when joining
 
@@ -76,11 +81,11 @@ agent log in your support bundle.
 
 ## The host stopped responding
 
-After about 60 seconds without the host, a joiner sees "The host has stopped responding.
-Still trying - type `disconnect` to play on alone." The mod keeps trying in the background.
-After 5 minutes it gives up: "Gave up on the host after 5 minutes. Use Co-op > Connect, or
-type `reconnect`, to try again." Type `reconnect` in the `~` console, or choose Co-op >
-Connect, once the host is hosting again.
+The mod tries to rejoin automatically. If it does not recover, the host opens **F9 →
+Start/resume hosting** and the friend chooses **Retry last connection**. Use **Connection
+help** for network checks or **Leave co-op** to stop retrying. The same actions are available
+in the main-menu Co-op browser. The automatic retry eventually stops after five minutes.
+Rejoining restores the connection, not progress lost since the last usable save.
 
 ## The `~` console and `swkotor.ini`
 
@@ -91,7 +96,9 @@ does not open, check that `swkotor.ini` still has `EnableCheats=1` under `[Game 
 
 ## Uninstalling
 
-Run `KotorCoop.Agent.exe uninstall` from the extracted zip folder (add `--game-path
+For a setup installation, use **Windows Settings → Apps → Installed apps → kotor-coop →
+Uninstall**. For a ZIP installation, run `KotorCoop.Agent.exe uninstall` from the extracted
+zip folder (add `--game-path
 "<folder>"` if it finds two installs). It removes the mod files, the `coop-mods` folder, the
 `kotorcoop-agent` logs and `kotorcoop-last-address.txt`, and it restores your original
 `EnableCheats` setting. It keeps, on purpose, `coop.ini`, the "Co-op" save and
@@ -120,8 +127,8 @@ With `auto_start_agent = 1`, the plugin can restart a failed helper automaticall
 helper starts in menu mode; it may wait for a fresh Host or Connect choice rather than resume
 the previous session. A joiner can show "reconnecting" while the host's helper is already running.
 
-On the host, open the in-game `~` console and enter `host` to host again. Keep the same port.
-The joiner should reconnect; if it does not, choose Connect again or enter `connect <host>:<port>`.
+On the host, press **F9 → Start/resume hosting**. Keep the same hosting port.
+The joiner should reconnect; if it does not, choose **Retry last connection**.
 Collect both players' support bundles if recovery fails. Automatic helper restart alone does
 not establish that the multiplayer session has recovered.
 
@@ -459,33 +466,24 @@ land hits in the same short window, all of that damage is folded into one number
 amount is attributed to whichever of them hit last, so a floaty number or a "took N damage from"
 log line can name the wrong enemy in a crowd even though the total itself is correct.
 
-Separately, `local_combat` only ever lets ONE mirrored enemy fight a given player's own engine
-at a time — `EnemyPresenceController`'s exclusion slot holds a single creature, by design (one
-shared-block field, one fight). Every other hostile that is in range and eligible keeps being
-mirrored (position, health, animation) exactly like normal, just not handed to this engine's own
-AI yet; whatever it deals still arrives through the ordinary forwarded-damage channel, so no
-damage goes missing — but "which enemy is actually hitting me right now" can look inconsistent
-with what is on screen during a real swarm, for the same attribution reason as above. A
-"`N` more enemies engaged - mirrored" HUD line (coop.ini `local_combat_deferred_notice`, default
-on; roadmap-seamless.md Tier 2 item 14) shows whenever this is happening, so a swarm's numbers
-not quite matching what is on screen has a visible explanation instead of looking like a desync.
+Separately, the default allows up to **three** mirrored enemies to fight through your local
+engine at once (`local_combat_slots`, default 3). Additional enemies remain mirrored and
+use forwarded damage. The “N more enemies engaged - mirrored” line explains when the local
+fight capacity is full. The old one-enemy description applied to an earlier implementation;
+setting `local_combat_slots = 1` deliberately restores that limit.
 
 ## A feature that "should" be on isn't doing anything
 
-Two `coop.ini` keys — `companion_local_combat` (a companion fighting for the OTHER player
-through their own engine) and `dialogue_recruit_sync` (a companion recruited on one instance
-being made available on the other at all) — default **OFF in the code, and are absent from the
-shipped file too**, so a fresh install genuinely ships with both off. This is the documented,
-on-purpose state, not a stale template: set `companion_local_combat = 1` / `dialogue_recruit_sync
-= 1` in `coop.ini` by hand if you want either. Without `dialogue_recruit_sync`, recruiting a
-companion in conversation only keeps it for whoever ran that conversation — the other player does
-not get it. See the footnotes in [CONFIG.md](CONFIG.md).
+Fresh installs enable `dialogue_recruit_sync`: recruited companions are made available to
+both players. `companion_local_combat` remains **off** by default; it controls a different
+feature, a companion fighting for the other player through their own engine. Both values
+are now explicit in the supplied settings template.
 
-Separately, a `coop.ini` installed before 2026-08-27 shipped `effect_sync`, `trigger_relay` and
-`menu_button` OFF, where the current template ships all three ON — that one IS a stale-template
-issue (see the same footnotes), unlike the two keys above. The installer never overwrites an
-existing `coop.ini`, so check your actual file against CONFIG.md's table rather than assuming
-either side's "default" applies.
+An older installation can retain earlier defaults, including disabled recruitment or shared
+state features. Run the current setup program and review its recommended settings changes;
+applying them backs up your existing settings first. Deliberate custom choices are preserved
+unless you choose to change them. Advanced users can compare `coop.ini` with
+`KotorCoop.DEFAULTS.ini`; [CONFIG.md](CONFIG.md) lists the current defaults.
 
 ## Companion stalls partway through a leg while following
 

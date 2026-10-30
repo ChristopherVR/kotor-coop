@@ -118,6 +118,40 @@ public class CoopCommandDispatcherTests
         manager.Disconnect();
     }
 
+    [Fact]
+    public void HostMenuKeepsConfiguredPasswordAndDoesNotRestartAnExistingHost()
+    {
+        MenuBridge bridge = new();
+        using SessionManager manager = new(bridge, new AgentSettings { PollRate = 30 });
+        string? password = null;
+        int loads = 0;
+        CoopCommandDispatcher dispatcher = new(manager, bridge, ProtocolConstants.DefaultPort,
+            value => { password = value; return Settings(value); },
+            () => new CoopConfig { Password = "private-session" }, () => loads++);
+        dispatcher.RunTypedLine("host");
+        Assert.Equal("private-session", password);
+        var session = manager.Current;
+        Assert.NotNull(session);
+        dispatcher.RunTypedLine("host");
+        Assert.Same(session, manager.Current);
+        Assert.Equal(1, loads);
+    }
+
+    [Fact]
+    public void HelpAndRetryWithoutHistoryDoNotStartOrLoadASession()
+    {
+        MenuBridge bridge = new();
+        using SessionManager manager = new(bridge, new AgentSettings { PollRate = 30 });
+        int loads = 0;
+        CoopCommandDispatcher dispatcher = new(manager, bridge, ProtocolConstants.DefaultPort,
+            Settings, menuAutoLoad: () => loads++);
+        dispatcher.RunTypedLine("connectionhelp");
+        dispatcher.RunTypedLine("reconnect");
+        Assert.Null(manager.Current);
+        Assert.False(manager.CanReconnect);
+        Assert.Equal(0, loads);
+    }
+
     /// <summary>
     /// A host's menu auto-load fires immediately after Dispatch returns, before anything
     /// else looks at whether the connect actually succeeded. A busy port (item 6c) now

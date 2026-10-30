@@ -137,11 +137,23 @@ public sealed partial class CoopCommandDispatcher
 
     private void HostCommand(CoopCommand command)
     {
+        if (manager.Current is CoopHost)
+        {
+            _menuAutoLoadArmed = false;
+            QueuePlayerHelp("Already hosting. Press F9 and choose Copy connection address to invite a friend.");
+            return;
+        }
+        if (manager.Current is CoopClient)
+        {
+            _menuAutoLoadArmed = false;
+            QueuePlayerHelp("You are joining another host. Choose Leave co-op before starting your own session.");
+            return;
+        }
         CancelRejoinForExternalSessionChange();
         _pendingAddress = null;
         _pendingEndpoint = null;
         _promptedForPassword = false;
-        _password = command.Password ?? string.Empty;
+        _password = command.Password ?? loadConfig?.Invoke()?.Password ?? string.Empty;
         manager.Connect(host: true, endpoint: null, settingsForPassword(_password));
     }
 
@@ -150,6 +162,11 @@ public sealed partial class CoopCommandDispatcher
         if (command.Address == "world")
         {
             BeginManualWorldRefresh();
+            return;
+        }
+        if (!manager.CanReconnect)
+        {
+            QueuePlayerHelp("No previous connection is available. Choose a host in Co-op > Connect, or Start/resume hosting.");
             return;
         }
         CancelRejoinForExternalSessionChange();

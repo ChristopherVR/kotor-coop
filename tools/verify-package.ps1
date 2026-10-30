@@ -77,6 +77,11 @@ try {
             (Get-FileHash -LiteralPath (Join-Path $packageRoot 'coop.ini')).Hash) "$layout ships exact incoming defaults"
         $oldIni = $customIni.Replace('menu_button = 1', 'menu_button = 0')
         [IO.File]::WriteAllText((Join-Path $game 'coop.ini'), $oldIni)
+        Invoke-Installer "$layout-readonly-defaults" @('install', '--preview-defaults', '--game-path', $game)
+        $preview = Get-Content -LiteralPath (Join-Path $fixtureRoot "$layout-readonly-defaults.txt") -Raw
+        Assert-Check ($preview.Contains('Co-op button on the main menu') -and $preview.Contains('off -> on')) "$layout previews understandable settings changes"
+        Assert-Check ([IO.File]::ReadAllText((Join-Path $game 'coop.ini')) -ceq $oldIni) "$layout preview does not change settings"
+        Assert-Check (@(Get-ChildItem -LiteralPath $game -Filter 'coop.ini.before-defaults-*.bak').Count -eq 0) "$layout preview does not create migration backups"
         Invoke-Installer "$layout-preview-defaults" @('install', '--game-path', $game)
         Assert-Check ([IO.File]::ReadAllText((Join-Path $game 'coop.ini')) -ceq $oldIni) "$layout migration is opt-in"
         Invoke-Installer "$layout-migrate-defaults" @('install', '--game-path', $game, '--update-defaults')
@@ -92,6 +97,9 @@ try {
             Move-Item -LiteralPath "$plugin.held" -Destination $plugin
             [IO.File]::WriteAllText((Join-Path $game 'dinput8-chain.log'), 'chain diagnostic fixture')
             [IO.File]::WriteAllText((Join-Path $game 'coop.ini'), $customIni + "password = fixture-secret`r`nhost = fixture-private-address`r`n")
+            $privateLog = "Connection from 203.0.113.42:27140, [2001:db8::42]:27140`r`npassword=fixture-secret`r`nplayer Preserve Me`r`ninstall $game`r`nprofile C:\Users\FixturePlayer\Documents\save.dat`r`n"
+            [IO.File]::WriteAllText((Join-Path $game 'kotorcoop-agent.log'), $privateLog)
+            [IO.File]::WriteAllText((Join-Path $game 'kotorcoop-setup.log'), $privateLog)
             Invoke-Installer 'support-bundle' @('support', '--game-path', $game)
             $bundleLine = Get-Content -LiteralPath (Join-Path $fixtureRoot 'support-bundle.txt') |
                 Where-Object { $_ -match '^wrote (.+) \(\d+ file\(s\)\)\.$' } | Select-Object -First 1
@@ -109,6 +117,16 @@ try {
             $zip = [IO.Compression.ZipFile]::OpenRead($bundleEvidence)
             try {
                 Assert-Check ($null -ne $zip.GetEntry('dinput8-chain.log')) 'chain diagnostics bundled'
+                Assert-Check ($null -ne $zip.GetEntry('kotorcoop-setup.log')) 'installer diagnostics bundled'
+                Assert-Check ($null -ne $zip.GetEntry('READ-ME-FIRST.txt')) 'support review instructions bundled'
+                foreach ($entryName in @('kotorcoop-agent.log', 'kotorcoop-setup.log')) {
+                    $reader = [IO.StreamReader]::new($zip.GetEntry($entryName).Open())
+                    try { $redactedLog = $reader.ReadToEnd() } finally { $reader.Dispose() }
+                    foreach ($privateValue in @('203.0.113.42', '2001:db8::42', 'fixture-secret',
+                            'Preserve Me', $game, 'FixturePlayer')) {
+                        Assert-Check (-not $redactedLog.Contains($privateValue)) "$entryName redacts fixture private value"
+                    }
+                }
                 foreach ($entryName in @('coop.ini', 'system.txt')) {
                     $reader = [IO.StreamReader]::new($zip.GetEntry($entryName).Open())
                     try { $text = $reader.ReadToEnd() } finally { $reader.Dispose() }

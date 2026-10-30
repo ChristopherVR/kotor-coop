@@ -80,9 +80,13 @@ const
   SteamUninstallKey = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Steam App 32370';
 
 var
-  OptionsPage: TWizardPage;
+  OptionsPage, DefaultsPage: TWizardPage;
   NameEdit, PortEdit: TNewEdit;
-  HelperWindowCheck, WindowedCheck, MenuButtonCheck, SteamCheck, FirewallCheck: TNewCheckBox;
+  HelperWindowCheck, WindowedCheck, MenuButtonCheck, SteamCheck, FirewallCheck, DefaultsCheck: TNewCheckBox;
+  OptionsNote, DefaultsNote: TNewStaticText;
+  DefaultsMemo: TNewMemo;
+  DefaultsPreview: String;
+  DefaultsAvailable: Boolean;
   PrefilledFor: String;
   InstallFailed: Boolean;
   InstallOutput: String;
@@ -199,7 +203,6 @@ end;
 procedure InitializeWizard;
 var
   Top: Integer;
-  Note: TNewStaticText;
 begin
   OptionsPage := CreateCustomPage(wpSelectDir, 'Co-op options',
     'Everything here is saved in coop.ini in the game folder and can be changed there later.');
@@ -210,18 +213,81 @@ begin
   HelperWindowCheck := AddCheck('Open the co-op helper window minimised behind the game', Top);
   WindowedCheck := AddCheck('Run the game in a window instead of fullscreen', Top);
   MenuButtonCheck := AddCheck('Show the Co-op button on the main menu', Top);
-  SteamCheck := AddCheck('Let Steam friends join from the friends list (Steam only)', Top);
+  SteamCheck := AddCheck('Enable optional Steam friend joining', Top);
   FirewallCheck := AddCheck('Allow friends to connect to games you host (adds a Windows Firewall rule)', Top);
 
-  Note := TNewStaticText.Create(OptionsPage);
-  Note.Parent := OptionsPage.Surface;
-  Note.Top := Top + ScaleY(6);
-  Note.Width := OptionsPage.SurfaceWidth;
-  Note.AutoSize := False;
-  Note.WordWrap := True;
-  Note.Height := ScaleY(40);
-  Note.Caption := 'Leave the name blank for a generated one. Windowed mode makes it easy to switch to '
-    + 'the helper window; unticking it leaves your display settings as they are.';
+  OptionsNote := TNewStaticText.Create(OptionsPage);
+  OptionsNote.Parent := OptionsPage.Surface;
+  OptionsNote.Top := Top + ScaleY(6);
+  OptionsNote.Width := OptionsPage.SurfaceWidth;
+  OptionsNote.AutoSize := False;
+  OptionsNote.WordWrap := True;
+  OptionsNote.Height := ScaleY(40);
+
+  DefaultsPage := CreateCustomPage(OptionsPage.ID, 'Review recommended settings',
+    'Keep your current choices, or apply the changes listed below.');
+  DefaultsNote := TNewStaticText.Create(DefaultsPage);
+  DefaultsNote.Parent := DefaultsPage.Surface;
+  DefaultsNote.Width := DefaultsPage.SurfaceWidth;
+  DefaultsNote.Height := ScaleY(55);
+  DefaultsNote.AutoSize := False;
+  DefaultsNote.WordWrap := True;
+  DefaultsNote.Caption := 'These settings match older defaults, but may be choices you made deliberately. '
+    + 'Nothing changes unless you tick the box. Setup backs up coop.ini before applying these changes. '
+    + 'The options you chose on the previous page take priority.';
+  DefaultsMemo := TNewMemo.Create(DefaultsPage);
+  DefaultsMemo.Parent := DefaultsPage.Surface;
+  DefaultsMemo.Top := ScaleY(60);
+  DefaultsMemo.Width := DefaultsPage.SurfaceWidth;
+  DefaultsMemo.Height := DefaultsPage.SurfaceHeight - ScaleY(90);
+  DefaultsMemo.ReadOnly := True;
+  DefaultsMemo.ScrollBars := ssVertical;
+  DefaultsMemo.WordWrap := True;
+  DefaultsCheck := TNewCheckBox.Create(DefaultsPage);
+  DefaultsCheck.Parent := DefaultsPage.Surface;
+  DefaultsCheck.Top := DefaultsPage.SurfaceHeight - ScaleY(23);
+  DefaultsCheck.Width := DefaultsPage.SurfaceWidth;
+  DefaultsCheck.Height := ScaleY(20);
+  DefaultsCheck.Caption := 'Apply the listed changes and keep a backup of my previous settings';
+  DefaultsCheck.Checked := False;
+end;
+
+{ Read-only preview comes from the same agent migration rules that apply it. Never duplicate
+  the historical-default table in Pascal. Only these two self-contained files are needed. }
+procedure PreviewDefaults;
+var
+  ResultCode, I: Integer;
+  Output: TExecOutput;
+begin
+  DefaultsPreview := '';
+  DefaultsMemo.Text := '';
+  DefaultsAvailable := False;
+  DefaultsCheck.Checked := False;
+  if not FileExists(AddBackslash(WizardDirValue) + 'coop.ini') then
+    Exit;
+  try
+    ExtractTemporaryFile('KotorCoop.Agent.exe');
+    ExtractTemporaryFile('KotorCoop.DEFAULTS.ini');
+    { ExtractTemporaryFile uses the temporary root, regardless of [Files].DestDir.
+      The full install later uses the separate package subdirectory. }
+    if not ExecAndCaptureOutput(ExpandConstant('{tmp}\KotorCoop.Agent.exe'),
+      'install --preview-defaults --game-path "' + WizardDirValue + '" --set menu_button=1',
+      ExpandConstant('{tmp}'), SW_HIDE, ewWaitUntilTerminated, ResultCode, Output) then
+      RaiseException('Could not start the settings check.');
+    if ResultCode <> 0 then
+      RaiseException('The settings check could not read this installation.');
+    for I := 0 to GetArrayLength(Output.StdOut) - 1 do
+      if Trim(Output.StdOut[I]) <> '' then
+        DefaultsPreview := DefaultsPreview + Output.StdOut[I] + #13#10;
+    DefaultsAvailable := DefaultsPreview <> '';
+    DefaultsMemo.Text := DefaultsPreview;
+    DefaultsCheck.Enabled := DefaultsAvailable;
+  except
+    DefaultsMemo.Text := 'The recommended settings could not be checked. Your current settings will be kept. '
+      + 'You can run setup again later to review them.';
+    DefaultsCheck.Enabled := False;
+    Log('Settings preview unavailable: ' + GetExceptionMessage);
+  end;
 end;
 
 { Prefill from what the chosen folder already has, so an update keeps the player's choices.
@@ -237,9 +303,31 @@ begin
     HelperWindowCheck.Checked := Lowercase(CoopSetting('agent_window', 'minimized')) <> 'hidden';
     WindowedCheck.Checked := GameIsWindowed;
     MenuButtonCheck.Checked := IsOn(CoopSetting('menu_button', '1'));
-    SteamCheck.Checked := IsOn(CoopSetting('steam_invites', '1'));
+    { Presence is only a prerequisite, not proof that Steam invitations work. Never load a
+      player-supplied DLL inside the elevated installer. }
+    SteamCheck.Enabled := FileExists(AddBackslash(WizardDirValue) + 'steam_api64.dll');
+    SteamCheck.Checked := SteamCheck.Enabled and IsOn(CoopSetting('steam_invites', '1'));
+    if SteamCheck.Enabled then
+    begin
+      SteamCheck.Caption := 'Enable optional Steam friend joining';
+      OptionsNote.Caption := 'The optional Steam component was found. Steam must also be running with KOTOR owned; '
+        + 'finding the file does not verify invitations. Leave the player name blank for a generated name.';
+    end
+    else
+    begin
+      SteamCheck.Caption := 'Steam friend joining unavailable - use Connect by address';
+      OptionsNote.Caption := 'The optional Steam component is not included in this package. '
+        + 'Connect by address works with Steam and GOG copies. Your existing Steam preference is preserved.';
+    end;
     FirewallCheck.Checked := True;
+    PreviewDefaults;
   end;
+end;
+
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  { An empty successful preview is skipped. A failed check stays visible with recovery text. }
+  Result := (PageID = DefaultsPage.ID) and not DefaultsAvailable and (DefaultsMemo.Text = '');
 end;
 
 procedure CurPageChanged(CurPageID: Integer);
@@ -293,10 +381,14 @@ end;
 function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo, MemoTypeInfo,
   MemoComponentsInfo, MemoGroupInfo, MemoTasksInfo: String): String;
 var
-  Name: String;
+  Name, SteamStatus: String;
 begin
   Name := Trim(NameEdit.Text);
   if Name = '' then Name := '(generated)';
+  if SteamCheck.Enabled then
+    SteamStatus := YesNo(SteamCheck.Checked) + ' (requires working Steam integration)'
+  else
+    SteamStatus := 'unavailable; join by address (existing preference kept)';
   Result := 'Game folder:' + NewLine + Space + WizardDirValue + NewLine + NewLine
     + 'Co-op options:' + NewLine
     + Space + 'Player name: ' + Name + NewLine
@@ -304,8 +396,12 @@ begin
     + Space + 'Helper window minimised behind the game: ' + YesNo(HelperWindowCheck.Checked) + NewLine
     + Space + 'Game in a window: ' + YesNo(WindowedCheck.Checked) + NewLine
     + Space + 'Main-menu Co-op button: ' + YesNo(MenuButtonCheck.Checked) + NewLine
-    + Space + 'Steam friends-list joins: ' + YesNo(SteamCheck.Checked) + NewLine
+    + Space + 'Steam friends-list joins: ' + SteamStatus + NewLine
     + Space + 'Windows Firewall rule for hosting: ' + YesNo(FirewallCheck.Checked);
+  if DefaultsAvailable and DefaultsCheck.Checked then
+    Result := Result + NewLine + NewLine + 'Recommended changes (with settings backup):' + NewLine + DefaultsPreview
+  else
+    Result := Result + NewLine + 'Other existing settings: kept unchanged';
 end;
 
 function InstallParameters: String;
@@ -317,8 +413,11 @@ begin
     + ' --set "name=' + Trim(NameEdit.Text) + '"'
     + ' --set port=' + Trim(PortEdit.Text)
     + ' --set agent_window=' + HelperWindow
-    + ' --set menu_button=' + OnOff(MenuButtonCheck.Checked)
-    + ' --set steam_invites=' + OnOff(SteamCheck.Checked);
+    + ' --set menu_button=' + OnOff(MenuButtonCheck.Checked);
+  if SteamCheck.Enabled then
+    Result := Result + ' --set steam_invites=' + OnOff(SteamCheck.Checked);
+  if DefaultsAvailable and DefaultsCheck.Checked then
+    Result := Result + ' --update-defaults';
   if WindowedCheck.Checked then
     Result := Result + ' --windowed';
   if not FirewallCheck.Checked then

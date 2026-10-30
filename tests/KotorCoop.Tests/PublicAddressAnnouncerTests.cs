@@ -39,28 +39,29 @@ public class PublicAddressAnnouncerTests
             {
                 string line = PublicAddressAnnouncer.Line(27015, Endpoint, upnp, reachability);
                 Assert.DoesNotContain("203.0.113.5", line);
-                Assert.Contains("public_address", line);
+                Assert.Contains("F9 > Copy connection address", line);
+                Assert.InRange(line.Length, 1, PlayerHelpText.DefaultWidth);
             }
         }
     }
 
     [Fact]
-    public void UnknownAddressAndDisabledUpnpProducesTheForwardHint()
+    public void UnknownAddressPointsToVisibleConnectionHelp()
     {
         string line = PublicAddressAnnouncer.Line(27015, null, UpnpMappingStatus.Disabled, ReachabilityVerdict.Unconfirmed);
 
         Assert.Equal(
-            "co-op: hosting on port 27015 - public address unknown (forward UDP+TCP 27015 manually)",
+            "Hosting. No internet address yet. F9 > Connection help.",
             line);
     }
 
     [Fact]
-    public void MappedAndHairpinConfirmedStillLeavesInternetUnconfirmed()
+    public void DiscoveredAddressOffersCopyWithoutPromisingInternetAccess()
     {
         string line = PublicAddressAnnouncer.Line(27015, Endpoint, UpnpMappingStatus.Mapped, ReachabilityVerdict.HairpinConfirmed);
 
         Assert.Equal(
-            "co-op: hosting on port 27015 - public address found, type public_address to show it (UPnP mapped - local self-test passed; internet access unconfirmed)",
+            "Hosting. F9 > Copy connection address to invite a friend.",
             line);
     }
 
@@ -92,12 +93,12 @@ public class PublicAddressAnnouncerTests
     }
 
     [Fact]
-    public void UnavailableUpnpNamesBothPortsToForward()
+    public void UnavailableUpnpStillOffersTheExplicitCopyAction()
     {
         string line = PublicAddressAnnouncer.Line(27015, Endpoint, UpnpMappingStatus.Unavailable, ReachabilityVerdict.Unconfirmed);
 
         Assert.Equal(
-            "co-op: hosting on port 27015 - public address found, type public_address to show it (UPnP unavailable - forward UDP+TCP 27015 manually)",
+            "Hosting. F9 > Copy connection address to invite a friend.",
             line);
     }
 
@@ -119,10 +120,11 @@ public class PublicAddressAnnouncerTests
     }
 
     [Fact]
-    public void PendingUpnpSaysStillChecking()
+    public void PendingNetworkCheckFitsTheOverlay()
     {
         string line = PublicAddressAnnouncer.Line(27015, null, UpnpMappingStatus.Pending, ReachabilityVerdict.Pending);
-        Assert.Contains("checking UPnP", line);
+        Assert.Contains("Checking network", line);
+        Assert.InRange(line.Length, 1, PlayerHelpText.DefaultWidth);
     }
 
     [Fact]
@@ -149,9 +151,8 @@ public class PublicAddressAnnouncerTests
         announcer.Observe(27015, Endpoint, UpnpMappingStatus.Mapped, ReachabilityVerdict.AdditionalNatSuspected, lines.Add);
 
         Assert.Equal(3, lines.Count);
-        Assert.Contains("checking UPnP", lines[0]);
-        Assert.Contains("checking reachability", lines[1]);
-        Assert.Contains("possible additional NAT", lines[2]);
+        Assert.All(lines, line => Assert.Contains("F9 > Copy connection address", line));
+        Assert.All(lines, line => Assert.InRange(line.Length, 1, PlayerHelpText.DefaultWidth));
     }
 
     [Fact]

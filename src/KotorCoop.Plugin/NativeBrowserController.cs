@@ -159,6 +159,8 @@ internal sealed unsafe partial class NativeBrowserController
     private bool _closing;
     private bool _connectPending;
     private bool _hostPending;
+    private string? _menuCommandPending;
+    private readonly int[] _actionRows = new int[CoopMenuActions.Count];
     private int _pendingSelection;
 
     /// <summary>The <see cref="SharedBlock.BrowserEntryAddress"/> of whichever row was last
@@ -171,6 +173,7 @@ internal sealed unsafe partial class NativeBrowserController
 
     private uint _shownListSerial;
     private int _serverRows;
+    private int _detailSelection = -2;
     private bool _f9WasDown;
     private int _logged;
 
@@ -207,6 +210,8 @@ internal sealed unsafe partial class NativeBrowserController
             _panel = 0;
             _closing = false;
             _connectPending = false;
+            _hostPending = false;
+            _menuCommandPending = null;
             _openRequested = false;
             _promptOpenPending = false;
             ResetAddressState();
@@ -260,7 +265,12 @@ internal sealed unsafe partial class NativeBrowserController
             // surface: hand it to the same sweep and forget it.
             _passwordModal.AbandonToSweep();
 
-            if (_connectPending)
+            if (_menuCommandPending is { } command)
+            {
+                _menuCommandPending = null;
+                _block.PublishMenuCommand(command);
+            }
+            else if (_connectPending)
             {
                 _connectPending = false;
 
@@ -483,6 +493,22 @@ internal sealed unsafe partial class NativeBrowserController
             {
                 _selectedAddress = AddressRowMarker;
             }
+            else
+            {
+                int action = Array.IndexOf(_actionRows, (int)selected);
+                _selectedAddress = action >= 0 ? CoopMenuActions.Marker(action) : null;
+
+            }
+        }
+
+        if (selected != _detailSelection)
+        {
+            _detailSelection = selected;
+            ShowDetails(_panel, selected >= 0 && selected < _serverRows ? selected : -1);
+            bool actionSelected = selected >= 0 && Array.IndexOf(_actionRows, (int)selected) >= 0;
+            SetCaption(_panel + PanelConnectParams, actionSelected ? "Select" : "Connect");
+            if (actionSelected) SetCaption(_panel + PanelShotCaptionParams, "Press Enter to select");
+            else if (selected == _addressRow) SetCaption(_panel + PanelShotCaptionParams, AddressRowHint);
         }
 
         // LAN discovery found something new while the player is looking: rebuild the rows.
@@ -536,6 +562,14 @@ internal sealed unsafe partial class NativeBrowserController
                     self._addressPromptPending = true;
                 }
 
+                return;
+            }
+
+            int action = Array.IndexOf(self._actionRows, (int)selected);
+            if (selected >= 0 && action >= 0 && !self._passwordModal.IsOpen)
+            {
+                self._menuCommandPending = CoopMenuActions.Command(action);
+                self.Close();
                 return;
             }
 

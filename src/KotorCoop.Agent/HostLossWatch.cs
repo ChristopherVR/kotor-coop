@@ -30,10 +30,10 @@ public sealed class HostLossWatch
     public const long GiveUpAfterMs = 300_000;
 
     public const string WarnLine =
-        "The host has stopped responding. Still trying - type `disconnect` to play on alone.";
+        "Host not responding. Still trying. F9 > Connection help.";
 
     public const string GiveUpLine =
-        "Gave up on the host after 5 minutes. Use Co-op > Connect, or type `reconnect`, to try again.";
+        "Stopped trying after 5 min. F9 > Retry last connection.";
 
     private long _sinceMs = -1;
     private bool _warned;

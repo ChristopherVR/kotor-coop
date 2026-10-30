@@ -46,9 +46,11 @@ public sealed partial class CoopCommandDispatcher
     /// </summary>
     private void PublicAddressCommand()
     {
+        _playerHelp.Clear();
+        _nextHelpLine = 0;
         if (manager.Current is not CoopHost host)
         {
-            Reply("public_address: not hosting - only a host has a public address to share");
+            QueuePlayerHelp("public_address: not hosting - only a host has a public address to share");
             return;
         }
 
@@ -56,14 +58,16 @@ public sealed partial class CoopCommandDispatcher
 
         if (host.PublicEndPoint is not { } endpoint)
         {
-            Reply($"public address: unknown yet (STUN still discovering, or stun_servers is empty) - {upnp}");
-            Reply($"reachability: {host.ReachabilityDetail}");
+            QueuePlayerHelp("No internet address found. Press F9 for Connection help. Nearby friends can use the server list.");
             return;
         }
 
-        Reply($"public address: {endpoint} - {upnp}");
-        Reply($"reachability: {host.ReachabilityDetail}");
-        TryCopyToClipboard(endpoint.ToString());
+        Log?.Invoke($"public address: {endpoint} - {upnp}; reachability: {host.ReachabilityDetail}");
+        QueuePlayerHelp(TryCopyToClipboard(endpoint.ToString())
+            ? "Address copied. Send it privately to your friend."
+            : "Copy failed. Share the following address privately:");
+        QueuePlayerHelp(endpoint.ToString());
+        QueuePlayerHelp("Internet access is unconfirmed. F9 > Connection help.");
     }
 
     /// <summary>
@@ -72,11 +76,11 @@ public sealed partial class CoopCommandDispatcher
     /// headless/CI run): this is a convenience on top of the printed line above, never the
     /// only way to learn the address.
     /// </summary>
-    private static void TryCopyToClipboard(string text)
+    private static bool TryCopyToClipboard(string text)
     {
         if (!OperatingSystem.IsWindows())
         {
-            return;
+            return false;
         }
 
         try
@@ -92,16 +96,16 @@ public sealed partial class CoopCommandDispatcher
 
             if (process is null)
             {
-                return;
+                return false;
             }
 
             process.StandardInput.Write(text);
             process.StandardInput.Close();
-            process.WaitForExit(2000);
+            return process.WaitForExit(2000) && process.ExitCode == 0;
         }
         catch
         {
-            // Best-effort only - see this method's own doc comment.
+            return false;
         }
     }
 
