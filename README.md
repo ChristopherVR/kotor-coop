@@ -285,6 +285,9 @@ Problems are covered in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
 ### Build from source
 
+Use **.NET SDK 10.0.113**, pinned by `global.json`. Release dependency notices audit
+its bundled runtime version; newer SDK patches must be audited before changing the pin.
+
 Needs the .NET 10 SDK and the Visual Studio 2022 MSVC x86 C++ tools (for the plugin and the chain loader).
 
 ```powershell

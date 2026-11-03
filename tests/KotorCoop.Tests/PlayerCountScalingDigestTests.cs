@@ -145,6 +145,12 @@ public class PlayerCountScalingDigestTests
         Assert.True(
             await WaitForAsync(() => client.BehaviourWarnings is not null, Timeout, Publish),
             "the client never compared its behaviour digest against the host's Welcome");
+        // The comparison is published before its adopted overrides on the network
+        // thread. Wait for adoption too; observing warnings alone races this assertion
+        // (the beta.8 release attempt previously saw null EnemyHealth here).
+        Assert.True(
+            await WaitForAsync(() => client.Overrides.EnemyHealth.HasValue, Timeout, Publish),
+            "the client never adopted the host's scaling settings");
 
         BehaviourComparisonResult result = client.BehaviourWarnings!;
         Assert.Equal(3, result.Differences.Count);
