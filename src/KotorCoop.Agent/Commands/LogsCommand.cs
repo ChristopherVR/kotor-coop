@@ -74,7 +74,11 @@ public static class LogsCommand
         string name = fileName.ToLowerInvariant();
         return Regex.IsMatch(name, @"^kotorcoop-(?:plugin|agent|setup)(?:\.\d+)?\.log(?:\.\d+)?$")
             || name == "kotorcoop-crash.bin"
-            || name == "dinput8-chain.log";
+            || name == "dinput8-chain.log"
+            || name == "dinput8.chain"
+            || name == "patch_config.toml"
+            || name == "kmrp-kpm.log"
+            || name == "kmrp-controller-events.log";
     }
 
     /// <summary>Writes the bundle. Returns the number of files added (coop.ini and system.txt
@@ -88,6 +92,14 @@ public static class LogsCommand
             .Where(f => IsSupportFile(Path.GetFileName(f)))
             .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
             .ToList();
+        // Explicit allowlist, not a recursive log/config sweep through arbitrary mods.
+        // KMRP moved its log into KMRP/logs; both install generations are useful.
+        foreach (string relative in new[] { "KMRP/logs/kmrp-kpm.log", "logs/K1DriverCompat.log", "configs/kmrp.ini",
+                     "configs/kmrp-controller.ini", "K1DriverCompat.ini" })
+        {
+            string path = Path.Combine(gameDirectory, relative);
+            if (File.Exists(path)) logs.Add(path);
+        }
         string iniPath = Path.Combine(gameDirectory, "coop.ini");
         bool hasIni = File.Exists(iniPath);
         string iniText = hasIni ? File.ReadAllText(iniPath) : string.Empty;
@@ -111,7 +123,7 @@ public static class LogsCommand
             {
                 // Read shared: the game may still have its own log open.
                 using FileStream input = new(log, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-                string name = Path.GetFileName(log);
+                string name = Path.GetRelativePath(gameDirectory, log).Replace('\\', '/');
                 if (name.Equals("kotorcoop-crash.bin", StringComparison.OrdinalIgnoreCase))
                 {
                     // The raw record contains stack memory, which cannot be reliably redacted.
@@ -160,6 +172,7 @@ public static class LogsCommand
         + "Automatic redaction is best effort, not a guarantee that every personal detail is removed.\n"
         + "The raw crash stack, saved games and game assets are not included. A crash summary\n"
         + "retains the exception code and addresses. The original crash record stays on your PC.\n\n"
+        + "Known KMRP patch settings/logs and the DirectInput chain are included when present.\n\n"
         + "Included files:\n" + string.Join("\n", included.Select(name => "- " + name)) + "\n\n"
         + "In your bug report, describe what you expected, what happened, who was hosting,\n"
         + "your game mods and whether the players were on the same network. For connection\n"
@@ -195,7 +208,10 @@ public static class LogsCommand
         sb.AppendLine($"os          {Environment.OSVersion} ({(Environment.Is64BitOperatingSystem ? "64" : "32")}-bit)");
         sb.AppendLine("game dir    <path omitted>");
 
-        foreach (string name in new[] { "swkotor.exe", "dinput8.dll", "KotorCoop.Plugin.dll", "dinput8.chain" })
+        foreach (string name in new[] { "swkotor.exe", "dinput8.dll", "dinput8.prev.dll", "dinput8Hooked.dll",
+                     "KotorCoop.Plugin.dll", "dinput8.chain", "KotorPatcher.dll", "binkw32.dll",
+                     "k1-modern-driver-compatibility.asi", "patches/high-fps-fixes.dll",
+                     "patches/k1-modern-driver-compatibility.dll" })
         {
             string path = Path.Combine(gameDirectory, name);
             if (File.Exists(path))

@@ -30,6 +30,9 @@ namespace KotorCoop.Agent;
 /// as dinput8.dll instead, the plugin as KotorCoop.Plugin.dll, the other mod is renamed
 /// dinput8.prev.dll, and a dinput8.chain file lists the load order — no flag needed, one
 /// summary line names what was found (<see cref="ForeignDinputIdentity"/>). The exception is
+/// Ultimate ASI Loader: it must keep its supported dinput8.dll name, so our loader occupies
+/// its dinput8Hooked.dll original-library slot instead. Its root ASI search paths stay intact.
+/// Another exception is
 /// a plain copy of Windows' own dinput8.dll: that isn't a mod, so it's just replaced, the same
 /// as if nothing had been there. <c>--force</c> always overwrites a foreign dinput8.dll
 /// outright instead of chaining it; <c>--chain</c> forces chain mode explicitly (now mostly a
@@ -45,6 +48,9 @@ public static partial class PackageInstaller
     public const string PreviousFileName = "dinput8.prev.dll";
     public const string ChainFileName = "dinput8.chain";
     public const string LoaderRelativePath = @"chain-loader\dinput8.dll";
+    // Ultimate ASI Loader selects its proxy by basename. Keep it at dinput8.dll and
+    // use its documented original-library slot, not the unsupported dinput8.prev.dll.
+    public const string AsiHookedFileName = "dinput8Hooked.dll";
     public const string GameExecutable = "swkotor.exe";
 
     /// <summary>
@@ -209,15 +215,22 @@ public static partial class PackageInstaller
         File.Exists(Path.Combine(directory, GameExecutable));
 
     public static bool IsInstalled(string gameDirectory) =>
-        Identify(Path.Combine(gameDirectory, PluginFileName)) is DinputKind.Plugin or DinputKind.Loader
+        (Identify(Path.Combine(gameDirectory, PluginFileName)) is DinputKind.Plugin or DinputKind.Loader
+            || HasAsiHost(gameDirectory))
         && File.Exists(Path.Combine(gameDirectory, "KotorCoop.Agent.exe"));
+
+    private static bool IsAsiLoader(string path) => Identify(path) == DinputKind.Foreign
+        && IdentifyForeign(path).IsUltimateAsiLoader;
+
+    private static bool HasAsiHost(string game) => IsAsiLoader(Path.Combine(game, PluginFileName))
+        && Identify(Path.Combine(game, AsiHookedFileName)) == DinputKind.Loader;
 
     private static void EnsureFilesAvailable(string game)
     {
         // Check before changing the chain or any installed file. A later locked helper
         // must not leave an already replaced plugin paired with the old helper.
         IEnumerable<string> files = new[] { GameExecutable, PluginFileName, ChainPluginFileName,
-                PreviousFileName, ChainFileName }
+                PreviousFileName, ChainFileName, AsiHookedFileName }
             .Select(name => Path.Combine(game, name))
             .Concat(Directory.EnumerateFiles(game, "KotorCoop.*"));
         string overrides = Path.Combine(game, "Override");
@@ -298,6 +311,15 @@ public static partial class PackageInstaller
         string proxyTarget = Path.Combine(game, PluginFileName);
         EnsureFilesAvailable(game);
         DinputKind existing = Identify(proxyTarget);
+        string previousPath = Path.Combine(game, PreviousFileName);
+        bool migrateAsi = existing == DinputKind.Loader && IsAsiLoader(previousPath);
+        bool asiHost = !options.Force && (IsAsiLoader(proxyTarget) || migrateAsi);
+        string loaderTarget = asiHost ? Path.Combine(game, AsiHookedFileName) : proxyTarget;
+        if (asiHost && Identify(loaderTarget) is not (DinputKind.None or DinputKind.Loader))
+            throw new RefusedException($"{AsiHookedFileName} already belongs to another mod. Nothing was changed; resolve that original-library slot before installing co-op.");
+        if (asiHost && extra.Any(e => string.Equals(Path.GetFullPath(Path.Combine(game, e)), proxyTarget, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(Path.GetFullPath(Path.Combine(game, e)), loaderTarget, StringComparison.OrdinalIgnoreCase)))
+            throw new RefusedException("--load cannot point back to dinput8.dll or dinput8Hooked.dll: that would loop the ASI host chain. Nothing was changed.");
 
         // Whether THIS directory already looks like a chain install (the loader is in the
         // dinput8.dll slot, or its two companion files are already here) — used below so a
@@ -312,7 +334,13 @@ public static partial class PackageInstaller
         // the chaining — carried through to the .asi summary below.
         string? chainedModName = null;
 
-        if (existing == DinputKind.Foreign && !options.Force)
+        if (asiHost)
+        {
+            chainMode = true;
+            chainedModName = "Ultimate ASI Loader";
+            log($"found Ultimate ASI Loader; installing as a chain through {AsiHookedFileName}, keeping its supported dinput8.dll name and ASI search paths");
+        }
+        else if (existing == DinputKind.Foreign && !options.Force)
         {
             ForeignDinputIdentity.Identity identity = IdentifyForeign(proxyTarget);
             if (identity.Kind == ForeignDinputIdentity.Kind.SystemFile)
@@ -354,7 +382,7 @@ public static partial class PackageInstaller
             bool renamed = false;
             try
             {
-                if (existing == DinputKind.Foreign)
+                if (existing == DinputKind.Foreign && !asiHost)
                 {
                     if (File.Exists(previous))
                     {
@@ -366,12 +394,17 @@ public static partial class PackageInstaller
                     log($"kept the existing dinput8.dll as {PreviousFileName}");
                 }
 
-                File.Copy(loaderSource, proxyTarget, overwrite: true);
-                log($"installed loader -> {proxyTarget}");
+                File.Copy(loaderSource, loaderTarget, overwrite: true);
+                log($"installed loader -> {loaderTarget}");
 
                 string pluginTarget = Path.Combine(game, ChainPluginFileName);
                 File.Copy(pluginSource, pluginTarget, overwrite: true);
                 log($"installed plugin -> {pluginTarget}");
+                if (migrateAsi && asiHost)
+                {
+                    File.Move(previous, proxyTarget, overwrite: true);
+                    log("repaired renamed Ultimate ASI Loader: restored dinput8.prev.dll to dinput8.dll");
+                }
             }
             catch (Exception) when (renamed)
             {
@@ -396,6 +429,18 @@ public static partial class PackageInstaller
             // follows it, and any --load extras are present.
             string chainFile = Path.Combine(game, ChainFileName);
             List<string> entries = ParseChainEntries(chainFile);
+            if (asiHost)
+            {
+                // Never forward back to the ASI host: host -> hooked loader -> plugin
+                // -> system (or another proxy). Preserve every unrelated user entry.
+                entries.RemoveAll(e =>
+                {
+                    string path = Path.GetFullPath(Path.Combine(game, e));
+                    return string.Equals(path, proxyTarget, StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(path, loaderTarget, StringComparison.OrdinalIgnoreCase)
+                        || (migrateAsi && string.Equals(path, previousPath, StringComparison.OrdinalIgnoreCase));
+                });
+            }
             entries.RemoveAll(e => string.Equals(e, ChainPluginFileName, StringComparison.OrdinalIgnoreCase));
             entries.Insert(0, ChainPluginFileName);
 
@@ -446,6 +491,13 @@ public static partial class PackageInstaller
                     File.Delete(path);
                     log($"removed stale chain-mode file {path}");
                 }
+            }
+
+            string staleHooked = Path.Combine(game, AsiHookedFileName);
+            if (Identify(staleHooked) == DinputKind.Loader)
+            {
+                File.Delete(staleHooked);
+                log($"removed stale co-op loader {staleHooked}");
             }
 
             File.Copy(pluginSource, proxyTarget, overwrite: true);
@@ -690,6 +742,8 @@ public static partial class PackageInstaller
 
         string proxy = Path.Combine(game, PluginFileName);
         DinputKind kind = Identify(proxy);
+        bool asiHost = HasAsiHost(game);
+        if (asiHost) kind = DinputKind.Loader;
         string chainPluginPath = Path.Combine(game, ChainPluginFileName);
         string chainFilePath = Path.Combine(game, ChainFileName);
         bool hasChainPlugin = File.Exists(chainPluginPath);
@@ -697,7 +751,7 @@ public static partial class PackageInstaller
 
         string layout = kind switch
         {
-            DinputKind.Loader => "chain",
+            DinputKind.Loader => asiHost ? "chain (Ultimate ASI Loader host)" : "chain",
             DinputKind.Plugin => "plain",
             DinputKind.Foreign => "foreign-only",
             _ when hasChainPlugin || hasChainFile => "chain (dinput8.dll missing)",
@@ -733,7 +787,7 @@ public static partial class PackageInstaller
                 break;
 
             case DinputKind.Loader:
-                Report(true, $"{proxy} carries the chain loader marker");
+                Report(true, $"{(asiHost ? Path.Combine(game, AsiHookedFileName) : proxy)} carries the chain loader marker");
                 Report(hasChainPlugin, hasChainPlugin
                     ? $"{chainPluginPath} is present"
                     : $"{chainPluginPath} is MISSING");
@@ -752,6 +806,10 @@ public static partial class PackageInstaller
                     {
                         string entryPath = Path.IsPathRooted(entry) ? entry : Path.Combine(game, entry);
                         Report(File.Exists(entryPath), $"chain entry '{entry}' exists ({entryPath})");
+                        if (IsAsiLoader(entryPath))
+                            Report(false, $"Ultimate ASI Loader cannot be renamed or placed behind co-op; rerun setup from an extracted updated package to repair this chain");
+                        if (asiHost && string.Equals(Path.GetFullPath(entryPath), Path.Combine(game, AsiHookedFileName), StringComparison.OrdinalIgnoreCase))
+                            Report(false, "chain entry points back to dinput8Hooked.dll; remove this recursive entry");
                     }
                 }
                 else
@@ -873,6 +931,13 @@ public static partial class PackageInstaller
         RequireWritable(game);
         EnsureFilesAvailable(game);
         string proxy = Path.Combine(game, PluginFileName);
+
+        string hooked = Path.Combine(game, AsiHookedFileName);
+        if (Identify(hooked) == DinputKind.Loader)
+        {
+            File.Delete(hooked);
+            log($"removed {hooked} (co-op chain loader; ASI host left untouched)");
+        }
 
         switch (Identify(proxy))
         {

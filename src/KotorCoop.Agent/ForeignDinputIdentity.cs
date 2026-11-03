@@ -23,7 +23,7 @@ public static class ForeignDinputIdentity
         Mod,
     }
 
-    public readonly record struct Identity(Kind Kind, string FriendlyName);
+    public readonly record struct Identity(Kind Kind, string FriendlyName, bool IsUltimateAsiLoader = false);
 
     // A Win32 version resource stores its strings (CompanyName, FileDescription, ...) as
     // UTF-16LE key/value pairs inside the file, so a plain byte search for the value finds it
@@ -38,6 +38,8 @@ public static class ForeignDinputIdentity
     private static readonly byte[] ReShadeMarker = Encoding.ASCII.GetBytes("ReShade");
     private static readonly byte[] UltimateAsiLongMarker = Encoding.ASCII.GetBytes("Ultimate ASI Loader");
     private static readonly byte[] UltimateAsiShortMarker = Encoding.ASCII.GetBytes("UltimateASI");
+    private static readonly byte[] UltimateAsiExportMarker = Encoding.ASCII.GetBytes("IsUltimateASILoader");
+    private static readonly byte[] UltimateAsiWideMarker = Encoding.Unicode.GetBytes("Ultimate ASI Loader");
 
     /// <summary>
     /// <paramref name="image"/> is the raw file bytes. <paramref name="fileDescription"/> is
@@ -57,9 +59,10 @@ public static class ForeignDinputIdentity
             return new Identity(Kind.Mod, "ReShade");
         }
 
-        if (image.IndexOf(UltimateAsiLongMarker) >= 0 || image.IndexOf(UltimateAsiShortMarker) >= 0)
+        if (image.IndexOf(UltimateAsiLongMarker) >= 0 || image.IndexOf(UltimateAsiShortMarker) >= 0
+            || image.IndexOf(UltimateAsiExportMarker) >= 0 || image.IndexOf(UltimateAsiWideMarker) >= 0)
         {
-            return new Identity(Kind.Mod, "Ultimate ASI Loader");
+            return new Identity(Kind.Mod, "Ultimate ASI Loader", IsUltimateAsiLoader: true);
         }
 
         string description = fileDescription?.Trim() ?? string.Empty;

@@ -71,6 +71,10 @@ public sealed class LogsCommandTests : IDisposable
     [InlineData("kotorcoop-setup.log", true)]
     [InlineData("kotorcoop-crash.bin", true)]
     [InlineData("dinput8-chain.log", true)]
+    [InlineData("dinput8.chain", true)]
+    [InlineData("patch_config.toml", true)]
+    [InlineData("kmrp-kpm.log", true)]
+    [InlineData("kmrp-controller-events.log", true)]
     [InlineData("swkotor.exe", false)]
     [InlineData("coop.ini", false)]
     [InlineData("kotorcoop-character.pifo", false)]
@@ -134,6 +138,32 @@ public sealed class LogsCommandTests : IDisposable
 
         Assert.Equal(0, LogsCommand.WriteBundle(_dir, zipPath, "test"));
         Assert.False(File.Exists(zipPath));
+    }
+
+    [Fact]
+    public void KmrpStartupReportIncludesOnlyKnownSettingsAndLogsWithRedaction()
+    {
+        Directory.CreateDirectory(Path.Combine(_dir, "KMRP/logs"));
+        Directory.CreateDirectory(Path.Combine(_dir, "configs"));
+        Directory.CreateDirectory(Path.Combine(_dir, "logs"));
+        File.WriteAllText(Path.Combine(_dir, "patch_config.toml"), "id = \"high-fps-fixes\"\n");
+        File.WriteAllText(Path.Combine(_dir, "dinput8.chain"), "KotorCoop.Plugin.dll\n");
+        File.WriteAllText(Path.Combine(_dir, "configs/kmrp.ini"), "debug-logs=1\n");
+        File.WriteAllText(Path.Combine(_dir, "configs/private.ini"), "must not collect");
+        File.WriteAllText(Path.Combine(_dir, "logs/K1DriverCompat.log"), "hooks installed=8/8\n");
+        File.WriteAllText(Path.Combine(_dir, "logs/private.log"), "must not collect");
+        File.WriteAllText(Path.Combine(_dir, "KMRP/logs/kmrp-kpm.log"), "loaded C:\\Users\\PrivatePerson\\Games\\KOTOR\\patches\\kmrp.dll\n");
+        string output = Path.Combine(_dir, "out.zip");
+        Assert.Equal(7, LogsCommand.WriteBundle(_dir, output, "test"));
+        using ZipArchive zip = ZipFile.OpenRead(output);
+        Assert.NotNull(zip.GetEntry("patch_config.toml"));
+        Assert.NotNull(zip.GetEntry("dinput8.chain"));
+        Assert.NotNull(zip.GetEntry("configs/kmrp.ini"));
+        Assert.NotNull(zip.GetEntry("logs/K1DriverCompat.log"));
+        Assert.Null(zip.GetEntry("logs/private.log"));
+        Assert.Null(zip.GetEntry("configs/private.ini"));
+        using StreamReader log = new(zip.GetEntry("KMRP/logs/kmrp-kpm.log")!.Open());
+        Assert.DoesNotContain("PrivatePerson", log.ReadToEnd());
     }
 
     [Fact]

@@ -239,7 +239,7 @@ public sealed class PackageInstallerTests : IDisposable
         string root = NewRoot();
         string package = CreatePackage(root);
         string game = CreateGameDirectory(root);
-        WriteForeignDinput(game, UltimateAsiLoaderDll());
+        WriteForeignDinput(game, ReShadeDll());
 
         bool ok = PackageInstaller.Install(new PackageInstaller.Options(package, game), Log);
 
@@ -257,7 +257,7 @@ public sealed class PackageInstallerTests : IDisposable
 
         // The message names the mod and explains the outcome in one line, with no --chain
         // needed from the caller.
-        Assert.Contains(_log, l => l.Contains("Ultimate ASI Loader") && l.Contains("installing as a chain"));
+        Assert.Contains(_log, l => l.Contains("ReShade") && l.Contains("installing as a chain"));
         Assert.Contains(_log, l => l.StartsWith("layout: chain"));
         Assert.DoesNotContain(_log, l => l.StartsWith("FAIL"));
     }
@@ -392,6 +392,98 @@ public sealed class PackageInstallerTests : IDisposable
             .Select(l => l.Trim())
             .Where(l => l.Length > 0 && l[0] != '#' && l[0] != ';')
             .ToArray();
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void UltimateAsiLoaderKeepsItsNameAcrossInstallUpgradeAndUninstall(bool migrate)
+    {
+        string root = NewRoot();
+        string package = CreatePackage(root);
+        string game = CreateGameDirectory(root);
+        if (migrate)
+        {
+            File.Copy(Path.Combine(package, PackageInstaller.LoaderRelativePath), Path.Combine(game, "dinput8.dll"));
+            File.Copy(Path.Combine(package, "dinput8.dll"), Path.Combine(game, PackageInstaller.ChainPluginFileName));
+            File.WriteAllBytes(Path.Combine(game, PackageInstaller.PreviousFileName), UltimateAsiLoaderDll());
+            File.WriteAllLines(Path.Combine(game, PackageInstaller.ChainFileName),
+                [PackageInstaller.ChainPluginFileName, PackageInstaller.PreviousFileName]);
+            File.WriteAllText(Path.Combine(game, "coop.ini"), "[coop]\n");
+            Assert.False(PackageInstaller.Check(game, Log));
+        }
+        else WriteForeignDinput(game, UltimateAsiLoaderDll());
+
+        File.WriteAllText(Path.Combine(game, "extra.asi"), "user module");
+        for (int i = 0; i < 2; i++)
+        {
+            Assert.True(PackageInstaller.Install(new(package, game, Load: ["extra.asi"]), Log), string.Join('\n', _log));
+            Assert.Equal(UltimateAsiLoaderDll(), File.ReadAllBytes(Path.Combine(game, "dinput8.dll")));
+            Assert.Equal(PackageInstaller.DinputKind.Loader,
+                PackageInstaller.Identify(Path.Combine(game, PackageInstaller.AsiHookedFileName)));
+            Assert.Equal([PackageInstaller.ChainPluginFileName, "extra.asi"], ChainEntries(game));
+            Assert.False(File.Exists(Path.Combine(game, PackageInstaller.PreviousFileName)));
+            Assert.True(PackageInstaller.IsInstalled(game));
+        }
+
+        PackageInstaller.Uninstall(game, Log);
+        Assert.Equal(UltimateAsiLoaderDll(), File.ReadAllBytes(Path.Combine(game, "dinput8.dll")));
+        Assert.False(File.Exists(Path.Combine(game, PackageInstaller.AsiHookedFileName)));
+        Assert.False(PackageInstaller.IsInstalled(game));
+        Assert.True(File.Exists(Path.Combine(game, "extra.asi")));
+    }
+
+    [Fact]
+    public void UltimateAsiLoaderOriginalLibrarySlotIsNeverClobbered()
+    {
+        string root = NewRoot();
+        string package = CreatePackage(root);
+        string game = CreateGameDirectory(root);
+        WriteForeignDinput(game, UltimateAsiLoaderDll());
+        string hooked = Path.Combine(game, PackageInstaller.AsiHookedFileName);
+        File.WriteAllText(hooked, "someone else's proxy");
+        Assert.Throws<PackageInstaller.RefusedException>(() => PackageInstaller.Install(new(package, game), Log));
+        Assert.Equal(UltimateAsiLoaderDll(), File.ReadAllBytes(Path.Combine(game, "dinput8.dll")));
+        Assert.Equal("someone else's proxy", File.ReadAllText(hooked));
+        Assert.False(File.Exists(Path.Combine(game, PackageInstaller.ChainPluginFileName)));
+        PackageInstaller.Uninstall(game, Log);
+        Assert.Equal("someone else's proxy", File.ReadAllText(hooked));
+    }
+
+    [Theory]
+    [InlineData("IsUltimateASILoader", false)]
+    [InlineData("Ultimate ASI Loader", true)]
+    public void UltimateAsiLoaderRecognizesExportAndWideVersionResource(string marker, bool wide)
+    {
+        byte[] image = (wide ? Encoding.Unicode : Encoding.ASCII).GetBytes(marker);
+        Assert.True(ForeignDinputIdentity.Identify(image, null).IsUltimateAsiLoader);
+    }
+
+    [Theory]
+    [InlineData("dinput8.dll")]
+    [InlineData(".\\dinput8Hooked.dll")]
+    public void UltimateAsiHostCannotBeAddedAsItsOwnDownstreamProxy(string extra)
+    {
+        string root = NewRoot();
+        string package = CreatePackage(root);
+        string game = CreateGameDirectory(root);
+        WriteForeignDinput(game, UltimateAsiLoaderDll());
+        Assert.Throws<PackageInstaller.RefusedException>(() => PackageInstaller.Install(new(package, game, Load: [extra]), Log));
+        Assert.False(File.Exists(Path.Combine(game, PackageInstaller.AsiHookedFileName)));
+    }
+
+    [Fact]
+    public void UltimateAsiHostHealthCheckRejectsRecursiveHookedEntryAndSetupRepairsIt()
+    {
+        string root = NewRoot();
+        string package = CreatePackage(root);
+        string game = CreateGameDirectory(root);
+        WriteForeignDinput(game, UltimateAsiLoaderDll());
+        Assert.True(PackageInstaller.Install(new(package, game), Log));
+        File.AppendAllLines(Path.Combine(game, PackageInstaller.ChainFileName), [Path.Combine(game, PackageInstaller.AsiHookedFileName)]);
+        Assert.False(PackageInstaller.Check(game, Log));
+        Assert.True(PackageInstaller.Install(new(package, game), Log));
+        Assert.Single(ChainEntries(game));
+    }
 
     // ---------------------------------------------------------------------------------------
     // .asi mods beside a chained loader are mentioned, never touched.

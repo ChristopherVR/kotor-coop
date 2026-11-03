@@ -248,6 +248,17 @@ then let in, and both screens show a `W_EXE` warning. The mod uses fixed engine 
 a patch that changed one of them can still misbehave or crash. Mention `W_EXE` in a bug report.
 The 4GB (large-address) patch does not change the `exe image` value.
 
+**KMRP + co-op exits on startup or shows an ASI Loader error:** older co-op installers
+renamed Ultimate ASI Loader to `dinput8.prev.dll`, a name it does not support. Close the
+game and helper, extract an updated co-op package into a separate folder, and run setup
+against the game folder again. Setup restores the ASI loader's `dinput8.dll` name and
+uses its `dinput8Hooked.dll` slot for co-op. If that slot is already another mod's,
+setup refuses to overwrite it. Do not delete unknown DLLs or disable antivirus.
+This repairs a demonstrated loader conflict, not every possible KMRP startup crash.
+If it persists, test Modern Driver Compatibility and High FPS Fix separately, keeping
+everything else unchanged, and attach a `KotorCoop.CollectLogs.cmd` report for each run.
+See [the investigation](research/kmrp-compatibility.md#issue-1--startup-and-asi-loader-coexistence).
+
 **Both players installed KMRP but get an executable mismatch:** KMRP patches code in
 memory, and its allocated addresses can differ even with the same release. Builds with
 the KMRP compatibility fix compare the executable file, runtime binaries and patch settings

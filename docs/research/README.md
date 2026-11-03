@@ -144,7 +144,7 @@ fails safe. **INFERRED** = a reasonable deduction, not directly proven.
 | Doc | Subject | Status |
 | --- | --- | --- |
 | [mod-compatibility.md](mod-compatibility.md) | Mod compatibility audit and the digest-handshake design | Design + implemented; live-exercised 7 of 8 mismatch categories; behaviour-flag negotiation live-verified 2026-08-27 (core mechanism PASS) |
-| [kmrp-compatibility.md](kmrp-compatibility.md) | Matching KMRP installs rejected because runtime patch addresses differ | Deterministic install fallback and UDP regression tests; KMRP gameplay still NEEDS-LIVE |
+| [kmrp-compatibility.md](kmrp-compatibility.md) | Matching KMRP installs rejected; optional ASI loader exits after co-op renames it | Startup failures reproduced with KMRP 1.5.1; fixed layout reached Co-op menu in 6/6 retests; multiplayer gameplay still NEEDS-LIVE |
 
 ## Crashes
 

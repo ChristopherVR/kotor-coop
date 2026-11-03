@@ -351,6 +351,13 @@ for you to do. All you'll see is one line saying what it found, for example:
     found another mod in dinput8.dll (ReShade); installing as a chain: our loader takes
     dinput8.dll, the other mod is kept as dinput8.prev.dll and loaded after us
 
+Ultimate ASI Loader (including the one shipped by some KMRP versions) is different:
+it must keep the dinput8.dll name. Setup keeps it there and puts co-op's wrapper at
+dinput8Hooked.dll, the ASI loader's original-library slot. Existing .asi files keep
+their normal locations. If that slot belongs to another mod, setup refuses rather
+than overwriting it. Reinstall from an updated, separately extracted co-op package
+to repair an older co-op install that renamed the ASI loader to dinput8.prev.dll.
+
 Any .asi mods (next to the game, or in scripts\/plugins\) are left alone either way. A newer
 kotor-coop version installed later keeps this working the same way -- nothing to redo.
 Something seem off? Run this; it reports exactly what's installed and checks it, without
@@ -371,9 +378,9 @@ Technical details, only needed if something has to be fixed by hand: the automat
 installs a small wrapper as dinput8.dll, our plugin as KotorCoop.Plugin.dll, renames the
 other mod to dinput8.prev.dll, and writes the load order to dinput8.chain (an annotated
 blank example is dinput8.chain.example; dinput8-chain.log records what actually happened on
-the last launch). If you extracted the zip straight over another mod and it got overwritten,
-running KotorCoop.Agent.exe install --chain again puts everything back the way it should be
--- there's no need to move files by hand.
+the last launch). Ultimate ASI Loader uses the exception above. If you extracted over
+another mod and overwrote it, reinstall that mod first, then run co-op setup from a
+separate extracted package: co-op cannot recover an overwritten foreign DLL.
 
 Uninstall
 ---------

@@ -10,6 +10,11 @@
  *     KotorCoop.Plugin.dll
  *     dinput8.prev.dll        # the other mod's dinput8.dll, renamed
  *
+ * Ultimate ASI Loader must NOT be renamed to dinput8.prev.dll: it selects its proxy
+ * by basename and exits on unsupported names. Keep it as dinput8.dll and install
+ * this wrapper as dinput8Hooked.dll (its original-library slot), with only co-op
+ * and other downstream modules in dinput8.chain. Do not chain back to the host.
+ *
  * Rules, deliberately few:
  *   - Every entry is LoadLibrary'd once, in order, by absolute path. A DLL that does its
  *     work on load (ASI-style) needs nothing more.

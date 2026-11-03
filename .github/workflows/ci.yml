@@ -72,6 +72,10 @@ jobs:
           pwsh tools/verify-package.ps1 -PackageDirectory artifacts/windows-package -WorkDirectory artifacts/windows-installer-check
           if ($LASTEXITCODE -ne 0) { throw 'Packaged installer verification failed' }
 
+      - name: Verify basename-sensitive ASI host chain
+        shell: pwsh
+        run: pwsh tools/Test-LoaderAsiHost.ps1
+
       # Short retention keeps CI storage bounded. Upload/download must succeed: the Linux
       # installer check is a release gate, so missing packages cannot count as green CI.
       - name: Upload packages
@@ -108,6 +112,11 @@ jobs:
     needs: build-and-test
 
     steps:
+      - uses: actions/checkout@v7
+
+      - name: ASI host installer regression
+        run: bash tools/test-asi-host-install.sh
+
       - uses: actions/download-artifact@v7
         id: download
         with:

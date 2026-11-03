@@ -14,6 +14,8 @@
 #   chain:  another mod already owned dinput8.dll -> our loader takes the slot, the plugin is
 #           KotorCoop.Plugin.dll, the other mod is kept as dinput8.prev.dll, dinput8.chain lists
 #           the order. A plain copy of Windows' own dinput8.dll is not a mod and is replaced.
+#   ASI host: Ultimate ASI Loader keeps dinput8.dll; our wrapper uses dinput8Hooked.dll,
+#           its original-library slot, because renaming the ASI loader makes it exit.
 #
 # What this script cannot do for you is the ONE Proton-specific step: Wine ships its own
 # dinput8 and prefers it over ours unless the game is launched with
@@ -66,7 +68,7 @@ identify() {
 foreign_name() {
     if has_marker "$1" "$MICROSOFT_MARKER"; then echo system
     elif has_marker "$1" 'ReShade'; then echo 'ReShade'
-    elif has_marker "$1" 'Ultimate ASI Loader'; then echo 'Ultimate ASI Loader'
+    elif has_marker "$1" 'Ultimate ASI Loader\|UltimateASI\|IsUltimateASILoader\|U.l.t.i.m.a.t.e. .A.S.I. .L.o.a.d.e.r'; then echo 'Ultimate ASI Loader'
     else echo 'another dinput8 mod'
     fi
 }
@@ -152,14 +154,18 @@ proxy="$game/dinput8.dll"
 chain_plugin="$game/KotorCoop.Plugin.dll"
 chain_file="$game/dinput8.chain"
 previous="$game/dinput8.prev.dll"
+hooked="$game/dinput8Hooked.dll"
+is_asi_loader() { [ "$(identify "$1")" = foreign ] && [ "$(foreign_name "$1")" = 'Ultimate ASI Loader' ]; }
 
 # --- check: PASS/FAIL lines, exit status = all passed (same lines as install --check) -------
 check() {
     ok=0
     report() { if [ "$1" = 0 ]; then echo "PASS: $2"; else echo "FAIL: $2"; ok=1; fi; }
     kind="$(identify "$proxy")"
+    host=0
+    if is_asi_loader "$proxy" && [ "$(identify "$hooked")" = loader ]; then kind=loader; host=1; fi
     case "$kind" in
-        loader) layout=chain ;;
+        loader) if [ $host = 1 ]; then layout='chain (Ultimate ASI Loader host)'; else layout=chain; fi ;;
         plugin) layout=plain ;;
         foreign) layout=foreign-only ;;
         *) if [ -f "$chain_plugin" ] || [ -f "$chain_file" ]; then layout='chain (dinput8.dll missing)'; else layout=none; fi ;;
@@ -170,7 +176,8 @@ check() {
         foreign) report 1 "$proxy belongs to another mod - kotor-coop is not installed here (run install to chain behind it or --force to overwrite it)" ;;
         plugin) report 0 "$proxy carries the kotor-coop plugin marker" ;;
         loader)
-            report 0 "$proxy carries the chain loader marker"
+            if [ $host = 1 ]; then report 0 "$hooked carries the chain loader marker"
+            else report 0 "$proxy carries the chain loader marker"; fi
             if [ -f "$chain_plugin" ]; then
                 report 0 "$chain_plugin is present"
                 if [ "$(identify "$chain_plugin")" = plugin ]; then report 0 "$chain_plugin carries the kotor-coop plugin marker"
@@ -184,6 +191,7 @@ check() {
                     n=$((n + 1))
                     case "$entry" in /*) p="$entry" ;; *) p="$game/$entry" ;; esac
                     if [ -f "$p" ]; then report 0 "chain entry '$entry' exists ($p)"; else report 1 "chain entry '$entry' exists ($p)"; fi
+                    if is_asi_loader "$p"; then report 1 'Ultimate ASI Loader cannot be renamed or chained behind co-op; rerun the updated installer to repair'; fi
                 done < <(chain_entries)
                 if [ $n -gt 0 ]; then report 0 "$chain_file lists at least one entry"; else report 1 "$chain_file lists at least one entry"; fi
             else
@@ -225,6 +233,7 @@ chain_entries() {
 
 # --- uninstall: only what install placed; restores a kept foreign dinput8.dll ---------------
 uninstall() {
+    if [ "$(identify "$hooked")" = loader ]; then rm -f "$hooked"; echo "removed $hooked (co-op loader; ASI host left untouched)"; fi
     case "$(identify "$proxy")" in
         none) echo "nothing installed at $proxy" ;;
         foreign) echo "left $proxy alone: it is not ours" ;;
@@ -342,8 +351,25 @@ existing="$(identify "$proxy")"
 chain=0
 if [ -f "$chain_file" ] || [ -f "$chain_plugin" ] || [ "$existing" = loader ]; then chain=1; fi
 chained_name=''
+asi_host=0
+migrate_asi=0
+loader_target="$proxy"
+if [ $force = 0 ]; then
+    if is_asi_loader "$proxy"; then asi_host=1
+    elif [ "$existing" = loader ] && is_asi_loader "$previous"; then asi_host=1; migrate_asi=1; fi
+fi
+if [ $asi_host = 1 ]; then
+    loader_target="$hooked"
+    case "$(identify "$hooked")" in
+        none|loader) ;;
+        *) echo 'dinput8Hooked.dll already belongs to another mod. Nothing was changed.' >&2; exit 1 ;;
+    esac
+    chain=1; chained_name='Ultimate ASI Loader'
+    echo 'found Ultimate ASI Loader; installing as a chain through dinput8Hooked.dll, keeping its supported dinput8.dll name and ASI search paths'
+fi
 
-if [ "$existing" = foreign ] && [ $force = 0 ]; then
+if [ $asi_host = 1 ]; then :
+elif [ "$existing" = foreign ] && [ $force = 0 ]; then
     name="$(foreign_name "$proxy")"
     if [ "$name" = system ]; then
         echo "$proxy is the system dinput8.dll (Microsoft Corporation) - not a mod, so it is simply replaced (no chain needed)"
@@ -357,24 +383,31 @@ fi
 
 if [ $chain = 1 ]; then
     [ -f "$package/chain-loader/dinput8.dll" ] || { echo "chain-loader/dinput8.dll not found in $package - this package has no chain loader" >&2; exit 1; }
-    if [ "$existing" = foreign ]; then
+    if [ "$existing" = foreign ] && [ $asi_host = 0 ]; then
         if [ -f "$previous" ]; then echo "$previous already exists - resolve that first (an earlier chain install?)" >&2; exit 1; fi
         mv "$proxy" "$previous"; echo "kept the existing dinput8.dll as dinput8.prev.dll"
     fi
     # If a copy fails after the other mod was moved aside, put it back: never leave the game
     # with no dinput8.dll (PackageInstaller rolls back the same way).
-    if ! { cp -f "$package/chain-loader/dinput8.dll" "$proxy" && cp -f "$package/dinput8.dll" "$chain_plugin"; }; then
-        if [ "$existing" = foreign ]; then
+    if ! { cp -f "$package/chain-loader/dinput8.dll" "$loader_target" && cp -f "$package/dinput8.dll" "$chain_plugin"; }; then
+        if [ "$existing" = foreign ] && [ $asi_host = 0 ]; then
             mv -f "$previous" "$proxy" && echo "install failed; put the other mod's dinput8.dll back at $proxy"
         fi
         exit 1
     fi
-    echo "installed loader -> $proxy"
+    if [ $migrate_asi = 1 ]; then mv -f "$previous" "$proxy"; echo 'repaired renamed Ultimate ASI Loader: restored dinput8.prev.dll to dinput8.dll'; fi
+    echo "installed loader -> $loader_target"
     echo "installed plugin -> $chain_plugin"
 
     entries=()
     while read -r e; do
         [ "$(echo "$e" | tr '[:upper:]' '[:lower:]')" = 'kotorcoop.plugin.dll' ] && continue
+        if [ $asi_host = 1 ]; then
+            case "$(echo "$e" | tr '[:upper:]' '[:lower:]')" in
+                dinput8.dll|dinput8hooked.dll) continue ;;
+                dinput8.prev.dll) [ $migrate_asi = 1 ] && continue ;;
+            esac
+        fi
         entries+=("$e")
     done < <(chain_entries)
     entries=('KotorCoop.Plugin.dll' ${entries[@]+"${entries[@]}"})
@@ -401,6 +434,7 @@ if [ $chain = 1 ]; then
         echo "found ${#asi[@]} .asi mod(s) ($(printf '%s, ' "${asi[@]}" | sed 's/, $//')) - they will keep loading through ${chained_name:-the chain}"
     fi
 else
+    if [ "$(identify "$hooked")" = loader ]; then rm -f "$hooked"; echo "removed stale co-op loader $hooked"; fi
     for stale in "$chain_plugin" "$chain_file"; do
         [ -f "$stale" ] && { rm -f "$stale"; echo "removed stale chain-mode file $stale"; }
     done
